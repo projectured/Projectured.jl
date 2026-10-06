@@ -1,0 +1,256 @@
+# The test of Projectured, with coverage. The
+# release of ProjecturEd writes this file, from
+# source/tool/builder/ProjecturedProgram.jl in projectured-julia.
+#
+# A package reaches its siblings through a registry, which holds a version only
+# after its commit. So a job develops the folders of the packages that its test
+# needs, and tests this commit. It runs when one of those folders changes.
+name: Projectured
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/Projectured.yml'
+      - 'Projectured/**'
+      - 'ProjecturedAll/**'
+      - 'ProjecturedAnthropic/**'
+      - 'ProjecturedBook/**'
+      - 'ProjecturedChart/**'
+      - 'ProjecturedConsole/**'
+      - 'ProjecturedDBCatalog/**'
+      - 'ProjecturedDataFrames/**'
+      - 'ProjecturedDatabase/**'
+      - 'ProjecturedFSM/**'
+      - 'ProjecturedFormula/**'
+      - 'ProjecturedGraph/**'
+      - 'ProjecturedJSON/**'
+      - 'ProjecturedJulia/**'
+      - 'ProjecturedKernel/**'
+      - 'ProjecturedMCP/**'
+      - 'ProjecturedMarkdown/**'
+      - 'ProjecturedMath/**'
+      - 'ProjecturedODBC/**'
+      - 'ProjecturedOllama/**'
+      - 'ProjecturedPDF/**'
+      - 'ProjecturedPlatform/**'
+      - 'ProjecturedProcess/**'
+      - 'ProjecturedRST/**'
+      - 'ProjecturedSDL/**'
+      - 'ProjecturedSQL/**'
+      - 'ProjecturedSequenceChart/**'
+      - 'ProjecturedTulip/**'
+      - 'ProjecturedVideo/**'
+      - 'ProjecturedWeb/**'
+      - 'ProjecturedXML/**'
+      - 'ProjecturedYAML/**'
+      - 'example/ProjecturedBookExample/**'
+      - 'example/ProjecturedChartExample/**'
+      - 'example/ProjecturedConversationExample/**'
+      - 'example/ProjecturedDBCatalogExample/**'
+      - 'example/ProjecturedDataFramesExample/**'
+      - 'example/ProjecturedDatabaseExample/**'
+      - 'example/ProjecturedExample/**'
+      - 'example/ProjecturedFSMExample/**'
+      - 'example/ProjecturedFormulaExample/**'
+      - 'example/ProjecturedGraphExample/**'
+      - 'example/ProjecturedJSONExample/**'
+      - 'example/ProjecturedJuliaExample/**'
+      - 'example/ProjecturedKernelExample/**'
+      - 'example/ProjecturedMarkdownExample/**'
+      - 'example/ProjecturedMathExample/**'
+      - 'example/ProjecturedPlatformExample/**'
+      - 'example/ProjecturedProcessExample/**'
+      - 'example/ProjecturedRSTExample/**'
+      - 'example/ProjecturedSDLExample/**'
+      - 'example/ProjecturedSQLExample/**'
+      - 'example/ProjecturedSequenceChartExample/**'
+      - 'example/ProjecturedXMLExample/**'
+      - 'example/ProjecturedYAMLExample/**'
+      - 'test/ProjecturedAnthropicTest/**'
+      - 'test/ProjecturedBookTest/**'
+      - 'test/ProjecturedChartTest/**'
+      - 'test/ProjecturedConsoleTest/**'
+      - 'test/ProjecturedDBCatalogTest/**'
+      - 'test/ProjecturedDataFramesTest/**'
+      - 'test/ProjecturedDatabaseTest/**'
+      - 'test/ProjecturedFSMTest/**'
+      - 'test/ProjecturedFormulaTest/**'
+      - 'test/ProjecturedGraphTest/**'
+      - 'test/ProjecturedJSONTest/**'
+      - 'test/ProjecturedJuliaTest/**'
+      - 'test/ProjecturedKernelTest/**'
+      - 'test/ProjecturedMCPTest/**'
+      - 'test/ProjecturedMarkdownTest/**'
+      - 'test/ProjecturedMathTest/**'
+      - 'test/ProjecturedODBCTest/**'
+      - 'test/ProjecturedOllamaTest/**'
+      - 'test/ProjecturedPDFTest/**'
+      - 'test/ProjecturedPlatformTest/**'
+      - 'test/ProjecturedProcessTest/**'
+      - 'test/ProjecturedRSTTest/**'
+      - 'test/ProjecturedSDLTest/**'
+      - 'test/ProjecturedSQLTest/**'
+      - 'test/ProjecturedSequenceChartTest/**'
+      - 'test/ProjecturedTest/**'
+      - 'test/ProjecturedTulipTest/**'
+      - 'test/ProjecturedVideoTest/**'
+      - 'test/ProjecturedWebTest/**'
+      - 'test/ProjecturedXMLTest/**'
+      - 'test/ProjecturedYAMLTest/**'
+  pull_request:
+    paths:
+      - '.github/workflows/Projectured.yml'
+      - 'Projectured/**'
+      - 'ProjecturedAll/**'
+      - 'ProjecturedAnthropic/**'
+      - 'ProjecturedBook/**'
+      - 'ProjecturedChart/**'
+      - 'ProjecturedConsole/**'
+      - 'ProjecturedDBCatalog/**'
+      - 'ProjecturedDataFrames/**'
+      - 'ProjecturedDatabase/**'
+      - 'ProjecturedFSM/**'
+      - 'ProjecturedFormula/**'
+      - 'ProjecturedGraph/**'
+      - 'ProjecturedJSON/**'
+      - 'ProjecturedJulia/**'
+      - 'ProjecturedKernel/**'
+      - 'ProjecturedMCP/**'
+      - 'ProjecturedMarkdown/**'
+      - 'ProjecturedMath/**'
+      - 'ProjecturedODBC/**'
+      - 'ProjecturedOllama/**'
+      - 'ProjecturedPDF/**'
+      - 'ProjecturedPlatform/**'
+      - 'ProjecturedProcess/**'
+      - 'ProjecturedRST/**'
+      - 'ProjecturedSDL/**'
+      - 'ProjecturedSQL/**'
+      - 'ProjecturedSequenceChart/**'
+      - 'ProjecturedTulip/**'
+      - 'ProjecturedVideo/**'
+      - 'ProjecturedWeb/**'
+      - 'ProjecturedXML/**'
+      - 'ProjecturedYAML/**'
+      - 'example/ProjecturedBookExample/**'
+      - 'example/ProjecturedChartExample/**'
+      - 'example/ProjecturedConversationExample/**'
+      - 'example/ProjecturedDBCatalogExample/**'
+      - 'example/ProjecturedDataFramesExample/**'
+      - 'example/ProjecturedDatabaseExample/**'
+      - 'example/ProjecturedExample/**'
+      - 'example/ProjecturedFSMExample/**'
+      - 'example/ProjecturedFormulaExample/**'
+      - 'example/ProjecturedGraphExample/**'
+      - 'example/ProjecturedJSONExample/**'
+      - 'example/ProjecturedJuliaExample/**'
+      - 'example/ProjecturedKernelExample/**'
+      - 'example/ProjecturedMarkdownExample/**'
+      - 'example/ProjecturedMathExample/**'
+      - 'example/ProjecturedPlatformExample/**'
+      - 'example/ProjecturedProcessExample/**'
+      - 'example/ProjecturedRSTExample/**'
+      - 'example/ProjecturedSDLExample/**'
+      - 'example/ProjecturedSQLExample/**'
+      - 'example/ProjecturedSequenceChartExample/**'
+      - 'example/ProjecturedXMLExample/**'
+      - 'example/ProjecturedYAMLExample/**'
+      - 'test/ProjecturedAnthropicTest/**'
+      - 'test/ProjecturedBookTest/**'
+      - 'test/ProjecturedChartTest/**'
+      - 'test/ProjecturedConsoleTest/**'
+      - 'test/ProjecturedDBCatalogTest/**'
+      - 'test/ProjecturedDataFramesTest/**'
+      - 'test/ProjecturedDatabaseTest/**'
+      - 'test/ProjecturedFSMTest/**'
+      - 'test/ProjecturedFormulaTest/**'
+      - 'test/ProjecturedGraphTest/**'
+      - 'test/ProjecturedJSONTest/**'
+      - 'test/ProjecturedJuliaTest/**'
+      - 'test/ProjecturedKernelTest/**'
+      - 'test/ProjecturedMCPTest/**'
+      - 'test/ProjecturedMarkdownTest/**'
+      - 'test/ProjecturedMathTest/**'
+      - 'test/ProjecturedODBCTest/**'
+      - 'test/ProjecturedOllamaTest/**'
+      - 'test/ProjecturedPDFTest/**'
+      - 'test/ProjecturedPlatformTest/**'
+      - 'test/ProjecturedProcessTest/**'
+      - 'test/ProjecturedRSTTest/**'
+      - 'test/ProjecturedSDLTest/**'
+      - 'test/ProjecturedSQLTest/**'
+      - 'test/ProjecturedSequenceChartTest/**'
+      - 'test/ProjecturedTest/**'
+      - 'test/ProjecturedTulipTest/**'
+      - 'test/ProjecturedVideoTest/**'
+      - 'test/ProjecturedWebTest/**'
+      - 'test/ProjecturedXMLTest/**'
+      - 'test/ProjecturedYAMLTest/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.package }}, Julia ${{ matrix.julia }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write          # the upload to Codecov through OIDC
+    strategy:
+      fail-fast: false
+      matrix:
+        julia: ['1.12']
+        package:
+          - Projectured
+        include:
+          - {package: Projectured, develop: 'ProjecturedKernel ProjecturedPlatform Projectured ProjecturedBook ProjecturedChart ProjecturedConsole ProjecturedSQL ProjecturedDBCatalog ProjecturedDatabase ProjecturedGraph ProjecturedJulia ProjecturedFSM ProjecturedMath ProjecturedFormula ProjecturedJSON ProjecturedMarkdown ProjecturedPDF ProjecturedProcess ProjecturedRST ProjecturedSequenceChart ProjecturedXML ProjecturedYAML ProjecturedAll ProjecturedAnthropic example/ProjecturedKernelExample test/ProjecturedKernelTest test/ProjecturedAnthropicTest example/ProjecturedPlatformExample example/ProjecturedBookExample test/ProjecturedPlatformTest test/ProjecturedBookTest example/ProjecturedChartExample test/ProjecturedChartTest example/ProjecturedJSONExample test/ProjecturedConsoleTest example/ProjecturedJuliaExample example/ProjecturedMarkdownExample example/ProjecturedXMLExample example/ProjecturedYAMLExample example/ProjecturedConversationExample example/ProjecturedDBCatalogExample test/ProjecturedDBCatalogTest ProjecturedDataFrames example/ProjecturedDataFramesExample test/ProjecturedDataFramesTest example/ProjecturedDatabaseExample test/ProjecturedDatabaseTest example/ProjecturedFSMExample example/ProjecturedFormulaExample example/ProjecturedGraphExample example/ProjecturedMathExample ProjecturedOllama example/ProjecturedProcessExample example/ProjecturedRSTExample example/ProjecturedSQLExample example/ProjecturedSequenceChartExample example/ProjecturedExample test/ProjecturedFSMTest test/ProjecturedFormulaTest test/ProjecturedGraphTest ProjecturedMCP ProjecturedODBC ProjecturedSDL ProjecturedTulip ProjecturedVideo test/ProjecturedJSONTest test/ProjecturedJuliaTest test/ProjecturedMCPTest test/ProjecturedMarkdownTest test/ProjecturedMathTest test/ProjecturedODBCTest test/ProjecturedOllamaTest test/ProjecturedPDFTest test/ProjecturedProcessTest test/ProjecturedRSTTest example/ProjecturedSDLExample test/ProjecturedSDLTest test/ProjecturedSQLTest test/ProjecturedSequenceChartTest test/ProjecturedTulipTest test/ProjecturedVideoTest ProjecturedWeb test/ProjecturedWebTest test/ProjecturedXMLTest test/ProjecturedYAMLTest test/ProjecturedTest', coverage: 'Projectured/src'}
+    env:
+      SDL_VIDEODRIVER: offscreen      # SDL draws into memory; the runner has no display
+      JULIA_PKG_PRECOMPILE_AUTO: '0'  # the test compiles what it loads
+      PACKAGE: ${{ matrix.package }}
+      DEVELOP: ${{ matrix.develop }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: ${{ matrix.julia }}
+      - uses: julia-actions/cache@v3
+        with:
+          # A key with the matrix would hold the list of folders, which is
+          # longer than a key may be.
+          include-matrix: false
+          cache-name: julia-cache;package=${{ matrix.package }};julia=${{ matrix.julia }}
+      # AutoIntegration is a package of another repository, which no job
+      # develops. ProjecturedRegistry is private and a job has no token for
+      # it, so the package comes from its public repository, and General
+      # comes by itself.
+      - name: Add AutoIntegration
+        run: >-
+          julia --project="$RUNNER_TEMP/environment"
+          -e 'using Pkg; Pkg.add(url = "https://github.com/projectured/AutoIntegration.jl")'
+      - name: Develop the packages that the test needs
+        run: >-
+          julia --project="$RUNNER_TEMP/environment"
+          -e 'using Pkg; Pkg.develop([PackageSpec(path = abspath(folder))
+          for folder in split(ENV["DEVELOP"])])'
+      - name: Test
+        run: >-
+          julia --project="$RUNNER_TEMP/environment"
+          -e 'using Pkg; Pkg.test(ENV["PACKAGE"]; coverage = true)'
+      - uses: julia-actions/julia-processcoverage@v1
+        with:
+          directories: ${{ matrix.coverage }}
+      - uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          flags: ${{ matrix.package }}
+          use_oidc: true
+          fail_ci_if_error: false

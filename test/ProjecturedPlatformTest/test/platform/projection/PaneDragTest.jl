@@ -1,0 +1,368 @@
+# Drag and drop: the grab, the pointer, and what a release does.
+#
+# The pointer is resolved against the layout tree, so these tests state the
+# window size the layout was given and then press real coordinates in it.
+mutable struct _PaneDragMockEditor
+    document::Any
+end
+
+function test_pane_drag()
+@testset "PaneTree drag and drop" begin
+
+_stub = FixedMeasure(10, 18, 6, 0)
+_tab(name) = PaneTab(name, WidgetLabel(name))
+
+WIDTH = 400
+HEIGHT = 300
+
+# Print the tree into a window of a stated size, which is what the drag resolves
+# the pointer against.
+function _print(tree)
+    proj = make_pane_projection_example(measure = _stub)
+    context = PrinterContext(EmptyReference(), Cell(WIDTH), Cell(HEIGHT),
+                             Dict{Symbol,Any}())
+    (proj, print_document(proj, nothing, tree, context))
+end
+
+function _feed!(editor, proj, iomap, event)
+    op = read_intent(proj, iomap, event)
+    op === nothing || evaluate_operation(editor, op)
+    op
+end
+
+# Whether the drag of the tree that `iomap` prints is on.
+_is_drag_on(iomap) = (state = get_iomap_input(iomap).drag; state !== nothing && state.started)
+
+# A move with the button held, as the editor gives it: by position, and, once the
+# drag of the tree is on, as `DragMove`, which the drag wrapper sends the tree.
+function _hold!(editor, proj, iomap, x, y)
+    started = _is_drag_on(iomap)
+    _feed!(editor, proj, iomap, MouseMove(x, y, MouseButtons(:left), ModifierKeys(); time = 0.0))
+    started && _feed!(editor, proj, iomap, DragMove(x, y; time = 0.0))
+end
+
+# The release of the button, as the editor gives it: `DragEnd` while the drag of
+# the tree is on, and the release by position.
+function _release!(editor, proj, iomap, x, y)
+    _is_drag_on(iomap) && _feed!(editor, proj, iomap, DragEnd(x, y; time = 0.0))
+    _feed!(editor, proj, iomap, MouseUp(:left, x, y, ModifierKeys(); time = 0.0))
+end
+
+# Two groups side by side: the left one holds two tabs, the right one holds one.
+function _two_groups()
+    left = PaneGroup(PaneTab[_tab("a"), _tab("b")])
+    right = PaneGroup(PaneTab[_tab("c")])
+    tree = PaneTree(PaneSplit(:vertical, [left, right]))
+    (tree, left, right, _PaneDragMockEditor(tree))
+end
+
+# A point inside a group, given where in its rectangle to land (0..1 each way).
+function _point(tree, group, u, v)
+    r = get_pane_rectangle(tree, group)
+    (round(Int, (r.x + u * r.w) * WIDTH), round(Int, (r.y + v * r.h) * HEIGHT))
+end
+
+# Start a drag of `index` from `group` and answer the printed pair.
+function _grab!(editor, tree, group, index)
+    proj, iomap = _print(tree)
+    _feed!(editor, proj, iomap, DragTabOperation(_group_widget(iomap, group), index))
+    (proj, iomap)
+end
+
+# The tabbed pane a group printed — read out of *this* print, because the report
+# names its widget by identity.
+_group_widget(chain_iomap, group) =
+    _walk_widget(getfield(chain_iomap, :step_iomaps)[][1][], group)
+
+function _walk_widget(iomap, group)
+    iomap.input === group && return iomap.output
+    if hasproperty(iomap, :root_iomap)
+        return _walk_widget(iomap.root_iomap, group)
+    elseif hasproperty(iomap, :element_iomaps)
+        for child in iomap.element_iomaps
+            found = _walk_widget(child, group)
+            found === nothing || return found
+        end
+    end
+    nothing
+end
+
+@testset "a grab records where the tab came from" begin
+    tree, left, right, editor = _two_groups()
+    proj, iomap = _print(tree)
+    stranger = WidgetTabbedPane(Any[("x", WidgetLabel("x"))])
+    _feed!(editor, proj, iomap, DragTabOperation(stranger, 1))   # not ours
+    @test tree.drag === nothing
+
+    # The strip reports the grab; feed the report the widget would have made.
+    _feed!(editor, proj, iomap, DragTabOperation(_group_widget(iomap, left), 2))
+    @test tree.drag !== nothing
+    @test tree.drag.group === left
+    @test tree.drag.index == 2
+    @test tree.drag.target === nothing
+end
+
+@testset "the pointer names the group and the zone it is over" begin
+    tree, left, right, editor = _two_groups()
+    proj, iomap = _grab!(editor, tree, left, 1)
+
+    x, y = _point(tree, right, 0.5, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    @test tree.drag.target === right
+    @test tree.drag.zone === :center
+
+    x, y = _point(tree, right, 0.95, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    @test tree.drag.zone === :right
+
+    x, y = _point(tree, right, 0.5, 0.95)
+    _hold!(editor, proj, iomap, x, y)
+    @test tree.drag.zone === :below
+
+    # The strip runs across the top of a group, and a drop there means "into it".
+    x, y = _point(tree, right, 0.5, 0.0)
+    _hold!(editor, proj, iomap, x, y)
+    @test tree.drag.zone === :strip
+end
+
+# Every rectangle in a rendered canvas, as `(x, y, w, h)`.
+function _rectangles(node, acc = Tuple{Int,Int,Int,Int}[])
+    if node isa GraphicsRect
+        push!(acc, (Int(node.x), Int(node.y), Int(node.w), Int(node.h)))
+    elseif node isa GraphicsCanvas
+        for element in node.elements
+            _rectangles(element, acc)
+        end
+    elseif node isa GraphicsViewport
+        _rectangles(node.content, acc)
+    end
+    acc
+end
+
+# The overlay layer: the layout is slot 1, the drop indicator slot 2.
+_indicator(iomap) = getfield(iomap, :step_iomaps)[][1][].output.elements[2]
+
+@testset "the indicator shows where the tab would land" begin
+    tree, left, right, editor = _two_groups()
+    proj, iomap = _print(tree)
+    @test _indicator(iomap).visible === false     # nothing held, nothing shown
+
+    _feed!(editor, proj, iomap, DragTabOperation(_group_widget(iomap, left), 1))
+    @test _indicator(iomap).visible === false     # held, but over nothing yet
+
+    # Over the middle of a group: the whole group is the target.
+    x, y = _point(tree, right, 0.5, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    r = get_pane_rectangle(tree, right)
+    @test _indicator(iomap).visible === true
+    @test _indicator(iomap).position.x[] == round(Int, r.x * WIDTH)
+    @test _indicator(iomap).width == round(Int, r.w * WIDTH)
+    @test _indicator(iomap).height == round(Int, r.h * HEIGHT)
+
+    # Over an edge band: the half the new pane would take.
+    x, y = _point(tree, right, 0.5, 0.95)
+    _hold!(editor, proj, iomap, x, y)
+    @test _indicator(iomap).visible === true
+    @test _indicator(iomap).height == round(Int, r.h / 2 * HEIGHT)
+    @test _indicator(iomap).position.y[] == round(Int, (r.y + r.h / 2) * HEIGHT)
+
+    # A side band takes half the width instead.
+    x, y = _point(tree, right, 0.03, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    @test _indicator(iomap).width == round(Int, r.w / 2 * WIDTH)
+    @test _indicator(iomap).height == round(Int, r.h * HEIGHT)
+
+    # The pointer leaves every pane: nothing to show.
+    _hold!(editor, proj, iomap, 10_000, 10_000)
+    @test _indicator(iomap).visible === false
+
+    # And it is *drawn*: the widget's own flag says nothing about what reached the
+    # canvas — an early return for an invisible widget, or an origin fixed at
+    # print time, would leave the flag true and the screen unchanged.
+    x, y = _point(tree, right, 0.5, 0.95)
+    _hold!(editor, proj, iomap, x, y)
+    @test any(_rectangles(iomap.output)) do (rx, ry, rw, rh)
+        rw == _indicator(iomap).width && rh == _indicator(iomap).height
+    end
+
+    # And the drop puts it away.
+    x, y = _point(tree, right, 0.5, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    _release!(editor, proj, iomap, x, y)
+    @test _indicator(iomap).visible === false
+end
+
+@testset "a drop in the middle moves the tab into that group" begin
+    tree, left, right, editor = _two_groups()
+    moved = left.tabs[1]
+    proj, iomap = _grab!(editor, tree, left, 1)
+
+    x, y = _point(tree, right, 0.5, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    _release!(editor, proj, iomap, x, y)
+
+    @test tree.drag === nothing
+    @test length(left.tabs) == 1
+    @test length(right.tabs) == 2
+    @test right.tabs[2] === moved              # the same object moved
+    @test get_pane_focus(tree) == (right, 2)
+end
+
+@testset "a drop on an edge band splits the landing group" begin
+    tree, left, right, editor = _two_groups()
+    moved = left.tabs[1]
+    proj, iomap = _grab!(editor, tree, left, 1)
+
+    x, y = _point(tree, right, 0.5, 0.95)
+    _hold!(editor, proj, iomap, x, y)
+    _release!(editor, proj, iomap, x, y)
+
+    @test tree.drag === nothing
+    inner = tree.root.elements[2]
+    @test inner isa PaneSplit
+    @test inner.orientation === :horizontal    # dropped below
+    @test inner.elements[1] === right          # the landing group is reused
+    new_group = inner.elements[2]
+    @test new_group.tabs[1] === moved
+    @test length(left.tabs) == 1
+    @test get_pane_focus(tree) == (new_group, 1)
+end
+
+@testset "a drop on a side band splits the other way" begin
+    tree, left, right, editor = _two_groups()
+    proj, iomap = _grab!(editor, tree, left, 1)
+    x, y = _point(tree, right, 0.03, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    _release!(editor, proj, iomap, x, y)
+    inner = tree.root.elements[2]
+    @test inner.orientation === :vertical
+    @test inner.elements[2] === right           # dropped on the left, so it is second
+end
+
+@testset "a drop on its own edge band splits the group it came from" begin
+    tree, left, right, editor = _two_groups()
+    moved = left.tabs[1]
+    proj, iomap = _grab!(editor, tree, left, 1)
+
+    x, y = _point(tree, left, 0.95, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    @test tree.drag.target === left
+    @test tree.drag.zone === :right
+    _release!(editor, proj, iomap, x, y)
+
+    @test tree.drag === nothing
+    inner = tree.root.elements[1]
+    @test inner isa PaneSplit
+    @test inner.orientation === :vertical
+    @test inner.elements[1] === left            # the group it came from is reused
+    new_group = inner.elements[2]
+    @test new_group.tabs[1] === moved
+    @test length(left.tabs) == 1                # the tab it kept
+    @test tree.root.elements[2] === right       # the other group did not move
+    @test get_pane_focus(tree) == (new_group, 1)
+end
+
+@testset "a group with one tab can not split itself" begin
+    left = PaneGroup(PaneTab[_tab("only")])
+    right = PaneGroup(PaneTab[_tab("c")])
+    tree = PaneTree(PaneSplit(:vertical, [left, right]))
+    editor = _PaneDragMockEditor(tree)
+    proj, iomap = _grab!(editor, tree, left, 1)
+
+    x, y = _point(tree, left, 0.95, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    _release!(editor, proj, iomap, x, y)
+
+    @test tree.drag === nothing
+    @test tree.root.elements[1] === left        # nothing was written
+    @test length(left.tabs) == 1
+end
+
+@testset "every drop lands, whatever the layout and whatever it empties" begin
+    # The four shapes a split-drop meets, crossed with a source that survives the
+    # drop and one that is emptied by it. Each must move the tab and leave a tree
+    # whose splits all still hold two or more elements.
+    _tabs(n) = PaneTab[_tab("s\$i") for i in 1:n]
+
+    function _shape(kind, source_tabs)
+        source = PaneGroup(_tabs(source_tabs))
+        a, b = PaneGroup(PaneTab[_tab("a")]), PaneGroup(PaneTab[_tab("b")])
+        kind === :pair   ? (PaneTree(PaneSplit(:vertical, [source, a])), source, a) :
+        kind === :three  ? (PaneTree(PaneSplit(:vertical, [source, a, b])), source, b) :
+                           (PaneTree(PaneSplit(:vertical, [source,
+                                PaneSplit(:horizontal, [a, b])])), source, b)
+    end
+
+    # Every split of a well-formed tree holds two or more elements.
+    _well_formed(node) =
+        !(node isa PaneSplit) ||
+        (length(node.elements) >= 2 &&
+         all(_well_formed(node.elements[i]) for i in 1:length(node.elements)))
+
+    for kind in (:pair, :three, :nested), source_tabs in (1, 2)
+        for (zone, orientation) in ((:right, :vertical), (:below, :horizontal),
+                                    (:left, :vertical), (:above, :horizontal))
+            tree, source, target = _shape(kind, source_tabs)
+            editor = _PaneDragMockEditor(tree)
+            moved = source.tabs[1]
+            label = "\$kind/\$source_tabs/\$zone"
+
+            operation = make_pane_drop_split_operation(tree, source; source_index = 1,
+                                                       target, orientation, side = zone)
+            @test operation !== nothing
+            operation === nothing && continue
+            evaluate_operation(editor, operation)
+
+            groups = get_pane_groups(tree)
+            landed = findfirst(g -> any(g.tabs[i] === moved for i in 1:length(g.tabs)), groups)
+            @test landed !== nothing                          # the tab is somewhere
+            landed === nothing && continue
+            @test length(groups[landed].tabs) == 1            # in a pane of its own
+            @test !(groups[landed] in (source, target))       # a new one
+            @test _well_formed(tree.root)                     # no one-element split
+            @test (source in groups) == (source_tabs > 1)     # emptied source is gone
+            @test target in groups                            # the landing group stays
+            @test evaluate_reference(tree, get_selection(tree)) === moved
+        end
+    end
+end
+
+@testset "a drop back on its own group does nothing" begin
+    tree, left, right, editor = _two_groups()
+    proj, iomap = _grab!(editor, tree, left, 1)
+    x, y = _point(tree, left, 0.5, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    _release!(editor, proj, iomap, x, y)
+    @test tree.drag === nothing
+    @test length(left.tabs) == 2
+end
+
+@testset "a release outside every pane just ends the drag" begin
+    tree, left, right, editor = _two_groups()
+    proj, iomap = _grab!(editor, tree, left, 1)
+    _hold!(editor, proj, iomap, 10_000, 10_000)
+    @test tree.drag.target === nothing
+    _release!(editor, proj, iomap, 10_000, 10_000)
+    @test tree.drag === nothing
+    @test length(left.tabs) == 2
+end
+
+@testset "the emptied group goes away with the tab that left it" begin
+    left = PaneGroup(PaneTab[_tab("only")])
+    right = PaneGroup(PaneTab[_tab("c")])
+    tree = PaneTree(PaneSplit(:vertical, [left, right]))
+    editor = _PaneDragMockEditor(tree)
+    moved = left.tabs[1]
+    proj, iomap = _grab!(editor, tree, left, 1)
+
+    x, y = _point(tree, right, 0.5, 0.5)
+    _hold!(editor, proj, iomap, x, y)
+    _release!(editor, proj, iomap, x, y)
+
+    @test tree.root === right                   # the split collapsed into it
+    @test length(right.tabs) == 2
+    @test right.tabs[2] === moved
+end
+
+end # testset
+end # function

@@ -1,0 +1,53 @@
+"""
+    ProjecturedGraphTest
+
+The Graph tier of the test-package DAG: the suites whose fixtures are graph
+documents. A suite whose fixture names several domains lives in
+`ProjecturedTest` instead.
+
+Everything is aggregated by `test_graph()`.
+"""
+module ProjecturedGraphTest
+
+using Test
+import ProjecturedGraph
+import ProjecturedKernel
+import ProjecturedPDF
+import ProjecturedConsole
+import ProjecturedPlatform
+using ProjecturedKernelExample
+using ProjecturedPlatformExample
+using ProjecturedXMLExample
+import ProjecturedJSON
+import ProjecturedXML
+using ProjecturedGraphExample
+using ProjecturedKernelTest
+using ProjecturedPlatformTest
+
+const _SOURCES = (ProjecturedPlatform, ProjecturedConsole, ProjecturedGraph, ProjecturedJSON, ProjecturedKernel, ProjecturedPDF, ProjecturedXML)
+
+for _src in _SOURCES
+    _srcname = nameof(_src)
+    for _n in names(_src; all = true)
+        isdefined(_src, _n) || continue
+        _m = getfield(_src, _n)
+        # Every submodule of a Projectured package this source binds: the ones it
+        # defines, and the ones it re-aliases from a package below it.
+        (_m isa Module && _m !== _src && parentmodule(_m) !== Main) || continue
+        # An aggregate repeats the modules and the names that this loop binds.
+        nameof(_m) in (:KernelModule, :PlatformModule) && continue
+        Core.eval(@__MODULE__, Expr(:const, Expr(:(=), _n, _m)))
+        _syms = [s for s in names(_m) if s !== nameof(_m) && isdefined(_m, s)]
+        isempty(_syms) && continue
+        Core.eval(@__MODULE__, Expr(:using, Expr(:(:),
+            Expr(:., _srcname, _n), (Expr(:., s) for s in _syms)...)))
+    end
+end
+
+include("../test/domain/graph/projection/GraphProjectionTest.jl")
+include("../test/domain/graph/projection/FruchtermanReingoldLayoutTest.jl")
+include("../test/domain/graph/projection/GraphThemeTest.jl")
+
+include("../test/domain/graph/GraphSuite.jl")
+
+end # module ProjecturedGraphTest

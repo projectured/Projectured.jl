@@ -1,0 +1,60 @@
+"""
+    ProjecturedKernel
+
+The headless, domain-agnostic engine of ProjecturEd: the reactive cell system,
+the reference/operation/IO-map machinery, the projection *interface and
+infrastructure* (the four generic functions, the IO maps, the `@projection`
+macro, the projection-template engine, gesture bindings), the input-device
+abstraction, the editor read-eval-print loop, and the agent control surface
+(LLM/MCP).
+
+It carries no concrete projections, no concrete documents, no concrete domains
+(JSON/XML/Text/Syntax/Widget/...), no backends, and **no heavy dependencies** —
+so `using ProjecturedKernel` precompiles and loads on its own. The
+domain-independent projection algebra, the foundational document vocabulary,
+and the rendering live in `ProjecturedPlatform`, and the concrete domains live
+in the packages above it (`platform`, `domain`). The real LLM/MCP transports are opt-in packages
+that depend on this one; the kernel carries only their dependency-free seams.
+"""
+module ProjecturedKernel
+
+# The package is twenty-three architectural layers, one folder and one module
+# each, included bottom-to-top below. This list is the layer diagram and the
+# single source of truth for the layer order: every module appears after the
+# modules named in its `import ..XxxModule` headers, and a layer only imports
+# layers at or below its own index — both enforced statically by
+# `test_kernel_layering()`. A module's own file carries its fragment include
+# list, so each module file reads as that layer's table of contents.
+include("kernel/fault/FaultModule.jl")                # layer 1  — the record, the store, the barrier, the report
+include("kernel/performance/PerformanceModule.jl")   # layer 2  — what the editor measures about itself
+include("kernel/cell/CellModule.jl")                 # layer 3  — the reactive cell engine
+include("kernel/struct/CellStructModule.jl")         # layer 4  — the @cell_struct codegen
+include("kernel/clock/ClockModule.jl")               # layer 5  — the animation clock
+include("kernel/event/EventModule.jl")               # layer 6  — the input events
+include("kernel/device/DeviceModule.jl")             # layer 7  — the devices and their physical properties
+include("kernel/gesture/GestureModule.jl")           # layer 8  — the gestures and the pattern language
+include("kernel/backend/BackendModule.jl")           # layer 9  — the seam to a platform: input, output, the wait
+include("kernel/document/DocumentModule.jl")         # layer 10 — the document contract
+include("kernel/reference/ReferenceModule.jl")       # layer 11 — reference machinery
+include("kernel/selection/SelectionModule.jl")       # layer 12 — document current-focus state
+include("kernel/operation/OperationModule.jl")       # layer 13 — reified edits
+include("kernel/intent/IntentModule.jl")             # layer 14 — the reader pipeline's carrier
+include("kernel/binding/GestureBindingModule.jl")    # layer 15 — gesture → operation bindings
+include("kernel/iomap/IoMapModule.jl")               # layer 16 — projection input↔output records
+include("kernel/projection/ProjectionModule.jl")     # layer 17 — projection interface & algebra
+include("kernel/tool/ToolModule.jl")                 # layer 18 — the editor's capability surface
+include("kernel/llm/LlmModule.jl")                   # layer 19 — the LLM provider abstraction
+include("kernel/agent/AgentModule.jl")               # layer 20 — the AI control surface
+include("kernel/feed/FeedModule.jl")                 # layer 21 — the registered inflows of an editor
+include("kernel/editor/EditorModule.jl")             # layer 22 — the read-eval-print loop
+include("kernel/playback/PlaybackModule.jl")         # layer 23 — scripted live playback
+include("kernel/KernelModule.jl")                    # every module above, in one
+
+# A user who loads the package by name gets every module of it and every name that
+# one of them exports.
+using .KernelModule
+for _n in names(KernelModule)
+    _n === :KernelModule || Core.eval(@__MODULE__, Expr(:export, _n))
+end
+
+end # module ProjecturedKernel

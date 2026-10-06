@@ -1,0 +1,98 @@
+# The test of ProjecturedDataFrames, with coverage. The
+# release of ProjecturEd writes this file, from
+# source/tool/builder/ProjecturedProgram.jl in projectured-julia.
+#
+# A package reaches its siblings through a registry, which holds a version only
+# after its commit. So a job develops the folders of the packages that its test
+# needs, and tests this commit. It runs when one of those folders changes.
+name: DataFrames
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ProjecturedDataFrames.yml'
+      - 'ProjecturedDataFrames/**'
+      - 'ProjecturedKernel/**'
+      - 'ProjecturedPlatform/**'
+      - 'example/ProjecturedDataFramesExample/**'
+      - 'example/ProjecturedKernelExample/**'
+      - 'test/ProjecturedDataFramesTest/**'
+      - 'test/ProjecturedKernelTest/**'
+  pull_request:
+    paths:
+      - '.github/workflows/ProjecturedDataFrames.yml'
+      - 'ProjecturedDataFrames/**'
+      - 'ProjecturedKernel/**'
+      - 'ProjecturedPlatform/**'
+      - 'example/ProjecturedDataFramesExample/**'
+      - 'example/ProjecturedKernelExample/**'
+      - 'test/ProjecturedDataFramesTest/**'
+      - 'test/ProjecturedKernelTest/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.package }}, Julia ${{ matrix.julia }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write          # the upload to Codecov through OIDC
+    strategy:
+      fail-fast: false
+      matrix:
+        julia: ['1.12']
+        package:
+          - ProjecturedDataFrames
+        include:
+          - {package: ProjecturedDataFrames, develop: 'ProjecturedKernel ProjecturedPlatform example/ProjecturedKernelExample test/ProjecturedKernelTest ProjecturedDataFrames example/ProjecturedDataFramesExample test/ProjecturedDataFramesTest', coverage: 'ProjecturedDataFrames/src'}
+    env:
+      SDL_VIDEODRIVER: offscreen      # SDL draws into memory; the runner has no display
+      JULIA_PKG_PRECOMPILE_AUTO: '0'  # the test compiles what it loads
+      PACKAGE: ${{ matrix.package }}
+      DEVELOP: ${{ matrix.develop }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: ${{ matrix.julia }}
+      - uses: julia-actions/cache@v3
+        with:
+          # A key with the matrix would hold the list of folders, which is
+          # longer than a key may be.
+          include-matrix: false
+          cache-name: julia-cache;package=${{ matrix.package }};julia=${{ matrix.julia }}
+      # AutoIntegration is a package of another repository, which no job
+      # develops. ProjecturedRegistry is private and a job has no token for
+      # it, so the package comes from its public repository, and General
+      # comes by itself.
+      - name: Add AutoIntegration
+        run: >-
+          julia --project="$RUNNER_TEMP/environment"
+          -e 'using Pkg; Pkg.add(url = "https://github.com/projectured/AutoIntegration.jl")'
+      - name: Develop the packages that the test needs
+        run: >-
+          julia --project="$RUNNER_TEMP/environment"
+          -e 'using Pkg; Pkg.develop([PackageSpec(path = abspath(folder))
+          for folder in split(ENV["DEVELOP"])])'
+      - name: Test
+        run: >-
+          julia --project="$RUNNER_TEMP/environment"
+          -e 'using Pkg; Pkg.test(ENV["PACKAGE"]; coverage = true)'
+      - uses: julia-actions/julia-processcoverage@v1
+        with:
+          directories: ${{ matrix.coverage }}
+      - uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          flags: ${{ matrix.package }}
+          use_oidc: true
+          fail_ci_if_error: false

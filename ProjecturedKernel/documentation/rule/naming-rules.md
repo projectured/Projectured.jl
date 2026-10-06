@@ -1,0 +1,470 @@
+# Naming
+
+> **Kind:** rule · **Status:** current · **Stands on:** [division-terminology.md](division-terminology.md), [package-rules.md](package-rules.md), [system-anatomy.md](../design/system-anatomy.md)
+
+How things are named here — in every package, not only the kernel. The goal is
+guessability in both directions: given a concept, you can derive its name; given
+a name, you can tell what kind of thing it is and what it does, without looking
+it up. Meaningful, scheme-following names take priority over brevity or Julia
+idiom. The convention departs from Julia Base style (compressed lowercase names,
+minimal prefixes) exactly where doing so improves bidirectional guessability; it
+agrees with Julia on CamelCase types and modules, `!` for mutation,
+`SCREAMING_SNAKE_CASE` for constants, and avoiding abbreviations.
+
+The vocabulary of the divisions — package, layer, slice, module, leaf — is
+[division-terminology.md](division-terminology.md). What a package may depend on
+is [package-rules.md](package-rules.md). This document says what each of them is
+called.
+
+## Packages
+
+### The prefix and the slice
+
+Every package name is `Projectured<Slice>` in CamelCase, and the umbrella is
+`Projectured` alone. The package directory is `package/<PackageName>/`, one
+folder per package, carrying the name exactly.
+
+`AutoIntegration`, which the umbrella depends on, is no package of this
+repository. It is generic, it lives in its own repository,
+`projectured/AutoIntegration.jl`, and it carries no `Projectured` prefix.
+
+The slice is the lower-case name with the prefix removed, and it is the folder
+its code lives in: `ProjecturedSequenceChart` is
+`package/ProjecturedSequenceChart/`, its code is `source/domain/sequencechart/`, its
+suite is `test/domain/sequencechart/` and its documents are `example/domain/sequencechart/`.
+That derivation is a rule and not a coincidence —
+`ProjecturedKernelTest.get_package_source_root` computes it, and
+`test_package_graph()` walks it.
+
+### The suffix says which kind of package it is
+
+`Example`, `Test`, `Repl` and `Build` are the only reserved suffixes, and they
+mean nothing else. A package with no suffix holds the code.
+[package-rules.md](package-rules.md) states the five kinds, what each may depend
+on, and why a leaf matters.
+
+- **A package whose name merely begins with another's is a stem of its own**,
+  not a kind of it. `ProjecturedODBC` and `ProjecturedTulip` are separate
+  packages that carry a third-party dependency, not sub-packages of
+  `Projectured`.
+- **Two packages are named outright rather than by suffix**:
+  `ProjecturedBuilder` is the tool that drives a build, and `ProjecturedBench`
+  is a leaf that measures. A tool is not a kind of artifact. The package that a
+  build writes for a binary is `<Name>App`, for example `ProjecturedApp`.
+- **A package extension is `<Package><Dependency>Ext`.** That is the name
+  Julia's `[extensions]` table needs, and it reads as what it is:
+  `ProjecturedIntegrations` loads `ProjecturedSDL` in
+  `ProjecturedIntegrationsSimpleDirectMediaLayerExt`.
+- **A test package's entry point is `test_<slice>()`.** `ProjecturedJSONTest`
+  exports `test_json`, `ProjecturedKernelTest` exports `test_kernel`, and the
+  static layering guard beside it is `test_<slice>_layering()`. The table of
+  every scope is in [testing-guide.md](../guide/testing-guide.md).
+
+### A package holds a name and an include list
+
+A package directory holds its `Project.toml` and `src/<PackageName>.jl`, and
+that root file holds the docstring, the imports, the module aliases and the
+ordered `include`s. The code it includes lives in `source/`, `test/` or
+`example/`. A package directory can also hold `precompile/`, the recorded
+precompile statements of the package, because AutoPrecompile reads them in the
+folder of a loaded package and nowhere else. The rule and what it cost are in
+[plan/done/repository-tree.md](../../plan/done/repository-tree.md).
+
+## A file is named for what it defines
+
+A tab, a fuzzy finder and a stack trace show a file name and not its path, so
+the name must answer three questions on its own: which slice, what kind of
+thing, and is it the real thing or an example of one. Of 690 files,
+62 names were used more than once, covering 196 of them.
+
+| tree | shape | example |
+| --- | --- | --- |
+| `source/` | `<Slice>Module.jl` — the module head: the docstring, the header, the includes | `source/domain/json/JsonModule.jl` |
+| | `<Slice>Document.jl` — the slice's document types | `source/domain/json/JsonDocument.jl` |
+| | `<A>To<B>.jl` — a projection | `source/domain/json/JsonToSyntax.jl` |
+| | `<Thing>.jl` — anything that is neither, named for what it defines | `source/backend/sdl/SdlBackend.jl` |
+| `test/` | `<Thing>Test.jl` — `<Thing>` is the file it tests | `test/domain/json/document/JsonDocumentTest.jl` |
+| | `<Slice>Suite.jl` — the aggregator, `test_<slice>()` | `test/domain/json/JsonSuite.jl` |
+| `example/` | `<Thing>DocumentExample.jl` | `example/domain/json/JsonDocumentExample.jl` |
+| | `<Thing>ProjectionExample.jl` | `example/domain/json/JsonProjectionExample.jl` |
+| | `<Slice>Examples.jl` — the registry | `example/domain/json/JsonExamples.jl` |
+
+**Only a document file carries `Document`.** A file that defines no document is
+named for what it defines, which is why `source/backend/sdl/SdlBackend.jl` holds a
+backend and `source/domain/json/JsonDocument.jl` holds documents. The test is
+`@document` in the file, and it sorts the files without a judgement call.
+
+**`example/` has no role folders and `test/` keeps them.** The name says
+`Document` or `Projection` now, so a folder saying it again is a folder per
+file: 36 of `example/`'s 47 role folders held exactly one. `test/` keeps
+`document/`, `projection/`, `editor/` and `serializer/`, where one folder groups
+52 files.
+
+**A test is named for the file it tests, and the function inside settles it
+where the file name cannot.** `test/domain/json/document/JsonDocumentTest.jl` is
+named for its subject, `JsonDocument.jl`, not the bare slice name
+`JsonTest.jl`. Six of its neighbours look the same and are not: they sit in
+`projection/`, and each holds a `test_<slice>_projection`, so they are
+`<Slice>ProjectionTest.jl`. Two more in `test/adapter/odbc/external/` test a live
+query rather than a file, and are named for what they query, such as
+`DatabaseResultTest.jl` or `DbCatalogQueryTest.jl`.
+
+10 file names occur in more than one slice of `source/`, `example/` and
+`test/`. Each of the 10 is one concept exemplified in two slices, such as `PaneProjectionExample.jl` in
+`projectured` and in `platform`, which the slice folder separates.
+
+## Files and modules
+
+- **One module per unit of architecture.** A slice declares one module, named
+  for the slice: every file under `source/domain/json/` is a fragment of `JsonModule`,
+  and only one of them carries the `module` line. The rule holds in every group
+  outside the kernel, the backends, the adapters and the tools too: `SdlModule.jl` declares
+  `SdlModule`, and `ProjecturedSDL` includes that file and exports its names. A
+  package entry holds no import of the slice, so the slice says what it needs.
+  `test/suite/naming.jl` checks both. The kernel is layered rather
+  than sliced, so there a module belongs to a layer and its file is named for
+  it: `ClockModule.jl` declares `ClockModule`, `ProjectionModule.jl` declares
+  `ProjectionModule`. Grep-by-guess must work in both directions: a reader
+  who knows the slice knows the module, and a reader who has the module name
+  finds the one file that declares it.
+- **A fragment declares no module.** It opens with a comment saying which file
+  it came from and what part of the slice it is. Its imports and its exports
+  belong to the module file, because a module states what it needs and what it
+  exports, in one place.
+- **One slice takes a name of its own.** `source/platform/projection/` declares
+  `ProjectionAlgebraModule`, not `ProjectionModule`, because the kernel's
+  projection layer already declares that name and the kernel does not change.
+  The slice holds the domain-free projection algebra, so the module says so.
+  This is the only exception, and `test/suite/naming.jl` holds it in a list of
+  one.
+- **A module that owns a folder of fragments is `<Concept>Module.jl` itself.**
+  A layer's primary module carries only its docstring, its export list, and its
+  ordered `include`s (`DocumentModule.jl`, `BackendModule.jl`, `DeviceModule.jl`),
+  so `<Concept>.jl` is free to be the contract fragment it includes first
+  (`Clock.jl`). The rule above still reads in both directions —
+  the module is the file name, the `Module` suffix already spelled out. Where the
+  bare concept name would be ambiguous with the type it declares, the contract
+  fragment takes the prefix (`BackendInterface.jl`, `DocumentInterface.jl`,
+  `ReferenceInterface.jl`, `SelectionInterface.jl`, `DeviceInterface.jl`); where
+  the folder holds one contract and the bare name reads cleanly, `Interface.jl`
+  says it (`operation/`).
+- **`Api` is a layer marker carried in the filename.** Every file in `api/`
+  ends in `Api` (`DocumentApi.jl`, `BackendApi.jl`), so the rule above yields
+  its `XApiModule` directly — no special case.
+- Every exported name has exactly one owning module. Never export the same
+  name from two modules. For a generic function, the owning module defines
+  and exports the generic; other modules may import it and add methods, but
+  may not re-export or redefine it.
+
+## Projections
+
+From a single stem derive all three names. A projection has no module of its
+own: it is a fragment of its slice, so `JsonToSyntax` lives in `JsonModule` and
+`Copying` in `ProjectionAlgebraModule`.
+
+| artifact | name |
+|---|---|
+| file | `<Stem>.jl` |
+| type | `<Stem>Projection` |
+| iomap | `<Stem>IoMap` |
+
+The IO map carries no `Projection`, because an IO map belongs to a projection
+and to nothing else. The word says nothing the name does not already say.
+
+**A projection named `<A>To<B>` takes no suffix.** The `To` already says the
+name is a projection, and the chain these names live in reads better without
+the word repeated: `ChainingProjection([JsonToSyntax(), SyntaxToText(),
+TextToGraphics()])`. Every other projection takes `<Stem>Projection`.
+
+The stem answers a different question per folder:
+
+- **`generic/` stems are gerunds saying what the projection does to the
+  *document***: Copying, Filtering, Focusing, Reversing, Searching, Sorting.
+- **`higherorder/` stems are gerunds saying what the projection does with
+  its *child projections***: Chaining, Switching, Nesting, TypeDispatching,
+  PredicateDispatching, ReferenceDispatching, WindowInputUnwrapping,
+  WindowManaging.
+
+Two exceptions:
+
+- The degenerate projections take the standard math nouns: **Identity**
+  (input passes through as the same object) and **Constant** (fixed output,
+  input ignored). Together with Copying they form a triangle worth keeping
+  sharp: *same object through* / *fresh copy with iomaps* / *fixed output
+  ignoring input*.
+- **Recursive** stays an adjective ("Recursing" is awkward, "Recursive" is
+  universally understood).
+
+## The pipeline ladder
+
+The editing pipeline's vocabulary is a ladder of distinct kinds — no two
+rungs are synonyms:
+
+> **Event** → **Gesture** → **Intent** → **Operation** → **Document**
+
+The user acts (events: `KeyDown`, `MouseMove`, `WindowClose`); acts combine
+into a gesture (a click is down + up, a chord is two presses); readers read
+the user's intent from the gesture (`Intent` carries the gesture plus the
+operation-so-far, born unresolved and refined one domain inward per reader
+step); the intent resolves to an executable edit (an operation); evaluation
+applies it to the document. Name new concepts onto this ladder, not
+alongside it.
+
+## Types
+
+- **Documents** are nouns (`CellVector`, `PrimitiveString`, `WindowDocument`).
+- **A coded prefix names one variant of a document schema.** `@document Foo`
+  emits them all, they mean the same thing in every schema, and none of them is
+  ever hand-rolled.
+
+  | name | what it is |
+  |---|---|
+  | `Foo` | what the declaration says its bare name is. The cell layout by default. |
+  | `AFoo` | the family. Abstract, and it matches every variant. |
+  | `ACFoo` | the cell layout, `ACFoo{C1<:AbstractCell, …}`, one cell per field. |
+  | `MFoo` / `IFoo` | the native struct, mutable or immutable. Plain fields, no cell box. |
+  | `RCFoo` / `ICFoo` / `MCFoo` | the cell layout with every field reactive / immutable / mutable. |
+  | `DCFoo` | the cell layout with each field in its declared default kind. |
+
+  Every one of them abbreviates a phrase, adjective first: `ACFoo` is the
+  abstract cell `Foo`, `MCFoo` the mutable cell `Foo`, `MFoo` the mutable `Foo`,
+  `IFoo` the immutable `Foo`.
+  So a reader who forgets the convention can say the name out and get it back.
+
+  A `C` says the variant keeps its fields in cells, and its absence says the
+  fields are plain. That is the whole of what distinguishes `MCFoo` from `MFoo`: the
+  first is an immutable struct holding one `MutableCell` box per field, the
+  second a single mutable object with its fields inline.
+- **Operations are verb-first phrases with the `Operation` suffix**:
+  `ReplaceSelectionOperation`, `OpenWindowOperation`,
+  `ReplaceNumberRangeOperation`. Even the null operation is verb-first:
+  `DoNothingOperation`. No word-order exceptions — not
+  `NumberReplaceRangeOperation`, not a bare `ReplaceReferencedValue`. The
+  one exception is a *structural operation*: it holds or carries other things,
+  and names no edit of its own. `CompoundOperation` (a sequence of operations
+  evaluated as one), `WrappingOperation` (the supertype of an operation that
+  holds one other) and `CollectedIntentsOperation` (the answer to the request
+  `CollectIntents`) are the members.
+- **Events are `<Source><Action>`, suffixless and tenseless**: `KeyDown`,
+  `MouseMove`, `WindowLeave`, `WindowClose`, `WindowResize`, `WindowDefocus`,
+  `WindowQuit`. An event reports what the user or system did, never what
+  should happen in response — the response is the reader's job, expressed as
+  an operation. The word order alone separates the two families: noun-first
+  suffixless = event flowing in (`WindowClose`), verb-first + `Operation` =
+  intent flowing out (`CloseWindowOperation`). Where an event is a *request*
+  the application may refuse (close, quit), say so in its docstring; the
+  name deliberately does not. If the system ever needs both the request and
+  the completed notification, the request keeps the plain event name
+  (`WindowClose`) and the completion takes a different, non-synonymous
+  action stem (e.g. `WindowDestroy`) — never distinguish the two by
+  docstring alone.
+- **Gestures are `<Source><Action>` too**: `MouseClick`, `KeyChord`,
+  `MouseDwell`. A gesture is a pattern that code finds in several events, and it
+  subtypes `Gesture`, not `Event`: the type tells a gesture from an event, not the
+  name.
+- **Gesture patterns** mirror their event or gesture plus `Pattern`:
+  `KeyDownPattern`, `MouseClickPattern`.
+- **`Intent` is the reader pipeline's carrier**: the gesture plus the
+  operation-so-far (`nothing` until some reader understands it). It is
+  deliberately not an "edit" word — the edit is the operation it carries.
+- **Exceptions** take the `Exception` suffix: `QuitEditorException`.
+
+## Functions
+
+**Every function name starts with a verb.** The subject is carried by
+dispatch, not by the name.
+
+**A name must read as English. Where a rule gives a phrase nobody would say,
+the English wins and the rule yields.** The shapes below are a guide to a name
+that reads, not a substitution to apply without looking at the result. Two
+names this repository got wrong by applying a rule and not reading it:
+`get_base_plane_length_square`, where "length square" is not English and the
+name is `get_base_plane_squared_length`; and `get_cell_kind_of`, which kept a
+dangling preposition the rules say to drop. Say the name out loud. If it is not
+a phrase a person would use, it is the wrong name.
+
+**A word that names the kind of thing produced goes last; a word that names the
+owner stays first.** A pager is a widget, so it is `make_pager_widget`. A
+selection belongs to a widget list, so it is `make_widget_list_selection`. The
+test is the same: which reads as English.
+
+**The verb follows the nature of the work.** Choose it by what the function
+does, not by what it returns:
+
+| verb | when |
+|---|---|
+| `find_` | it searches, and it can return `nothing` |
+| `get_` | the value sits at a known place, with at most a trivial computation |
+| `compute_` | a non-trivial computation is involved — a loop, a search, a layout pass, a formula |
+| `make_` | the intention is to create a new something |
+| `build_` | it assembles a structure from parts |
+| `format_` | it produces text |
+| `render_` | it produces an output representation |
+| `collect_` | it gathers from several places |
+| `convert_` | it converts one form to another |
+| `measure_` | it measures |
+| `describe_` | it makes words for a person that say what a thing is or does: `describe_operation`, `describe_gesture_pattern` |
+| `run_` | it runs a unit of work: a loop, a frame, a stage or a barrier: `run_editor!`, `run_frame!`, `run_fault_barrier!` |
+
+`format_` and `describe_` both produce text. `format_` puts the fields of a thing
+into a fixed text form (`format_tick`, `format_fault_label`); `describe_` says in
+words what the thing means for a person.
+
+A function does not take `make_` merely because it returns a fresh
+`NamedTuple` or `Vector`. Ask what the caller wants: a newly created object, or
+a value derived from state that already exists.
+
+**A trailing `of` or `for` is dropped.** A name that ends in the preposition
+takes the verb instead and loses it: `chart_view_of` is `get_chart_view`, and
+`dsn_for` is `get_dsn`.
+
+**An external side effect takes `!`**, even when nothing the caller passed is
+mutated: `write_os_clipboard!` writes the operating system clipboard. A pure
+read of external state takes none, so `read_os_clipboard` has no `!`.
+
+- **Getters are `get_<stem>`**, pairing with their `set_<stem>!` twins:
+  `get_selection` / `set_selection!`, `get_property`, `get_iomap_input`,
+  `get_display_size`.
+- **Derived copies are `with_<stem>`**: `with_property`,
+  `with_exact_size` — return a copy with one aspect changed. Together
+  with the getter this forms the read / derive / mutate trio:
+  `get_property` / `with_property` / `set_property!`.
+- **Protocol functions are verb + the unit that flows in**, dispatch
+  supplying the subject: `print_document(projection, recursion, input,
+  context)`, `read_intent(projection, iomap, intent)`,
+  `read_gesture(document, gesture)`, `print_child(recursion, input,
+  context)`, `evaluate_operation(operation, …)`. The verbs read, evaluate and print are
+  intentional — they mirror the editor's read-evaluate-print loop, and each
+  object names the rung of the pipeline ladder being consumed: the document
+  flows forward through the printer, the intent flows backward through the
+  readers.
+- **Protocol functions come in two kinds, and both name their input.**
+  A *rung-transformer* moves the unit up the ladder — `read_gesture`
+  (gesture in, operation out), `evaluate_operation` (operation in, document
+  state out); input and output are different kinds, which is where reading
+  and evaluating visibly convert form into meaning. A *domain-translator*
+  keeps the kind and moves it across one projection — `print_document`
+  (document in, document out inside the returned IoMap), `read_intent`
+  (intent in, intent out, translated one domain inward),
+  `map_reference_forward` / `map_reference_backward` (reference in,
+  reference out). The full reading of a gesture into an operation is
+  distributed across the pipeline: each `read_intent` step advances it by
+  one domain, and the composition of the steps is the reader.
+- **Factories are `make_*`**: `make_agent_server`,
+  `make_child_context`, `make_scripted_say`.
+- **Predicates start with `is_`** (`is_valid_reference`,
+  `is_reference_equal`, `is_cell_up_to_date`) or are plain verbs that read as
+  questions at the call site (`matches(pattern, gesture)`,
+  `would_create_cycle(env, from, to)`). Keep the plain verb where `is_` would
+  change the meaning: `would_create_cycle` asks what adding an edge *would*
+  do, and `is_creating_cycle` would ask something else.
+- **Mutating functions end with `!`**: `insert_row!`, `take_message_lines!`,
+  `record_frame_measurements!`. A name ending in `!` is an action, so it
+  must start with a verb — a "mutating getter" like consuming a queue is a
+  `pop_`/`take_`, not a noun.
+- **A qualifier that narrows the *result* is a suffix**:
+  `get_document_gesture_bindings_own` answers only the bindings that a type
+  declares itself, and `collect_document_gesture_bindings` also collects the
+  bindings of its supertypes.
+- **A qualifier that names the *subject* keeps subject-first order**, because
+  it reads as English: `get_base_plane_length`, not `get_length_base_plane`;
+  `get_command_palette_settled_selection`, not
+  `get_command_palette_selection_settled`. The test is whether the words read
+  as a phrase a person would say.
+
+### Words
+
+- **snake_case with underscores between all words**: `is_cell_up_to_date`, not
+  `isuptodate`; `insert_row!`, not `insertrow!`.
+- **No ad-hoc abbreviated words inside names**: `value` not `val`, `function`
+  not `fn`, `reference` not `ref`, `operation` not `op`, `performance` not
+  `perf`, `evaluated` not `eval`.
+- **The sanctioned compact forms are these**: `Api` (the layer marker),
+  `IoMap`/`iomap` (a name in its own right), the generated `I<Document>` prefix,
+  the canonical keyboard modifier labels `ctrl`/`alt`/`meta` (`has_ctrl_modifier_key`;
+  nobody says `has_alternate_modifier_key`), and any well-known, widely-used abbreviation that reads
+  unambiguously as its one expansion (`ctor` for constructor, `expr` for
+  expression). The bar is guessability in both directions: `ctor` clears it, a
+  coined shortening of a domain word (`val`, `ref`, `op`) does not.
+- **A constant that holds a wire value spells the value.** The abbreviation is
+  then not the code's choice but the format's, and a name that expanded it would
+  disagree with what it holds. `PRED_REF_DIRECTIVE = "pred-ref"` keeps `REF`,
+  because `pred-ref` is what a user writes in a reStructuredText file and what
+  the loader matches when it reads one back. The same holds for
+  `PRED_REF_LANGUAGE`, `PRED_REF_ELEMENT_TAG` and `PRED_REF_FUNCTION_NAME`,
+  which carry `"pred-ref"`, `"pred:ref"` and `"pred_ref"` for Markdown, XML and
+  Julia. This is the same exemption a Base generic gets: a name that comes from
+  outside keeps its spelling.
+- This convention governs exported names. Local and argument names are
+  outside its scope, though full words are encouraged there too
+  (`context` over `ctx`).
+
+### Exemptions
+
+Two shapes are exempt from the verb-first rule, and only these:
+
+- **DSL words** inside macros: `when` and `prefix` in `@reference_case`, and
+  `bound`, `project`, `collection`, `tokens` and `sections` in
+  `@projection_template`. Each of the five is a one-line builder for its
+  CamelCase marker type — `bound(input, T, render) = Bound(...)`. They are not
+  exported: `@projection_template` rewrites a call of each one in its builder
+  expression into a call of the function of the projection layer. They read as
+  the vocabulary of the template, not as calls:
+  `SyntaxLeaf(bound(:value, Bool, ...))` says what the leaf is bound to, and
+  `make_bound` would say it worse.
+- **Declarative macros** are noun-named: `@document`, `@iomap`,
+  `@projection`, `@gestures`, `@reference`, `@reference_step`, `@gesture_case`. A macro
+  is a DSL keyword — `@document` reads as "here is a document definition" —
+  not an action.
+
+## Identifiers in the documentation
+
+A claim the code is checked against carries an identifier, and the prefix says
+which document owns it. Both are `SCREAMING-KEBAB-CASE`.
+
+| prefix | means | lives in |
+|---|---|---|
+| `PR-…` | a capability the editor promises, observable from outside | [accepted-requirements.md](../requirement/accepted-requirements.md) |
+| `PAR-…` | an architecture rule every change must respect | [architecture-invariants.md](architecture-invariants.md) |
+
+A bare `§N` always means a section of the file you are reading. Cite any other
+file by name — the rule and the reason are under "Cite, do not repeat" in
+[README.md](../README.md).
+
+Every document in `documentation/` carries a one-line header naming its
+**Kind**, its **Status**, and what it **Stands on**. The kinds, and the folder
+each document belongs to, are in [README.md](../README.md).
+
+## Quick reference
+
+| shape | meaning | example |
+|---|---|---|
+| `Projectured<Slice>` | a package of the product | `ProjecturedJSON` |
+| `Projectured<Slice><Kind>` | its example or test package | `ProjecturedJSONTest` |
+| `<Package><Dep>Ext` | a package extension | `ProjecturedSQLSQLiteExt` |
+| `<File>Module` | the Julia module a file declares | `ClockModule` |
+| `<Slice>Document` | the slice's document types | `JsonDocument` |
+| `<Slice>Suite` | the suite that defines `test_<slice>` | `JsonSuite` |
+| `<Thing>Test` | the test of one file | `JsonDocumentTest` |
+| `<Thing>DocumentExample` | an example document | `JsonDocumentExample` |
+| `<Thing>ProjectionExample` | an example projection | `JsonProjectionExample` |
+| `<Slice>Examples` | the slice's example registry | `JsonExamples` |
+| `test_<slice>` | a suite entry point | `test_json` |
+| `test_<slice>_layering` | its static layering guard | `test_json_layering` |
+| `PR-…` / `PAR-…` | a claim the code is checked against | `PAR-PURE-THUNK` |
+| `<Stem>Projection` | projection; gerund stem | `FilteringProjection` |
+| `<Verb><Noun>Operation` | executable edit resolved from an intent; flows out of a reader | `CloseWindowOperation` |
+| `<Source><Action>` | event or gesture, flows into a reader | `WindowClose`, `MouseClick` |
+| `A<Document>` | family, matches every variant | `ACellVector` |
+| `AC<Document>` | cell layout | `ACCellVector` |
+| `M<Document>` | mutable native struct | `MCellVector` |
+| `I<Document>` | immutable native struct | `IEthernetFcs` |
+| `IC<Document>` | cell layout, every field immutable | `ICCellVector` |
+| `<Event>Pattern` | pattern of an event or a gesture | `KeyDownPattern` |
+| `get_<stem>` / `set_<stem>!` | getter / setter | `get_selection` |
+| `with_<stem>` | derived copy | `with_property` |
+| `<verb>_<flowing unit>` | pipeline protocol | `print_document`, `read_intent` |
+| `make_<thing>` | factory | `make_agent_server` |
+| `is_<condition>` / `has_<possession>` | predicate | `is_valid_reference`, `has_ctrl_modifier_key` |
+| `<verb>…!` | mutates its subject | `insert_row!` |
+| `…_<qualifier>` | variant of the base name | `…_ignoring_types` |

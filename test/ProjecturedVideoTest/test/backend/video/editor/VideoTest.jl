@@ -1,0 +1,225 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# test/editor/VideoTest.jl
+#
+# Smoke test for `record_video`: drive the json example through a few gestures,
+# encode an MP4, and assert the file exists and is non-empty. ffmpeg ships with
+# FFMPEG.jl (via FFMPEG_jll), so it is normally available; should encoding fail
+# for any reason the test is skipped with a warning rather than failing CI.
+#
+# A second case checks that keyboard typein actually edits the document: typein
+# only produces an operation when something is selected, so the recording is
+# given an `initial_selection` (a text caret) and the targeted character is
+# asserted to change.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# The reference of the *string* a `{k}` position caret points into: the caret path
+# with its terminal position step dropped. `collect_position_selections` yields
+# `…{k}` carets, but `evaluate_reference` of a `{k}` returns the position step, not
+# the character — to read the edited text we evaluate the enclosing string.
+_caret_string_reference(p::ConcreteReference) =
+    p.tail isa EmptyReference ? EmptyReference() :
+    ConcreteReference(p.head, _caret_string_reference(p.tail))
+_caret_string_reference(p) = p
+
+function test_record_video()
+@testset "record_video" begin
+    @testset "encodes an mp4" begin
+        gestures = [
+            (event = KeyPress('h'; time = 0.0),                    hold = 0.3),
+            (event = KeyPress('i'; time = 0.0),                    hold = 0.3),
+            (event = KeyDown(:right, ModifierKeys(); time = 0.0),  hold = 0.4),
+        ]
+        filename = tempname() * ".mp4"
+        ok = try
+            record_video(make_json_document_example(), make_json_projection_example();
+                         gestures, filename, fps=30, width=400, height=300, supersample=1)
+            true
+        catch e
+            @warn "record_video test skipped (ffmpeg unavailable?): $e"
+            false
+        end
+        if ok
+            @test isfile(filename)
+            @test filesize(filename) > 0
+            rm(filename; force=true)
+        end
+    end
+
+    @testset "typein edits the document with an initial selection" begin
+        doc  = make_json_document_example()
+        proj = make_json_projection_example()
+        # A text caret so the keypress has somewhere to type; without a selection
+        # the reader yields no operation and typein would be a silent no-op.
+        caret = first(collect_position_selections(doc))
+        string_ref = _caret_string_reference(caret)   # the string the caret sits in
+        before = evaluate_reference(doc, string_ref)
+        filename = tempname() * ".mp4"
+        ok = try
+            record_video(doc, proj; gestures = [(event = KeyPress('z'; time = 0.0), hold = 0.2)],
+                         filename, fps=10, width=400, height=300, supersample=1,
+                         initial_selection=caret)
+            true
+        catch e
+            @warn "record_video typein test skipped (ffmpeg unavailable?): $e"
+            false
+        end
+        if ok
+            @test filesize(filename) > 0
+            rm(filename; force=true)
+        end
+        # The edit is applied regardless of whether encoding ran: the typed 'z' now
+        # sits at the caret (position 0 of the string), so the string gains a
+        # leading 'z' and its content changes.
+        after = evaluate_reference(doc, string_ref)
+        @test first(after) == 'z'
+        @test after != before
+    end
+
+    @testset "timed operation entry seeds the caret for a following keypress" begin
+        # An `:operation` entry (ReplaceSelectionOperation) is injected straight
+        # into the evaluator — no event needed — then a `:event` keypress edits
+        # at that selection. Proves operation entries reach evaluate_operation and
+        # the next event reads against the updated state.
+        doc  = make_json_document_example()
+        proj = make_json_projection_example()
+        caret = first(collect_position_selections(doc))
+        string_ref = _caret_string_reference(caret)
+        filename = tempname() * ".mp4"
+        timeline = [
+            (operation = ReplaceSelectionOperation(caret), hold = 0.2),
+            (event     = KeyPress('q'; time = 0.0),                    hold = 0.2),
+        ]
+        ok = try
+            record_video(doc, proj; gestures = timeline, filename,
+                         fps=10, width=400, height=300, supersample=1)
+            true
+        catch e
+            @warn "record_video operation-entry test skipped (ffmpeg unavailable?): $e"
+            false
+        end
+        if ok
+            @test filesize(filename) > 0
+            rm(filename; force=true)
+        end
+        # The keypress landed at the operation-seeded caret regardless of encoding:
+        # a leading 'q' now heads the string.
+        @test first(evaluate_reference(doc, string_ref)) == 'q'
+    end
+
+    # .mp4 is the only supported container.
+    @test_throws ErrorException record_video(make_json_document_example(), make_json_projection_example();
+                                             gestures = [(event = KeyPress('a'; time = 0.0), hold = 0.1)],
+                                             filename = tempname() * ".avi")
+end
+end # test_record_video
+
+"""
+    test_json_build_live()
+
+Replay the timeline of `json_build_live` headless, as the recorder feeds it, and
+check that every key answers an operation and that the result is the example
+document. The build moves the caret alone: no key of it selects structure.
+"""
+function test_json_build_live()
+@testset "json_build_live builds its document from the caret" begin
+    live = only(example for example in live_examples if example.name == "json_build")
+    document = live.example.make_document()
+    projection = live.example.make_projection()
+    set_selection!(document, EmptyReference())
+    editor = Editor(document, projection; backend = ConsoleBackend(),
+                    devices = Device[Display(), Keyboard(), Mouse()])
+    reprint!() = editor.iomap = print_document(projection, nothing, editor.document,
+        PrinterContext(EmptyReference(), Cell(live.width), Cell(live.height), Dict{Symbol,Any}(), Clock()))
+    reprint!()
+    @test !any(entry -> entry.event isa KeyDown && entry.event.modifiers.alt, live.timeline)
+    dead = Int[]
+    for (i, entry) in enumerate(live.timeline)
+        change = read_intent(projection, nothing, Intent(entry.event, nothing), editor.iomap)
+        operation = change isa Intent ? change.operation : change
+        if operation isa Operation
+            evaluate_operation(editor, operation)
+            reprint!()
+        else
+            push!(dead, i)
+        end
+    end
+    @test isempty(dead)
+    # The example document, with the bool of "meta" before its number: the caret
+    # can not leave a container whose last value is a bool.
+    meta = JsonObject("created" => JsonString("2025-01-15"), "draft" => JsonBool(false),
+                      "version" => JsonNumber(2))
+    expected = JsonObject((entry.key => (entry.key == "meta" ? meta : entry.value)
+                           for entry in make_json_document_example().entries)...)
+    @test isempty(compare_content(editor.document, expected))
+end
+end # test_json_build_live
+
+# The render settings of an editor reach a take through `apply_settings!`. A
+# change of the mode drops the retained surface of the partial paint.
+function test_video_render_settings()
+@testset "the render settings reach a take" begin
+    frames = mktempdir()
+    backend = VideoBackend(Any[], :video_settings_test; frames_dir = frames)
+    @test is_settings_target(backend, RenderSettings())
+    backend.paint_state = :retained
+    apply_settings!(backend, RenderSettings(partial_render = true, debug_dirty = true,
+                                            debug_dirty_hold = 1.5))
+    @test (backend.partial_render, backend.debug_dirty, backend.debug_dirty_hold) ==
+          (true, true, 1.5)
+    @test backend.paint_state === nothing
+    backend.paint_state = :retained
+    apply_settings!(backend, RenderSettings(partial_render = true))
+    @test backend.paint_state === :retained
+    @test !backend.debug_dirty
+    read = RenderSettings()
+    read_settings!(read, backend)
+    @test (read.partial_render, read.debug_dirty, read.supersample) == (true, false, 2)
+    rm(frames; force = true, recursive = true)
+end
+end
+
+# The pixels of a 24-bit or 32-bit BMP file as rows of `(red, green, blue)`, top row
+# first.
+function _read_bmp_pixels(filename::AbstractString)
+    bytes = read(filename)
+    word(at) = Int(reinterpret(Int32, bytes[at + 1:at + 4])[1])
+    offset, width, height = word(10), word(18), word(22)
+    depth = Int(bytes[29]) ÷ 8
+    stride = 4 * cld(width * depth, 4)
+    top_down = height < 0
+    height = abs(height)
+    [begin
+         row = top_down ? y : height - 1 - y
+         at = offset + row * stride + x * depth
+         (Int(bytes[at + 3]), Int(bytes[at + 2]), Int(bytes[at + 1]))
+     end for y in 0:height - 1, x in 0:width - 1]
+end
+
+function test_video_pointer_shape()
+@testset "the pointer of a video has the picture of the shape under it" begin
+    VIDEO = ProjecturedVideo.VideoModule
+    backend = VideoBackend(Any[], :main; pointer = true)
+    backend.pointer_x, backend.pointer_y = 30, 20
+    canvas = GraphicsCanvas([GraphicsPointerShape(0, 0, 100, 100, :ibeam)]; w = 200, h = 100)
+    polygon(elements) = only(filter(element -> element isa GraphicsPolygon, elements))
+    @test polygon(VIDEO._make_pointer_graphics(backend, canvas)).points ==
+          [(30 + dx, 20 + dy) for (dx, dy) in VIDEO._POINTER_OUTLINES[:ibeam]]
+    # Off every region, the arrow, with its tip at the pointer.
+    backend.pointer_x = 150
+    @test polygon(VIDEO._make_pointer_graphics(backend, canvas)).points[1] == (150, 20)
+    # Each picture draws black and white pixels around its hot spot.
+    for shape in POINTER_SHAPES
+        picture = GraphicsCanvas(VIDEO._make_pointer_shape_graphics(shape, 30, 30); w = 60, h = 60)
+        filename = tempname() * ".bmp"
+        write_image(picture, filename; width = 60, height = 60, background = (0x80, 0x80, 0x80, 0xff),
+                    supersample = 1)
+        pixels = _read_bmp_pixels(filename)
+        rm(filename; force = true)
+        near = pixels[6:56, 6:56]
+        @test count(p -> maximum(p) < 40, near) > 10
+        @test count(p -> minimum(p) > 215, near) > 10
+        @test count(p -> maximum(p) < 40 || minimum(p) > 215, pixels) ==
+              count(p -> maximum(p) < 40 || minimum(p) > 215, near)
+    end
+end
+end

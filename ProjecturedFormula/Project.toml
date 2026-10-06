@@ -1,0 +1,23 @@
+name = "ProjecturedFormula"
+uuid = "5b0a9501-da97-468b-b7ab-96b2aab72c39"
+version = "0.1.0"
+authors = []
+
+[deps]
+ProjecturedJulia = "8625b742-6071-4be0-bd92-d89876019251"
+ProjecturedKernel = "a3e3499a-684d-4df9-a0d6-de2d1797b1f3"
+ProjecturedMath = "80f7b254-0441-42e3-ab4d-62a480615fad"
+ProjecturedPlatform = "b21cb890-5227-4e91-ae0e-8ab4d844f9f7"
+
+[compat]
+ProjecturedJulia = "0.1.0"
+ProjecturedKernel = "0.1.0"
+ProjecturedMath = "0.1.0"
+ProjecturedPlatform = "0.1.0"
+julia = "1.12"
+
+[auto-integration]
+default = "auto"
+
+    [auto-integration.triggers]
+    Projectured = "92922de3-b970-4d9a-8b2a-9d6f361397b5"

@@ -1,0 +1,68 @@
+"""
+    test_shell_completeness()
+
+Every test function of this slice is called by [`test_shell`](@ref), and each one
+exactly once.
+
+A suite is edited by hand and by script, and a slip there is invisible: a
+function that stops being called takes its assertions with it and the count only
+falls, while one called twice makes the count rise for nothing. Both happened
+here. This asserts the suite runs what the slice defines.
+"""
+function test_shell_completeness()
+    @testset "the suite runs every test of this slice, once" begin
+        directory = @__DIR__                # the folder of this suite
+        defined = Set{String}()
+        for name in readdir(directory)
+            endswith(name, ".jl") || continue
+            for line in eachline(joinpath(directory, name))
+                match_ = match(r"^function (test_\w+)\(\)", line)
+                match_ === nothing || push!(defined, match_[1])
+            end
+        end
+        delete!(defined, "test_shell")
+        delete!(defined, "test_shell_completeness")
+        # The body of `test_shell` and nothing else: a docstring above it names
+        # the same functions in the same shape, and counting those would count
+        # every call twice.
+        called = String[]
+        inside = false
+        for line in eachline(joinpath(directory, "ShellSuite.jl"))
+            startswith(line, "function test_shell()") && (inside = true; continue)
+            inside || continue
+            startswith(line, "end") && break
+            stripped = strip(line)
+            endswith(stripped, "()") && startswith(stripped, "test_") &&
+                push!(called, stripped[1:end-2])
+        end
+        @test isempty(setdiff(defined, Set(called)))
+        @test length(called) == length(Set(called))
+    end
+end
+
+"""
+    test_shell()
+
+Run this package's whole suite: the layering guard, the window wrap, and the
+features of a window as wrappers of `build_editor`.
+"""
+function test_shell()
+    @testset "ProjecturedPlatform" begin
+        test_shell_completeness()
+        test_window_wrap()
+        test_widget_tooltip()
+        test_context_menu_window()
+        test_window_shell()
+        test_window_wrappers()
+        test_file_dialog()
+        test_tracking_screen()
+        test_drag_tracking()
+        test_drag_pointer_shape()
+        test_pointer_light()
+    end
+end
+
+export test_shell, test_shell_completeness, test_window_wrap,
+       test_widget_tooltip,
+       test_context_menu_window, test_window_shell, test_window_wrappers, test_file_dialog,
+       test_tracking_screen, test_drag_tracking, test_drag_pointer_shape, test_pointer_light

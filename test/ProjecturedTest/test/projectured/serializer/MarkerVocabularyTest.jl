@@ -1,0 +1,230 @@
+"""
+Tests for the marker **vocabulary** at domain level — the Julia
+domain's `definition(document, "name")`, the Markdown domain's
+`section(document, "Title")` — and for the property every host format owes
+a marker: a marker that names a file outside the set is a leaf, and a file
+that was loaded and saved keeps it verbatim.
+"""
+
+using Test
+using ProjecturedPlatform.SerializationModule
+using ProjecturedJulia.JuliaModule
+import ProjecturedJSON
+using ProjecturedJSON.JsonModule
+using ProjecturedMarkdown.MarkdownModule
+using ProjecturedJulia.JuliaModule: JuliaFunction, JuliaConst, JuliaStruct, JuliaDocstring
+using ProjecturedPlatform.NaturalModule: print_natural_text
+
+"A project of every source and page in `d`: the context a marker is evaluated in."
+_mv_project(d) = load_project(d, filter(f -> endswith(f, ".jl") || endswith(f, ".md"), readdir(d)))
+
+const _MV_SOURCE = """
+using Foo
+
+\"\"\"
+Build the packet queue step.
+\"\"\"
+function packet_queue_step(x)
+    y = x + 1
+    return y
+end
+
+const LIMIT = 10
+
+struct Marker
+    a::Int
+end
+"""
+
+function test_marker_vocabulary()
+@testset "Marker vocabulary: definition(…) + host-format round-trip" begin
+
+    @testset "definition(…) finds each shape of top-level definition" begin
+        d = mktempdir()
+        try
+            write(joinpath(d, "steps.jl"), _MV_SOURCE)
+            ctx = _mv_project(d)
+            # A documented function comes back *with* its docstring — the
+            # fragment a reader should see is the whole definition.
+            f = evaluate_marker("definition(file(\"steps.jl\"), \"packet_queue_step\")", ctx)
+            @test f isa JuliaDocstring
+            @test occursin("function packet_queue_step", print_natural_text(f))
+            @test occursin("Build the packet queue step", print_natural_text(f))
+
+            @test evaluate_marker("definition(file(\"steps.jl\"), \"LIMIT\")", ctx) isa JuliaConst
+            @test evaluate_marker("definition(file(\"steps.jl\"), \"Marker\")", ctx) isa JuliaStruct
+        finally
+            rm(d; recursive=true, force=true)
+        end
+    end
+
+    @testset "definition(…) shares the file with a plain file(…) marker" begin
+        d = mktempdir()
+        try
+            write(joinpath(d, "steps.jl"), _MV_SOURCE)
+            ctx = _mv_project(d)
+            whole = evaluate_marker("file(\"steps.jl\")", ctx)
+            part  = evaluate_marker("definition(file(\"steps.jl\"), \"LIMIT\")", ctx)
+            # The fragment is a node *of* the project's file, not of a re-parse.
+            @test any(s -> s === part, getfield(get_file_content(whole), :statements)[])
+        finally
+            rm(d; recursive=true, force=true)
+        end
+    end
+
+    @testset "a missing or ambiguous name fails loudly" begin
+        d = mktempdir()
+        try
+            write(joinpath(d, "steps.jl"), _MV_SOURCE)
+            write(joinpath(d, "twice.jl"), "f(x) = 1\nf(x, y) = 2\n")
+            ctx = _mv_project(d)
+            @test_throws ErrorException evaluate_marker("definition(file(\"steps.jl\"), \"nope\")", ctx)
+            @test_throws ErrorException evaluate_marker("definition(file(\"twice.jl\"), \"f\")", ctx)
+        finally
+            rm(d; recursive=true, force=true)
+        end
+    end
+
+    @testset "section(…) names a heading, and takes what it heads" begin
+        d = mktempdir()
+        try
+            write(joinpath(d, "page.md"),
+                  "# Title\n\nIntro.\n\n## First\n\nOne.\n\n### Deeper\n\nDeep.\n\n## Second\n\nTwo.\n")
+            ctx = _mv_project(d)
+
+            first_section = print_natural_text(
+                evaluate_marker("section(file(\"page.md\"), \"First\")", ctx))
+            # The heading, its prose, and the subsection it contains …
+            @test occursin("## First", first_section)
+            @test occursin("One.", first_section)
+            @test occursin("Deeper", first_section)
+            # … but not the section that follows at the same level.
+            @test !occursin("Second", first_section)
+
+            last_section = print_natural_text(
+                evaluate_marker("section(file(\"page.md\"), \"Second\")", ctx))
+            @test occursin("Two.", last_section)
+            @test !occursin("One.", last_section)
+
+            # The section IS the page's own elements, not a copy of them.
+            page = evaluate_marker("file(\"page.md\")", ctx)
+            elements = collect(getfield(get_file_content(page), :elements)[])
+            section = evaluate_marker("section(file(\"page.md\"), \"Second\")", ctx)
+            @test any(e -> e === collect(getfield(section, :elements)[])[1], elements)
+
+            # A heading nobody wrote, and one written twice, both fail loudly.
+            @test_throws ErrorException evaluate_marker("section(file(\"page.md\"), \"Nope\")", ctx)
+            write(joinpath(d, "twice.md"), "## Same\n\nA.\n\n## Same\n\nB.\n")
+            ctx = _mv_project(d)
+            @test_throws ErrorException evaluate_marker("section(file(\"twice.md\"), \"Same\")", ctx)
+        finally
+            rm(d; recursive=true, force=true)
+        end
+    end
+
+    @testset "a marker written in a line stays in that line" begin
+        d = mktempdir()
+        try
+            write(joinpath(d, "steps.jl"), _MV_SOURCE)
+            text = "The builder is <<definition(file(\"steps.jl\"), \"LIMIT\")>> and it runs.\n"
+            write(joinpath(d, "page.md"), text)
+            page = load_file(d, "page.md")
+
+            # Saving puts it back as it was written — inline, with no fence.
+            saved = print_natural_text(get_file_content(page))
+            @test occursin("The builder is <<definition(file(\"steps.jl\"), \"LIMIT\")>> and it runs.",
+                           saved)
+            @test !occursin("```", saved)
+        finally
+            rm(d; recursive=true, force=true)
+        end
+    end
+
+    @testset "text that only looks like a marker is left alone" begin
+        d = mktempdir()
+        try
+            write(joinpath(d, "page.md"), "A plain <<not a marker>> stays text.\n")
+            page = load_file(d, "page.md")
+            saved = print_natural_text(get_file_content(page))
+            @test occursin("<<not a marker>>", saved)
+        finally
+            rm(d; recursive=true, force=true)
+        end
+    end
+
+    # ── Round-trip: whatever a marker says, saving re-emits it ──────────
+
+    @testset "markdown: a fenced marker round-trips verbatim" begin
+        d = mktempdir()
+        try
+            text = """
+            # Step
+
+            Prose before.
+
+            ```pred-ref
+            <<definition(file("steps.jl"), "packet_queue_step")>>
+            ```
+
+            Prose after.
+            """
+            write(joinpath(d, "page.md"), text)
+            write(joinpath(d, "steps.jl"), _MV_SOURCE)
+            # Alone, the page keeps the marker as a leaf, and saves it as written.
+            page = load_file(d, "page.md")
+            @test save_file!(page, d)
+            saved = read(joinpath(d, "page.md"), String)
+            @test occursin("<<definition(file(\"steps.jl\"), \"packet_queue_step\")>>", saved)
+            @test occursin("Prose after.", saved)
+            # With the source in the set, the page holds the definition itself,
+            # and the save names it the way the walk spells a node of another file.
+            project = load_project(d, ["page.md", "steps.jl"])
+            page, steps = project.files
+            statements = collect(getfield(get_file_content(steps), :statements)[])
+            elements = collect(getfield(get_file_content(page), :elements)[])
+            @test any(e -> e isa JuliaDocstring && any(st -> st === e, statements), elements)
+            @test save_project!(project)
+            saved = read(joinpath(d, "page.md"), String)
+            @test occursin("<<node(file(\"steps.jl\"), \"statements[", saved)
+            @test !occursin("definition(", saved)
+        finally
+            rm(d; recursive=true, force=true)
+        end
+    end
+
+    @testset "json: a marker in a string value round-trips verbatim" begin
+        d = mktempdir()
+        try
+            write(joinpath(d, "steps.jl"), _MV_SOURCE)
+            root = JsonFile("root.json", ProjecturedJSON.JsonModule.JsonObject(
+                "fragment" => ProjecturedJSON.JsonModule.JsonString(
+                    "<<definition(file(\"steps.jl\"), \"LIMIT\")>>")))
+            @test save_file!(root, d)
+            before = read(joinpath(d, "root.json"), String)
+            reloaded = load_file(d, "root.json")
+            @test save_file!(reloaded, d)
+            @test read(joinpath(d, "root.json"), String) == before
+            @test occursin("definition(", before)
+        finally
+            rm(d; recursive=true, force=true)
+        end
+    end
+
+    @testset "a marker's spacing survives a load/save cycle" begin
+        d = mktempdir()
+        try
+            text = "```pred-ref\n<<file( \"other.md\" )>>\n```\n"
+            write(joinpath(d, "page.md"), text)
+            write(joinpath(d, "other.md"), "# Other\n")
+            page = load_file(d, "page.md")
+            save_file!(page, d)
+            # A marker naming a file outside the set is a leaf: the spacing
+            # inside it is the author's, and comes back as written.
+            @test occursin("<<file( \"other.md\" )>>", read(joinpath(d, "page.md"), String))
+        finally
+            rm(d; recursive=true, force=true)
+        end
+    end
+
+end
+end

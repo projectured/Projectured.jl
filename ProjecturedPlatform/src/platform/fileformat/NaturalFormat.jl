@@ -1,0 +1,83 @@
+# Fragment of `FileFormatModule` — the file input and output of a document:
+# `import_document`, `export_document`, and the extension-to-format mapping they
+# both read.
+
+_ext_symbol(ext::AbstractString) = isempty(ext) ? Symbol("") : Symbol(SubString(ext, 2))
+
+# ── Import / export file I/O ─────────────────────────────────────────────────
+
+"""
+    import_document(path) -> Document
+
+Read and parse `path` into a document, choosing the parser by file extension.
+Errors on an extension no domain registered.
+"""
+function import_document(path::AbstractString)
+    ext    = lowercase(splitext(path)[2])
+    text   = read(path, String)
+    format = _ext_symbol(ext)
+    has_natural_parser(format) ? parse_natural_text(format, text) :
+        error("import_document: unsupported extension $(repr(ext)) for $(repr(path))")
+end
+
+"""
+    export_document(document, path) -> path
+
+Write `document`'s natural text (see [`print_natural_text`](@ref)) to `path`. The
+projection is chosen by the document's type, so the content is always correct for
+the document. The guard rejects an extension whose registered parser is not the
+parser of the document's own format, because a later `import_document` would read
+the text with the wrong grammar. An extension with no parser passes, and so does a
+second name of the same format: a YAML document can go to `.yaml` or `.yml`.
+"""
+function export_document(document::Document, path::AbstractString)
+    ext    = lowercase(splitext(path)[2])
+    parser = find_natural_parser(_ext_symbol(ext))
+    format = get_natural_format(typeof(document))
+    (parser === nothing || (format !== nothing && parser === find_natural_parser(format))) ||
+        error("export_document: $(typeof(document)) exports as $(get_natural_extension(document)), not $ext")
+    write(path, print_natural_text(document))
+    path
+end
+
+export_document(document::ReferencedDocument, path::AbstractString) =
+    export_document(get_document(document), path)
+
+# ── Editor operations ──────────────────────────────────────────────────────
+
+"""
+    ExportDocumentOperation(path)
+
+Write `editor.document`'s natural text to `path` (see [`export_document`](@ref)).
+A pure side effect; the document is not mutated.
+"""
+struct ExportDocumentOperation <: Operation
+    path::String
+end
+
+ExportDocumentOperation(path::AbstractString) = ExportDocumentOperation(String(path))
+
+# The file on disk changes, the document does not, so the way back is to do
+# nothing. A history steps over it rather than stopping at it.
+make_inverse_operation(document, ::ExportDocumentOperation) = DoNothingOperation()
+
+evaluate_operation(editor, op::ExportDocumentOperation) =
+    export_document(editor.document, op.path)
+
+"""
+    ImportDocumentOperation(path)
+
+Replace `editor.document` with the document parsed from `path` (see
+[`import_document`](@ref)). A whole-root swap: rebind `editor.document` and drop
+the cached `editor.iomap` so the next print rebuilds on the new root.
+"""
+struct ImportDocumentOperation <: Operation
+    path::String
+end
+
+ImportDocumentOperation(path::AbstractString) = ImportDocumentOperation(String(path))
+
+function evaluate_operation(editor, op::ImportDocumentOperation)
+    editor.document = import_document(op.path)
+    editor.iomap = nothing
+end

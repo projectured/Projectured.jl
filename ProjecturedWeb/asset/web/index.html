@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ProjecturEd — Web</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000;
+                 font-family: system-ui, sans-serif; color: #ddd; }
+    /* The page canvas IS the main window's paint surface (no popup, no Launch). */
+    #main { display: block; width: 100vw; height: 100vh; }
+    /* Connection-state overlay; hidden once the main window has painted. */
+    #overlay { position: fixed; inset: 0; display: flex; align-items: center;
+               justify-content: center; text-align: center; padding: 1rem;
+               background: #1b1b1b; color: #999; font-size: 0.95rem; }
+  </style>
+</head>
+<body>
+  <canvas id="main"></canvas>
+  <div id="overlay">Loading…</div>
+  <script src="/client.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+name = "ProjecturedChartExample"
+uuid = "0e53a0c9-3d54-4ef6-8a21-e550a94ca62b"
+version = "0.1.0"
+authors = []
+
+[deps]
+ProjecturedChart = "015a7010-be44-4818-8ca4-bb4593b6d5fe"
+ProjecturedConsole = "d7d6c9a1-04d6-4ada-9cc1-b2de81f79968"
+ProjecturedKernel = "a3e3499a-684d-4df9-a0d6-de2d1797b1f3"
+ProjecturedKernelExample = "b2967ee9-386e-4698-a92b-2bf5f698f2fd"
+ProjecturedPDF = "18e37c66-e2b2-4424-ab73-223891693292"
+ProjecturedPlatform = "b21cb890-5227-4e91-ae0e-8ab4d844f9f7"
+ProjecturedPlatformExample = "5049da3f-9201-47d6-95d8-24bb99c7096c"
+
+[compat]
+ProjecturedChart = "0.1.0"
+ProjecturedConsole = "0.1.0"
+ProjecturedKernel = "0.1.0"
+ProjecturedKernelExample = "0.1.0"
+ProjecturedPDF = "0.1.0"
+ProjecturedPlatform = "0.1.0"
+ProjecturedPlatformExample = "0.1.0"
+julia = "1.12"

@@ -1,0 +1,408 @@
+module ProjecturedExample
+
+using ProjecturedAll
+using Profile
+# The harness core (the `Example` struct + the seam-based image/video entry
+# points) lives at the bottom of the example-package DAG; the name-lookup
+# variants defined here add methods to the imported functions.
+using ProjecturedKernelExample
+using ProjecturedPlatformExample
+using ProjecturedJSONExample
+using ProjecturedYAMLExample
+using ProjecturedXMLExample
+using ProjecturedMarkdownExample
+using ProjecturedRSTExample
+using ProjecturedBookExample
+using ProjecturedMathExample
+using ProjecturedJuliaExample
+using ProjecturedSQLExample
+using ProjecturedDatabaseExample
+using ProjecturedGraphExample
+using ProjecturedChartExample
+using ProjecturedSequenceChartExample
+using ProjecturedDBCatalogExample
+using ProjecturedFormulaExample
+using ProjecturedFSMExample
+using ProjecturedProcessExample
+using ProjecturedConversationExample
+import ProjecturedKernelExample: Example, AtomicDocument, write_example_image,
+                                 record_example_video, make_typein_gestures
+import ProjecturedPlatformExample: print_example, write_example_pdf
+
+# Re-export the lower example packages' entire public API so
+# `using ProjecturedExample` keeps providing every example and factory
+# unchanged — the per-name `import` form also lets this module add the
+# name-lookup method variants below.
+for _src in (ProjecturedKernelExample, ProjecturedPlatformExample,
+             ProjecturedJSONExample, ProjecturedYAMLExample, ProjecturedXMLExample, ProjecturedMarkdownExample, ProjecturedRSTExample, ProjecturedBookExample,
+             ProjecturedMathExample, ProjecturedJuliaExample, ProjecturedSQLExample, ProjecturedDatabaseExample, ProjecturedPlatformExample, ProjecturedGraphExample, ProjecturedChartExample,
+             ProjecturedSequenceChartExample, ProjecturedDBCatalogExample, ProjecturedFormulaExample, ProjecturedFSMExample, ProjecturedProcessExample, ProjecturedConversationExample)
+    _srcname = nameof(_src)
+    for _n in names(_src)
+        _n === _srcname && continue
+        Core.eval(@__MODULE__, Expr(:import, Expr(:(:), Expr(:., _srcname), Expr(:., _n))))
+        Core.eval(@__MODULE__, Expr(:export, _n))
+    end
+end
+# Loaded so the assistant example can talk to a real model: each package defines
+# a backend and registers it on the kernel's factory seam, which is what makes
+# `make_llm(:anthropic)` and `make_llm(:ollama)` resolve. The assistant *example
+# documents* pass an explicit `FakeLlm` for offline use.
+using ProjecturedAnthropic
+using ProjecturedOllama
+
+# The opt-in examples that need a live database (ODBC) or the native graph-layout
+# engine (ProjecturedAdaptagrams C++ shim) live in the separate opt-in example
+# packages (`ProjecturedODBCExample`, `ProjecturedAdaptagramsExample`,
+# `ProjecturedTulipExample`), so this package depends on none of them — it
+# precompiles with no native build and no database driver.
+
+# The bodies live in `example/projectured`, not beside this file:
+# a package is a name and an include list.
+const _EXAMPLE_DIR = normpath(joinpath(@__DIR__, "../example/projectured"))
+
+# The cross-domain compositions: a document that mixes two domains, the
+# render-anything example, the engine-feature demonstrations over a domain
+# fixture (clipboard, dragging, focusing, versioning), and the pane and table
+# layouts. A per-domain example package holds only its own domain.
+include(joinpath(_EXAMPLE_DIR, "ClipboardDocumentExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "DraggingDocumentExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "FocusingDocumentExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "NaturalDocumentExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "PaneDocumentExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "TableDocumentExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "VersioningDocumentExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "UndoDocumentExample.jl"))
+
+include(joinpath(_EXAMPLE_DIR, "ClipboardProjectionExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "DraggingProjectionExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "FocusingProjectionExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "NaturalProjectionExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "PaneProjectionExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "VersioningProjectionExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "UndoProjectionExample.jl"))
+
+# The gallery's own wrapper documents and projections (scrolling, shell,
+# introspection, the command palette decorator, …): generic, cross-domain, and
+# used by nothing below the umbrella.
+include(joinpath(_EXAMPLE_DIR, "GalleryWrapperDocumentExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "GalleryWrapperProjectionExample.jl"))
+
+# The concrete-domain `Example` instances. They name factories from all twenty
+# example packages, so they belong here rather than in any one of them.
+include(joinpath(_EXAMPLE_DIR, "DomainExamples.jl"))
+# The global interleaved registry, then the generated atomic catalog.
+include(joinpath(_EXAMPLE_DIR, "ProjecturedExamples.jl"))
+include(joinpath(_EXAMPLE_DIR, "Catalog.jl"))
+# The gallery (`run_example` and its wrappers) and the file-editor harness:
+# both compose several domains, so they live at the umbrella.
+include(joinpath(_EXAMPLE_DIR, "Gallery.jl"))
+include(joinpath(_EXAMPLE_DIR, "FeedExamples.jl"))
+include(joinpath(_EXAMPLE_DIR, "FileEditor.jl"))
+include(joinpath(_EXAMPLE_DIR, "ValueViewer.jl"))
+include(joinpath(_EXAMPLE_DIR, "SearchScaleCorpus.jl"))
+include(joinpath(_EXAMPLE_DIR, "SearchGuideCorpus.jl"))
+export run_value_viewer, make_value_viewer, make_value_viewer_feeds
+# LiveExamples moved to the opt-in ProjecturedSDLExample package (they play in a
+# real SDL window / record via ProjecturedVideo).
+# The workload body comes last, so it can reach everything above it. The
+# recording machinery beside it reaches nothing here — what to drive and which
+# list to replay belong to the leaf being built.
+include(joinpath(_EXAMPLE_DIR, "Precompile.jl"))
+include(joinpath(_EXAMPLE_DIR, "PrecompileRecording.jl"))
+
+export EditorDomain, EditorIntrospection, JsonXmlToSyntax, assistant_example, book_example
+export build_file_editor, clipboard_example, conversation_editor_example
+export conversation_widget_example, domain_for_path, dragging_example, editor_domain
+export filesystem_example, filesystem_widget_example, focusing_example, formula_example
+export chart_example, chart_line_example, chart_bar_example,
+       chart_histogram_example, chart_scatter_example, chart_strip_example,
+       chart_inspector_example
+export sequencechart_example, sequencechart_vertical_example,
+       sequencechart_linear_example, sequencechart_large_example,
+       sequencechart_inspector_example, sequencechart_pair_example
+export fsm_example, fsm_toggle_example, fsm_diagram_example
+export process_example, process_drain_example, process_diagram_example
+export make_fsm_document_example, make_fsm_projection_example,
+       make_fsm_tcp_document_example, make_fsm_toggle_document_example,
+       make_fsm_variable_document_example, make_fsm_timer_document_example,
+       make_fsm_event_document_example, make_fsm_state_document_example,
+       make_fsm_transition_document_example, make_fsm_insertion_document_example,
+       make_fsm_diagram_document_example, make_fsm_diagram_projection_example
+export make_fsm_machine_document_example, make_fsm_component_document_example
+export make_process_document_example, make_process_projection_example,
+       make_process_transmit_document_example, make_process_drain_document_example,
+       make_process_model_document_example, make_process_sequence_document_example,
+       make_process_step_document_example, make_process_decision_document_example,
+       make_process_while_document_example, make_process_foreach_document_example,
+       make_process_return_document_example, make_process_insertion_document_example,
+       make_process_diagram_document_example, make_process_diagram_projection_example,
+       make_process_break_document_example, make_process_continue_document_example,
+       make_process_terminal_document_example, make_process_edge_label_document_example
+export graph_example, graphics_image_example, json_example, json_insertion_example
+export json_sorted_example, julia_example
+export make_assistant_document_example, make_assistant_projection_example
+export make_book_document_example, make_book_projection_example, make_clipboard_document
+export make_clipboard_document_example, make_clipboard_projection
+export make_clipboard_projection_example, make_conversation_document_example
+export make_conversation_editor_document_example, make_conversation_editor_projection_example
+export make_conversation_widget_projection_example
+export make_conversation_conversation_document_example, make_conversation_draft_document_example
+export make_conversation_part_document_example, make_conversation_turn_document_example
+export make_database_instance_document_example, make_dragging_document_example
+export make_db_catalog_column_document_example, make_db_catalog_table_document_example
+export make_db_catalog_schema_document_example, make_db_catalog_database_document_example
+export make_db_catalog_rdbms_document_example
+export make_dragging_projection_example, make_filesystem_document_example
+export make_filesystem_projection_example, make_filesystem_widget_projection_example
+export make_focusing_document_example, make_focusing_projection_example
+export make_formula_document_example, make_formula_projection_example
+export make_formula_environment_document_example, make_formula_formula_document_example
+export make_formula_insertion_document_example, make_formula_reference_document_example
+export make_chart_document_example, make_chart_projection_example,
+       make_chart_pipeline_example,
+       make_chart_line_document_example, make_chart_line_projection_example,
+       make_chart_bar_document_example, make_chart_bar_projection_example,
+       make_chart_histogram_document_example, make_chart_histogram_projection_example,
+       make_chart_scatter_document_example, make_chart_scatter_projection_example,
+       make_chart_strip_document_example, make_chart_strip_projection_example,
+       make_chart_inspector_document_example, make_chart_inspector_projection_example
+export make_chart_plot_document_example
+export make_sequencechart_document_example, make_sequencechart_projection_example,
+       make_sequencechart_pipeline_example,
+       make_sequencechart_vertical_document_example, make_sequencechart_vertical_projection_example,
+       make_sequencechart_linear_document_example, make_sequencechart_linear_projection_example,
+       make_sequencechart_large_document_example, make_sequencechart_large_projection_example,
+       make_sequencechart_inspector_document_example, make_sequencechart_inspector_projection_example,
+       make_sequencechart_pair_document_example, make_sequencechart_pair_projection_example,
+       make_sequencechart_composite_projection_example
+export make_sequence_chart_plot_document_example
+export make_graph_document_example, make_graph_projection_example, make_graphics_caching
+export make_graph_graph_document_example, make_graph_layout_document_example
+export make_introspection_document
+export make_introspection_projection, make_json_console_projection_example
+export make_json_document_example, make_json_insertion_document_example
+export make_json_null_document_example, make_json_null_projection_example
+export make_json_projection_example, make_json_sorted_projection_example
+export make_json_string_document_example, make_json_string_projection_example
+export make_julia_document_example, make_julia_projection_example
+export make_julia_abstract_type_document_example
+export make_julia_anonymous_type_annotation_document_example
+export make_julia_broadcast_document_example, make_julia_comprehension_document_example
+export make_julia_const_document_example, make_julia_curly_document_example
+export make_julia_do_document_example, make_julia_docstring_document_example
+export make_julia_empty_document_example, make_julia_function_declaration_document_example
+export make_julia_interpolation_document_example, make_julia_let_document_example
+export make_julia_macro_call_document_example, make_julia_module_def_document_example
+export make_julia_named_tuple_document_example, make_julia_splat_document_example
+export make_julia_string_chunk_document_example
+export make_julia_string_interpolation_document_example
+export make_julia_struct_document_example, make_julia_subtype_document_example
+export make_julia_where_document_example, make_julia_where_parameters_document_example
+export make_markdown_document_example, make_markdown_projection_example
+export make_rst_projection_example, make_rst_rendered_projection_example
+export rst_example, rst_rendered_example
+export make_rst_text_document_example, make_rst_literal_document_example, make_rst_transition_document_example
+export make_rst_comment_document_example, make_rst_target_document_example, make_rst_insertion_document_example
+export make_rst_math_block_document_example, make_rst_role_document_example, make_rst_reference_document_example
+export make_rst_substitution_reference_document_example, make_rst_footnote_reference_document_example, make_rst_emphasis_document_example
+export make_rst_strong_document_example, make_rst_paragraph_document_example, make_rst_literal_block_document_example
+export make_rst_line_block_document_example, make_rst_list_item_document_example, make_rst_bullet_list_document_example
+export make_rst_enumerated_list_document_example, make_rst_definition_item_document_example, make_rst_definition_list_document_example
+export make_rst_field_document_example, make_rst_field_list_document_example, make_rst_block_quote_document_example
+export make_rst_footnote_document_example, make_rst_substitution_definition_document_example, make_rst_table_cell_document_example
+export make_rst_table_row_document_example, make_rst_grid_table_document_example, make_rst_directive_option_document_example
+export make_rst_literal_include_document_example, make_rst_figure_document_example, make_rst_code_block_document_example
+export make_rst_image_document_example, make_rst_video_document_example, make_rst_audio_document_example
+export make_rst_admonition_document_example, make_rst_toctree_document_example, make_rst_raw_block_document_example
+export make_rst_role_definition_document_example, make_rst_directive_document_example, make_rst_section_document_example
+export make_rst_root_document_example, make_rst_document_example
+export make_markdown_rendered_projection_example, make_math_document_example
+export make_math_projection_example, make_math_table_document_example
+export make_math_display_document_example, make_math_display_projection_example
+export make_math_symbol_document_example, make_math_text_document_example
+export make_math_space_document_example, make_math_row_document_example
+export make_math_unary_operation_document_example, make_math_fraction_document_example
+export make_math_script_document_example, make_math_radical_document_example
+export make_math_big_operator_document_example, make_math_differential_document_example
+export make_math_derivative_document_example, make_math_function_document_example
+export make_math_accent_document_example, make_math_matrix_document_example
+export make_math_case_document_example, make_math_cases_document_example
+export make_math_shannon_document_example, make_math_friis_document_example
+export make_math_queue_document_example, make_math_erlang_document_example
+export make_math_delay_document_example, make_math_error_rate_document_example
+export make_math_reliability_document_example, make_math_noise_document_example
+export make_math_regime_document_example
+export make_math_table_projection_example, make_mixed_document_example
+export make_mixed_projection_example, make_natural_document_example
+export make_natural_projection_example, make_navigator_document_example
+export make_navigator_projection_example
+export make_pane_json_document_example, make_pane_json_projection_example
+export make_widget_tabs_document_example, make_widget_tabs_projection_example
+export make_widget_split_document_example, make_widget_split_projection_example
+export make_widget_split_tabs_document_example, make_widget_split_tabs_projection_example
+export make_scrolling_document, make_scrolling_projection
+export make_dragging_document, make_dragging_projection
+export make_shell_document, make_shell_projection, make_command_palette_decorator_projection
+export make_workspace_document_example, make_workspace_folder_document_example
+export make_sql_document_example, make_sql_insert_document_example
+export make_sql_insert_syntax_projection_example, make_sql_nested_document_example
+export make_sql_nested_syntax_projection_example, make_sql_syntax_projection_example
+export make_sql_update_document_example, make_sql_update_syntax_projection_example
+export make_sql_column_reference_document_example, make_sql_table_expression_document_example
+export make_table_document_example, make_table_projection_example
+export make_text_configuring_projection, make_versioning_document_example
+export make_versioning_projection_example
+export make_xml_document_example
+export make_xml_projection_example, make_yaml_document_example, make_yaml_projection_example
+export markdown_example, markdown_rendered_example, math_example, math_display_example, math_table_example
+export mixed_example, natural_example, navigator_example, pane_json_example
+export widget_tabs_example, widget_split_example, widget_split_tabs_example
+export record_assistant_conversation_video
+export run_console_example, run_example, run_file_editor, sql_insert_syntax_example
+export sql_nested_syntax_example, sql_syntax_example, sql_update_syntax_example, table_example
+export versioning_example, warm_file_editor, xml_example, yaml_example
+export Example, AtomicDocument, domain_examples, domain_atomic_documents
+export precompile_atoms, precompile_atom_parsers
+export precompile_workload
+export record_precompile_statements, trace_precompile_statements, replay_precompile_statements,
+       clean_precompile_trace, write_precompile_statements,
+       bind_loaded_modules!, PRECOMPILE_STALE_RATIO
+export EDITOR_DOMAINS, EXTENSION_DOMAINS
+export FakeLlm, ScriptedLlm,
+       make_scripted_turn, make_scripted_think, make_scripted_say, make_scripted_run
+
+export catalog, atomic_documents
+export BRIDGES, paths, path_sequences, projection_to, runnable, catalog_domain
+export EditorDomain, EDITOR_DOMAINS, editor_domain, build_file_editor, run_file_editor, warm_file_editor
+export EXTENSION_DOMAINS, domain_for_path
+export make_json_document_example, make_json_projection_example
+export make_json_sorted_projection_example
+export make_json_null_document_example, make_json_null_projection_example
+export make_json_insertion_document_example
+export make_json_string_document_example, make_json_string_projection_example
+export make_yaml_document_example, make_yaml_projection_example
+export make_xml_document_example, make_xml_projection_example
+export make_mixed_document_example, make_mixed_projection_example
+export make_natural_document_example, make_natural_projection_example
+export make_syntax_document_example, make_syntax_projection_example
+export make_text_document_example, make_text_projection_example, make_text_with_image_example
+export make_plain_text_document_example, make_plain_text_projection_example
+export make_object_document_example, make_object_projection_example
+export make_object_to_widget_document_example, make_object_to_widget_projection_example
+export make_nested_object_to_widget_document_example
+export make_line_numbering_document_example, make_line_numbering_projection_example
+export make_text_to_string_document_example, make_text_to_string_projection_example
+export make_word_wrapping_document_example, make_word_wrapping_projection_example
+export make_text_filtering_document_example, make_text_filtering_projection_example
+export make_text_highlighting_document_example, make_text_highlighting_projection_example
+export make_widget_document_example, make_widget_projection_example
+export make_widget_text_projection_example
+export make_widget_label_document_example, make_widget_text_document_example
+export make_widget_checkbox_document_example, make_widget_button_document_example
+export make_widget_tooltip_document_example, make_widget_menu_item_document_example
+export make_widget_menu_document_example, make_widget_toolbar_document_example
+export make_widget_toolbar_item_document_example
+export make_widget_composite_document_example, make_widget_title_pane_document_example
+export make_widget_split_pane_document_example, make_widget_scroll_bar_document_example
+export make_widget_scroll_pane_document_example, make_widget_transform_pane_document_example, make_widget_shell_document_example
+export make_widget_tabbed_pane_document_example
+export make_widget_badge_document_example, make_widget_separator_document_example
+export make_widget_card_document_example, make_widget_switch_document_example
+export make_widget_progress_document_example, make_widget_slider_document_example
+export make_widget_radio_group_document_example, make_widget_avatar_document_example
+export make_widget_alert_document_example, make_widget_skeleton_document_example,
+       make_widget_swatch_document_example
+export make_widget_toggle_document_example, make_widget_toggle_group_document_example
+export make_widget_select_document_example, make_widget_textarea_document_example
+export make_widget_accordion_document_example, make_widget_table_document_example
+export make_widget_table_offered_document_example, make_widget_table_frozen_document_example
+export make_widget_tree_document_example
+export make_widget_popup_document_example, make_widget_popup_projection_example
+export make_layout_document_example, make_layout_projection_example
+export make_constraint_layout_document_example, make_constraint_layout_projection_example
+export make_book_document_example, make_book_projection_example
+export make_markdown_document_example, make_markdown_projection_example, make_markdown_rendered_projection_example
+export make_filesystem_document_example, make_filesystem_projection_example, make_filesystem_widget_projection_example
+export make_navigator_document_example, make_navigator_projection_example
+export make_collection_document_example, make_collection_projection_example
+export make_reversing_projection_example
+export make_filtering_projection_example
+export make_searching_projection_example
+export make_sorting_projection_example
+export make_focusing_document_example, make_focusing_projection_example
+export make_assistant_document_example, make_assistant_projection_example
+export make_table_document_example, make_table_projection_example
+export make_graph_document_example, make_graph_projection_example
+export make_math_table_document_example, make_math_table_projection_example
+export make_lazy_document_example, make_lazy_projection_example
+export make_lazy_bidirectional_document_example, make_lazy_bidirectional_projection_example
+export make_math_document_example, make_math_projection_example
+export make_julia_document_example, make_julia_projection_example
+export make_formula_document_example, make_formula_projection_example
+export make_primitive_string_document_example, make_primitive_string_projection_example
+export make_database_instance_document_example
+export make_sql_document_example, make_sql_syntax_projection_example
+export make_sql_nested_document_example, make_sql_nested_syntax_projection_example
+
+export make_graphics_caching
+export make_scrolling_document, make_scrolling_projection
+export make_introspection_document, make_introspection_projection, EditorIntrospection
+export make_dragging_document, make_dragging_projection
+export make_shell_document, make_shell_projection, make_command_palette_decorator_projection
+export make_text_configuring_projection
+export Example, examples, run_example, make_example_editor, run_assistant_example, run_console_example, print_example, write_example_image, write_example_pdf, record_example_video, make_typein_gestures
+export run_message_log_feed_example, run_frame_statistics_feed_example,
+       make_message_log_feed_projection_example, make_frame_statistics_feed_projection_example
+export make_json_console_projection_example
+export record_assistant_conversation_video
+export json_typein_live, json_select_and_edit_live, json_insert_live, json_build_live, json_build_example
+export generate_example_screenshots, update_guide_screenshots
+export json_example, json_sorted_example, json_insertion_example
+export yaml_example
+export xml_example, mixed_example, natural_example, syntax_example, text_example, plain_text_example, text_with_image_example
+export object_example, object_to_widget_example, nested_object_to_widget_example, line_numbering_example, word_wrapping_example, text_filtering_example, text_highlighting_example
+export widget_example, widget_tabbed_pane_example, widget_text_example
+export pane_example, empty_pane_example, pane_json_example, widget_tabs_example, widget_split_example, widget_split_tabs_example
+export widget_label_example, widget_checkbox_example, widget_button_example
+export widget_button_action_example, widget_button_image_example
+export widget_tooltip_example, widget_menu_item_example, widget_menu_example
+export widget_toolbar_example, widget_toolbar_item_example, widget_composite_example, widget_title_pane_example
+export widget_split_pane_example, widget_scroll_bar_example, widget_scroll_pane_example
+export widget_transform_pane_example
+export widget_shell_example
+export widget_badge_example, widget_separator_example, widget_card_example, widget_switch_example
+export widget_progress_example, widget_slider_example, widget_radio_group_example
+export widget_avatar_example, widget_alert_example, widget_skeleton_example, widget_swatch_example
+export widget_toggle_example, widget_toggle_group_example, widget_select_example
+export widget_textarea_example, widget_accordion_example, widget_table_example, widget_tree_example
+export widget_table_offered_example, widget_table_frozen_example
+export widget_disabled_example, widget_focus_example
+export layout_example, constraint_layout_example, book_example, markdown_example, markdown_rendered_example, filesystem_example, navigator_example
+export collection_example, reversing_example, filtering_example, searching_example, sorting_example, focusing_example, table_example, math_table_example, graph_example
+export lazy_example, lazy_bidirectional_example
+export math_example
+export julia_example
+export graphics_image_example
+export rotating_vector_example
+export make_rotating_vector_document
+export assistant_example
+export conversation_widget_example
+export conversation_editor_example
+export sql_syntax_example
+export sql_insert_syntax_example
+export sql_update_syntax_example
+export sql_nested_syntax_example
+export make_clipboard_document_example, make_clipboard_projection_example
+export clipboard_example
+export make_versioning_document_example, make_versioning_projection_example
+export versioning_example
+export make_undo_document_example, make_undo_projection_example
+export make_undo_history_document_example, make_undo_history_projection_example
+export undo_example, undo_history_example
+export SCALE_SEARCH_MODULE_NAMES, SCALE_SEARCH_QUESTIONS, get_scale_search_modules,
+       measure_projectured_search_scale!, GUIDE_SEARCH_QUESTIONS
+export make_dragging_document_example, make_dragging_projection_example
+export dragging_example
+
+end

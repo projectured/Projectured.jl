@@ -1,0 +1,57 @@
+# Fragment of `ProjectionAlgebraModule`.
+#
+# A higher-order projection that passes itself as the recursion argument
+# when calling its child. This lets node projections call back into the full
+# pipeline for each child subtree without hard-coding any specific inner
+# step, enabling self-referential tree traversal.
+"""
+    RecursiveProjection(child)
+
+A compound projection that wraps a child projection and passes itself
+as the `recursion` argument when calling `print_document` on the child.
+This enables the child projection (and any projections it delegates to)
+to call `print_child(recursion, sub_input)` to recurse
+back through this same wrapper.
+
+# Example
+
+    rp = RecursiveProjection(
+        TypeDispatchingProjection(
+            JsonNull   => JsonNullToSyntaxLeaf(),
+            JsonArray  => JsonArrayToSyntaxNode(),  # calls recursion for elements
+            ...
+        )
+    )
+    result = print_document(rp, json_doc)
+"""
+struct RecursiveProjection <: Projection
+    child::Any
+end
+
+function print_document(rp::RecursiveProjection, recursion, input, ctx)
+    print_document(rp.child, rp, input, ctx)
+end
+
+# Pure: pass self as recursion so the child's pure recursion re-enters this
+# wrapper (symmetric with the reactive printer above).
+print_document_pure(rp::RecursiveProjection, recursion, input, ctx) =
+    print_document_pure(rp.child, rp, input, ctx)
+
+# RecursiveProjection is a transparent wrapper — it returns the inner
+# projection's IoMap directly, so input/output fields are already correct.
+
+# Pass self as the recursion so a node reader inside the child re-enters this
+# wrapper (symmetric with the printer, which passes `rp` as recursion too).
+read_intent(rp::RecursiveProjection, recursion, change::Intent, iomap) =
+    read_intent(rp.child, rp, change, iomap)
+
+read_intent(rp::RecursiveProjection, iomap, payload) =
+    read_intent(rp, nothing, Intent(payload), iomap).operation
+
+# It prints through its child and answers the child's IoMap, so a reference maps
+# forward and back through the child.
+map_reference_forward(rp::RecursiveProjection, iomap, reference) =
+    map_reference_forward(rp.child, iomap, reference)
+
+map_reference_backward(rp::RecursiveProjection, iomap, reference) =
+    map_reference_backward(rp.child, iomap, reference)

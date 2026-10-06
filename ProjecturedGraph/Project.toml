@@ -1,0 +1,19 @@
+name = "ProjecturedGraph"
+uuid = "cfb0314b-b1fd-4c94-91d2-2de69579dcb1"
+version = "0.1.0"
+authors = []
+
+[deps]
+ProjecturedKernel = "a3e3499a-684d-4df9-a0d6-de2d1797b1f3"
+ProjecturedPlatform = "b21cb890-5227-4e91-ae0e-8ab4d844f9f7"
+
+[compat]
+ProjecturedKernel = "0.1.0"
+ProjecturedPlatform = "0.1.0"
+julia = "1.12"
+
+[auto-integration]
+default = "auto"
+
+    [auto-integration.triggers]
+    Projectured = "92922de3-b970-4d9a-8b2a-9d6f361397b5"
