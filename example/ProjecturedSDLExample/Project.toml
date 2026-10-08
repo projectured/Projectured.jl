@@ -1,6 +1,6 @@
 name = "ProjecturedSDLExample"
 uuid = "b2505c89-7501-4d9a-b956-db36ec6d1cb4"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -16,14 +16,14 @@ ProjecturedSDL = "f0002b97-94ba-416c-b93c-86cdc095626f"
 ProjecturedVideo = "8d225f56-7fda-4c1e-a58b-db6d64f8335c"
 
 [compat]
-ProjecturedConsole = "0.1.0"
-ProjecturedJSON = "0.1.0"
-ProjecturedJSONExample = "0.1.0"
-ProjecturedKernel = "0.1.0"
-ProjecturedKernelExample = "0.1.0"
-ProjecturedPDF = "0.1.0"
-ProjecturedPlatform = "0.1.0"
-ProjecturedPlatformExample = "0.1.0"
-ProjecturedSDL = "0.1.0"
-ProjecturedVideo = "0.1.0"
+ProjecturedConsole = "0.1.1"
+ProjecturedJSON = "0.1.1"
+ProjecturedJSONExample = "0.1.1"
+ProjecturedKernel = "0.1.1"
+ProjecturedKernelExample = "0.1.1"
+ProjecturedPDF = "0.1.1"
+ProjecturedPlatform = "0.2.0"
+ProjecturedPlatformExample = "0.1.1"
+ProjecturedSDL = "0.1.1"
+ProjecturedVideo = "0.1.1"
 julia = "1.12"

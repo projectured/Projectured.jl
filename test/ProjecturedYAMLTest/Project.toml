@@ -1,6 +1,6 @@
 name = "ProjecturedYAMLTest"
 uuid = "c50c731e-0b3d-49a3-9d62-8794fc19745c"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -17,14 +17,14 @@ ProjecturedYAMLExample = "fed55f08-0afa-4f03-a954-955ab0bee64d"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
-ProjecturedConsole = "0.1.0"
-ProjecturedKernel = "0.1.0"
-ProjecturedKernelExample = "0.1.0"
-ProjecturedKernelTest = "0.1.0"
-ProjecturedPDF = "0.1.0"
-ProjecturedPlatform = "0.1.0"
-ProjecturedPlatformExample = "0.1.0"
-ProjecturedPlatformTest = "0.1.0"
-ProjecturedYAML = "0.1.0"
-ProjecturedYAMLExample = "0.1.0"
+ProjecturedConsole = "0.1.1"
+ProjecturedKernel = "0.1.1"
+ProjecturedKernelExample = "0.1.1"
+ProjecturedKernelTest = "0.1.1"
+ProjecturedPDF = "0.1.1"
+ProjecturedPlatform = "0.2.0"
+ProjecturedPlatformExample = "0.1.1"
+ProjecturedPlatformTest = "0.1.1"
+ProjecturedYAML = "0.1.1"
+ProjecturedYAMLExample = "0.1.1"
 julia = "1.12"

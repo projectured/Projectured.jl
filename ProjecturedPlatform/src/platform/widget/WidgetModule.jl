@@ -9,6 +9,7 @@ carries reactive Cell fields for all mutable properties.
 module WidgetModule
 
 using ..CellModule
+using ..ClockModule
 using ..CollectionModule
 using ..DocumentModule
 using ..EditorModule
@@ -60,7 +61,7 @@ export Inset, Point2D, WidgetDocument, WidgetToolButton, WidgetMessageBox, Widge
        inset_width, inset_height, inset_top_left, inset_top_right, inset_bottom_left,
        inset_bottom_right, set_cell_computation!, make_pager_widget, make_filter_bar_widget, make_column_chooser_widget,
        make_widget_list_selection, get_widget_list_selected,
-       make_widget_table_row_selection, get_widget_table_selected_row,
+       make_widget_table_row_selection, get_widget_table_selected_row, get_widget_table_column_count, get_widget_table_row_count,
        resolve_toggle_group_write, resolve_slider_write
 export WidgetInsertionToGraphicsCanvas, WidgetLabelToGraphicsCanvas, WidgetTextToGraphicsCanvas,
        WidgetCheckboxToGraphicsCanvas, WidgetButtonToGraphicsCanvas,
@@ -88,7 +89,7 @@ export ObjectToWidget, ObjectToWidgetIoMap
 export ObjectFieldToWidget, ObjectFieldToWidgetIoMap
 export CellTableToWidgetTable
 export WidgetTableListIoMap, make_widget_table_row
-export compute_scroll_bar_value, compute_scroll_bar_top_row
+export compute_scroll_bar_value, compute_scroll_bar_top_row, read_scroll_bar_drag, make_owned_scroll_bar_drag
 export make_embed_card, make_embed_card_path, find_embed_card_path_inside
 export ProjectionConfiguringProjection, ProjectionConfiguringIoMap
 export OpenContextMenuOperation, EditMenuPartOperation, make_context_menu_operation, make_context_menu_binding
@@ -97,7 +98,7 @@ export ContextMenuWindowProjection, ContextMenuWindowIoMap,
        wrap_context_menu_window
 export make_value_document, make_graphics_projection, collect_graphics_projection_types,
        refresh_document!
-export WidgetInsertion, WidgetLabel, WidgetText, WidgetCheckbox, WidgetButton, WidgetTooltip, WidgetContextMenu, WidgetDialog, WidgetMenu, WidgetMenuItem, WidgetToolbarItem, WidgetComposite, WidgetShell, WidgetTitlePane, WidgetSplitPane, WidgetTabbedPane, WidgetTabPage, WidgetTabLabel, WidgetHighlight, WidgetScrollPane, WidgetTransformPane, WidgetToolbar, WidgetStatusBar, WidgetScrollBar, WidgetBadge, WidgetSeparator, WidgetCard, WidgetSwitch, WidgetProgress, WidgetSlider, WidgetRadioGroup, WidgetAvatar, WidgetAlert, WidgetSkeleton, WidgetSwatch, WidgetToggle, WidgetToggleGroup, WidgetSelect, WidgetOption, WidgetTextarea, WidgetAccordion, WidgetSpinBox, WidgetList, WidgetTable, WidgetTableColumns, WidgetTableColumn, WidgetTree, Action, compute_code_pieces
+export WidgetInsertion, WidgetLabel, WidgetText, WidgetCheckbox, WidgetButton, WidgetTooltip, WidgetContextMenu, WidgetDialog, WidgetMenu, WidgetMenuItem, WidgetToolbarItem, WidgetComposite, WidgetShell, WidgetTitlePane, WidgetSplitPane, WidgetTabbedPane, WidgetTabPage, WidgetTabLabel, WidgetHighlight, WidgetScrollPane, WidgetTransformPane, WidgetToolbar, WidgetStatusBar, WidgetScrollBar, WidgetBadge, WidgetSeparator, WidgetCard, WidgetSwitch, WidgetProgressBar, WidgetProgressRing, WidgetSlider, WidgetRadioGroup, WidgetAvatar, WidgetAlert, WidgetSkeleton, WidgetSwatch, WidgetToggle, WidgetToggleGroup, WidgetSelect, WidgetOption, WidgetTextarea, WidgetAccordion, WidgetSpinBox, WidgetList, WidgetTable, WidgetTableRows, WidgetTableRow, WidgetTableColumns, WidgetTableColumn, WidgetTree, Action, compute_code_pieces
 export WidgetStyle, WidgetCheckboxStyle, WidgetDialogStyle, WidgetTitlePaneStyle, WidgetSplitPaneStyle,
        WidgetTabbedPaneStyle, WidgetScrollBarStyle, WidgetBadgeStyle, WidgetSeparatorStyle, WidgetCardStyle,
        WidgetAlertStyle, WidgetHighlightStyle, WidgetSwitchStyle, WidgetProgressStyle, WidgetSliderStyle,
@@ -112,6 +113,7 @@ include("WidgetTheme.jl")
 include("WidgetToGraphics.jl")
 include("FaultToWidget.jl")
 include("WidgetTableParts.jl")
+include("WidgetTableHeaderLevels.jl")
 include("WidgetEmbedCard.jl")
 include("ObjectToWidget.jl")
 include("ObjectFieldToWidget.jl")

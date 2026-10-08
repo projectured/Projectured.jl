@@ -59,6 +59,7 @@ include("platform/syntax/SyntaxModule.jl")
 include("platform/appearance/AppearanceModule.jl")
 include("platform/fault/FaultViewModule.jl")
 include("platform/fileformat/FileFormatModule.jl")
+include("platform/undo/UndoModule.jl")
 include("platform/filesystem/FileSystemModule.jl")
 include("platform/gesturehelp/GestureHelpModule.jl")
 include("platform/gesturelog/GestureLogModule.jl")
@@ -67,7 +68,8 @@ include("platform/log/MessageLogModule.jl")
 include("platform/statistics/FrameStatisticsModule.jl")
 include("platform/shell/ShellModule.jl")
 include("platform/mcplog/McpLogModule.jl")
-include("platform/undo/UndoModule.jl")
+include("platform/task/TaskModule.jl")
+include("platform/navigator/NavigatorModule.jl")
 include("platform/application/ApplicationModule.jl")
 include("platform/PlatformModule.jl")
 
@@ -96,5 +98,14 @@ end
 # The display of a value beside the REPL, at the level of the package.
 using .DisplayModule
 export EditorDisplay, display_in_editor, close_display_editor!, refresh_display_editor!
+
+# The first window of a session, with a backend that has no device, so that this
+# image holds the code of the editor, the window and its tools.
+using PrecompileTools: @setup_workload, @compile_workload
+@setup_workload begin
+    @compile_workload begin
+        run_display_workload(make_workload_table())
+    end
+end
 
 end # module ProjecturedPlatform

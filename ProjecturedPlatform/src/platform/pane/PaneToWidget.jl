@@ -422,11 +422,16 @@ function map_reference_forward(::PaneGroupToWidgetTabbedPane,
             inside === nothing &&
                 return @reference ::WidgetTabbedPane.selector_element_pairs::CellVector[i]::WidgetTabPage
             inner = _child_forward(entries[i].iomap, inside)
-            # The content's type differs from tab to tab, so the checkpoint of the
-            # element is read off the document the tab prints.
+            # The content's type differs from tab to tab, so the checkpoints of the
+            # element are read off the document the tab prints. A content whose
+            # image is a path of several steps without types, such as the view of
+            # a data frame in a chain of a view and a layout, gets every one, as
+            # the splice below needs.
             image = inner isa EmptyReference ?
                     EmptyReference(get_reference_node_type(entries[i].pane)) :
-                    _typed_head(inner, entries[i].pane)
+                    is_fully_typed_reference(_typed_head(inner, entries[i].pane)) ?
+                    _typed_head(inner, entries[i].pane) :
+                    annotate_reference_types(entries[i].pane, strip_reference_types(inner))
             @reference ::WidgetTabbedPane.selector_element_pairs::CellVector[i]::WidgetTabPage.element.^(image)
         end
     end
@@ -698,7 +703,7 @@ function _read_tab_press(iomap::PaneTreeToWidgetIoMap, state, gesture)
     end
     target, zone = _find_tab_landing(iomap, state, gesture.x, gesture.y)
     CompoundOperation(Any[
-        _drag_write(tree, merge(state, (target = target, zone = zone, started = true))),
+        _drag_write(tree, merge(state::NamedTuple, (target = target, zone = zone, started = true))),
         StartDragOperation(EmptyReference(), (group = state.group, index = state.index)),
         make_screen_pointer_shape_operation(_get_tab_drop_shape(target))])
 end
@@ -717,7 +722,7 @@ function _read_tab_drag(iomap::PaneTreeToWidgetIoMap, state, gesture)
         # Only write when the target moved, so a drag across a pane is not one
         # write per pixel.
         (state.target === target && state.zone === zone) && return nothing
-        write = _drag_write(tree, merge(state, (target = target, zone = zone)))
+        write = _drag_write(tree, merge(state::NamedTuple, (target = target, zone = zone)))
         shape = _get_tab_drop_shape(target)
         shape === _get_tab_drop_shape(state.target) && return write
         return CompoundOperation(Any[write, make_screen_pointer_shape_operation(shape)])

@@ -12,8 +12,8 @@ function _print_frame_statistics(statistics)
 end
 
 _get_frame_statistics_head(root) = root.children[1].children[1].content
-_get_frame_table(root) = root.children[5].child.children[1]
-_get_frame_scroll_bar(root) = root.children[5].child.children[2]
+_get_frame_table(root) = root.children[5].child
+_get_frame_scroll_bar(root) = _get_frame_table(root).vertical_scroll_bar
 _get_row_texts(row) = [row[index].content for index in 1:length(row)]
 _get_header_texts(table) = [table.column_headers[index].content for index in 1:length(table.column_headers)]
 
@@ -180,18 +180,18 @@ function test_frame_statistics_feed()
         summary = root.children[3]
         @test _get_header_texts(summary) ==
               ["measurement", "unit", "frames", "minimum", "maximum", "mean", "deviation", "total"]
-        @test _get_row_texts(summary.rows[1]) ==
+        @test _get_row_texts(summary.cells[1]) ==
               ["frame_time", "ms", "3", "10.00", "30.00", "20.00", "10.00", "60"]
-        @test _get_row_texts(summary.rows[2]) ==
+        @test _get_row_texts(summary.cells[2]) ==
               ["reads", "", "2", "120", "5000", "812.3", "900.1", "2437"]
         @test root.children[4].content == "Frames, newest first"
         frames = _get_frame_table(root)
         @test _get_header_texts(frames) == ["frame_time (ms)", "reads"]
         @test frames.corner.content == "frame"
-        @test _get_row_texts(frames.rows.value) == ["30.00", "5000"]
+        @test _get_row_texts(frames.cells.value) == ["30.00", "5000"]
         @test frames.row_headers.value.content == "3"
         # The oldest frame did not measure the counter, and it ends the list.
-        oldest = frames.rows.next.next
+        oldest = frames.cells.next.next
         @test _get_row_texts(oldest.value) == ["10.00", "-"]
         @test oldest.next === nothing
         @test frames.row_headers.next.next.value.content == "1"
@@ -205,16 +205,16 @@ function test_frame_statistics_feed()
         frames = _get_frame_table(root)
         slow_color = p.slow_text.color
         is_slow(label) = is_color_equal(label.text_style.color, slow_color)
-        newest = frames.rows.value
+        newest = frames.cells.value
         @test all(is_slow(newest[index]) for index in 1:length(newest))
         @test is_slow(frames.row_headers.value)
-        middle = frames.rows.next.value
+        middle = frames.cells.next.value
         @test !any(is_slow(middle[index]) for index in 1:length(middle))
         @test !is_slow(frames.row_headers.next.value)
         @test !is_color_equal(p.row_text.color, slow_color)
         # A frame at two times the median is not slow: the limit is strict.
         statistics.columns = [[0.01, 0.02, 0.04], [NaN, 120.0, 5000.0]]
-        @test !is_slow(frames.rows.value[1])
+        @test !is_slow(frames.cells.value[1])
     end
 
     @testset "the scroll bar follows the top row, and a write of its value jumps there" begin
@@ -243,6 +243,26 @@ function test_frame_statistics_feed()
         # The same write without view state, as a drag of the thumb gives it.
         drag = read_intent(p, iomap, ReplaceReferencedValueOperation(bar, "value", 1.0))
         @test get_wrapped_operation(drag.operations[1]).value == 1000
+        # The statistics keep the drag of the thumb: the start of the drag names
+        # them, the press is kept in their frame, and a move there is a jump.
+        statistics.anchor = 1
+        statistics.top_row = 1
+        start = CompoundOperation(Any[
+            ReplaceViewStateOperation(ReplaceReferencedValueOperation(bar, "thumb_drag",
+                                                                     (along = 0, value = 0.0, travel = 100))),
+            StartDragOperation(EmptyReference(), nothing)])
+        kept = read_intent(p, iomap, start)
+        @test only(o for o in kept.operations if o isa StartDragOperation).path isa EmptyReference
+        press = MouseDown(:left, 5, 40, ModifierKeys(); time = 0.0)
+        owned = make_owned_scroll_bar_drag(kept, bar, press)
+        foreach(o -> o isa ReplaceViewStateOperation && evaluate_operation(nothing, o), owned.operations)
+        @test bar.thumb_drag == (along = 40, value = 0.0, travel = 100, owned = true)
+        moved = read_intent(p, iomap, DragMove(5, 90, ModifierKeys(); time = 0.0))
+        @test get_wrapped_operation(moved.operations[1]).value == 1 + round(Int, 0.5 * 999)
+        ended = read_intent(p, iomap, DragEnd(5, 90, ModifierKeys(); time = 0.0))
+        foreach(o -> o isa ReplaceViewStateOperation && get_wrapped_operation(o) isa ReplaceReferencedValueOperation &&
+                     evaluate_operation(nothing, o), ended.operations)
+        @test bar.thumb_drag === nothing
     end
 
     @testset "a flush changes the numbers and keeps the parts" begin
@@ -256,9 +276,9 @@ function test_frame_statistics_feed()
         statistics.columns = [[0.02, 0.03, 0.04], [120.0, 5000.0, 7.0]]
         @test root.children[3] === summary
         @test _get_frame_table(root) === frames
-        @test summary.rows[1][3].content == "4"
+        @test summary.cells[1][3].content == "4"
         @test _get_frame_statistics_head(root) == "4 frames"
-        @test _get_row_texts(frames.rows.value) == ["40.00", "7"]
+        @test _get_row_texts(frames.cells.value) == ["40.00", "7"]
         @test frames.row_headers.value.content == "4"
     end
 
@@ -275,7 +295,7 @@ function test_frame_statistics_feed()
         frames = _get_frame_table(root)
         # The answer of a table that moves the head of its list to its second row.
         move = CompoundOperation(Any[
-            ReplaceViewStateOperation(ReplaceReferencedValueOperation(frames, "rows", frames.rows.next)),
+            ReplaceViewStateOperation(ReplaceReferencedValueOperation(frames, "cells", frames.cells.next)),
             ReplaceViewStateOperation(ReplaceReferencedValueOperation(frames, "scroll_position", Point2D(0, 4))),
             ReplaceViewStateOperation(ReplaceReferencedValueOperation(frames, "top_row", 1)),
             ReplaceViewStateOperation(ReplaceReferencedValueOperation(frames, "row_headers",
@@ -292,7 +312,7 @@ function test_frame_statistics_feed()
         @test answer.operations[4] isa DoNothingOperation
         # The list starts again from the anchor.
         statistics.anchor = 2
-        @test _get_row_texts(frames.rows.value) == ["20.00", "120"]
+        @test _get_row_texts(frames.cells.value) == ["20.00", "120"]
         @test frames.row_headers.value.content == "2"
         @test getfield(frames, :top_row) === getfield(statistics, :top_row)
         # A press on Pause writes the document, and the undo does not record it.
@@ -306,7 +326,7 @@ function test_frame_statistics_feed()
         # from that head.
         statistics.anchor = 9
         @test frames.row_headers.value.content == "1"
-        move = ReplaceViewStateOperation(ReplaceReferencedValueOperation(frames, "rows", frames.rows.prev))
+        move = ReplaceViewStateOperation(ReplaceReferencedValueOperation(frames, "cells", frames.cells.prev))
         @test get_wrapped_operation(read_intent(p, iomap, move)).value == 2
     end
 
@@ -330,7 +350,7 @@ function test_frame_statistics_feed()
         # 7 digits, which is wider than its header.
         p = FrameStatisticsToWidget(; measure = FixedMeasure(8, 12, 4, 0))
         frames = _get_frame_table(print_document(p, p, statistics, PrinterContext()).output)
-        @test frames.column_policies == Any[Fixed(15 * 8), Fixed(7 * 8)]
+        @test Any[column.policy for column in frames.columns] == Any[Fixed(15 * 8), Fixed(7 * 8)]
         # A header and a value align right in their column, so both end at its
         # right edge.
         @test narrow["30.00"] + 5 * 8 == narrow["frame_time (ms)"] + 15 * 8

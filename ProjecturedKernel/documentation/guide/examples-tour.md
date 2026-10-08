@@ -2,7 +2,7 @@
 
 > **Kind:** reference · **Status:** current · **Stands on:** [setup-guide.md](setup-guide.md)
 
-This guide walks through six ProjecturEd examples in order of complexity.
+This guide walks through seven ProjecturEd examples in order of complexity.
 For each one: what it demonstrates, how to run it, what to try, and which
 concepts it illustrates. Screenshots for each example are embedded inline below.
 
@@ -38,11 +38,11 @@ write_example_pdf("json", "/tmp/snapshot.pdf")
 
 **The general steps.** `collection`, `reversing`, `filtering`, `searching`, `sorting`, `focusing`, `dragging`. One step in front of any data: a filter, a sort, a search. They work for every domain, which is what makes them worth reading.
 
-**Files.** `filesystem`, `filesystem_widget`, `navigator`, `table`, `math_table`. The parts the application is built from.
+**Files.** `filesystem`, `filesystem_widget`, `files`, `table`, `math_table`. The parts the application is built from.
 
 **The assistant.** `assistant`, `conversation_widget`, `conversation_editor`. The conversation as a document. The example answers from a canned transcript, so a test needs no model; [assistant-guide.md](assistant-guide.md) says how to talk to a real one.
 
-The six examples below are the ones to read in order.
+The seven examples below are the ones to read in order.
 
 ---
 
@@ -225,6 +225,43 @@ tab of notes and one of scratch space on the right.
   projects to its matching widget container
 - The tree's own `selection` names the focused tab; there is no separate
   active-tab field (see [pane.md](../package/platform/pane/pane.md))
+
+---
+
+## 7. A table and its detail page (a navigator)
+
+A navigator shows one part of a document at a time, as a tab of a browser shows
+one page of a site, with Back, Forward, Parent and an address. This example is a
+data frame of thirty rows in a navigator: the table is the first page, and a row
+opens as a page of its own, a form of its columns.
+
+```julia
+using Projectured, ProjecturedExample, ProjecturedSDL, ProjecturedDataFramesExample
+run_example(make_data_frame_navigator_example(; rows = 30), make_natural_projection_example();
+            name = "Products")
+```
+
+In the application, open it from the Evaluator:
+`using ProjecturedDataFramesExample`, then
+`open_pane!(make_data_frame_navigator_example(; rows = 30); title = "Products")`.
+
+**What to try:**
+- Double-click the number of a row, or select the row and press `Ctrl+Return`:
+  the row opens as a page. `Ctrl+[` goes back to the table with the row still
+  selected, `Ctrl+]` goes forward, and `Ctrl+Up` goes to the table.
+- Click the arrow before "row 3" in the address: a list of the rows opens.
+  Type `5` and press Enter to open row 5.
+- Click **Names** in the bar to see the address as a path, then as a path with
+  the type of each node.
+- Press `Ctrl+L`, type `.rows[7]`, and press Enter to open row 7.
+- Right-click a part of a page and choose **Open in a new tab**.
+
+**Concepts illustrated:**
+- The address is a path of the content and is kept in the document, so a save
+  keeps it; a visit is view state, which undo does not record
+- A page is drawn by the view of its type, so the navigator names no type of
+  data frames; the data frame adapter gives a row a view of its own
+- See [navigator.md](../package/platform/navigator/navigator.md)
 
 ---
 

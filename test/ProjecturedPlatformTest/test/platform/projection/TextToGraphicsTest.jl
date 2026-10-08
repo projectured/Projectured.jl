@@ -634,4 +634,71 @@ end
     @test box_of(both_ways, projection, element(-2)).y == -3 * first.height
 end
 
+# A lazy list of lines is drawn as a canvas for each line. A part of a line maps
+# to the text node that draws it; lines and canvases count from their heads.
+@testset "TextToGraphics draws a lazy list of lines" begin
+    measure = FixedMeasure(10, 18, 6, 0)
+    projection = TextToGraphics(measure = measure)
+    font = StyleFont("Ubuntu Mono", 20)
+    head = ListNode(TextLine(TextString("one", font, color_black), TextString("two", font, color_black)))
+    push!(head, TextLine(TextString("three", font, color_black); indentation = 2))
+    pushfirst!(head, TextLine(TextString("zero", font, color_black)))
+    text_block = TextBlock()
+    text_block.elements = head
+    iomap = print_document(projection, IdentityProjection(), text_block, PrinterContext())
+    range_of(start, stop, rest = EmptyReference()) =
+        ConcreteReference(FieldReferenceStep("elements"), ConcreteReference(RangeReferenceStep(start, stop), rest))
+    content(start, stop) = ConcreteReference(FieldReferenceStep("content"),
+                                             ConcreteReference(RangeReferenceStep(start, stop), EmptyReference()))
+    image(reference) = map_reference_forward(projection, iomap, reference)
+    box_of(reference) = find_reference_box(iomap.output, image(reference); measure = measure)
+    # `two` is the second span of the head line.
+    two = box_of(range_of(0, 1, range_of(1, 2)))
+    @test (two.x, two.y, two.width) == (30, 0, 30)
+    # The next line is one line lower, and starts at its indentation; a whole line
+    # with one text maps to that text.
+    three = box_of(range_of(1, 2))
+    @test (three.x, three.y, three.width) == (20, two.height, 50)
+    # The characters `hr` of `three`.
+    characters = box_of(range_of(1, 2, range_of(0, 1, content(1, 3))))
+    @test (characters.x, characters.y, characters.width) == (30, three.y, 20)
+    # `zero`, the line before the head, is one line above it.
+    zero = box_of(range_of(-1, 0))
+    @test (zero.x, zero.y, zero.width) == (0, -two.height, 40)
+    # The head line, with its two spans, is a region of its canvas.
+    both = image(range_of(0, 1))
+    @test last(collect(get_reference_steps(both))) isa RegionReferenceStep
+    box = find_reference_box(iomap.output, both; measure = measure)
+    @test (box.x, box.y, box.width) == (0, 0, 60)
+end
+
+@testset "TextToGraphics starts a row at each soft break of a line" begin
+
+m = _test_measure(10, 18)
+p = TextToGraphics(measure = m)
+font = StyleFont("Ubuntu Mono", 20)
+make_block() = (line = TextLine(TextString("alpha beta gamma", font, color_white); indentation = 2);
+                getfield(line, :soft_breaks)[] = [6, 11];
+                TextBlock(TextDocument[line, TextLine(TextString("next", font, color_white))]))
+
+# Each row starts at the indentation of the line; the next line follows the rows.
+canvas = print_document(p, make_block()).output
+@test [(t.text, t.x, t.y) for t in _texts(canvas)] ==
+      [("alpha ", 20, 0), ("beta ", 20, 18), ("gamma", 20, 36), ("next", 0, 54)]
+
+# A caret at a soft break stands at the start of the lower row, where a typed
+# character goes; a caret inside a row stands in it.
+caret(block) = [(r.x, r.y) for r in _rects(print_document(p, block).output) if r.w == 2]
+@test caret(set_selection!(make_block(), TextModule.make_flat_caret_reference(8))) == [(20, 18)]
+@test caret(set_selection!(make_block(), TextModule.make_flat_caret_reference(9))) == [(30, 18)]
+@test caret(set_selection!(make_block(), TextModule.make_flat_caret_reference(4))) == [(40, 0)]
+
+# A click on the second row puts the caret in that row.
+iomap = print_document(p, make_block())
+click = read_intent(p, iomap, MouseClick(:left, 41, 20; time = 0.0))
+@test click isa ReplaceSelectionOperation
+@test is_reference_equal(click.path, TextModule.make_flat_caret_reference(10))
+
+end # @testset "TextToGraphics starts a row at each soft break of a line"
+
 end # test_text_to_graphics

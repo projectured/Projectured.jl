@@ -59,7 +59,7 @@ depend on, and why the leaf the alias loads is the only place a
 `@compile_workload` may live, are in [package-rules.md](../rule/package-rules.md).
 
 ProjecturEd is organized as **one kernel, one platform package of
-thirty-nine slices, seventeen domain packages, five backends and eight
+thirty-nine slices, eighteen domain packages, five backends and eight
 adapters**, plus the umbrella `Projectured`, `AutoIntegration`,
 `ProjecturedIntegrations`, the released package `ProjecturedAll` and the
 tools. The kernel
@@ -107,10 +107,11 @@ ProjecturedPlatform (platform/) one package, 39 slices, below every domain
         │                      help, conversation, assistant, application.
         │                      Each slice declares the exact set it imports; the table
         │                      is in [package-rules.md](../rule/package-rules.md).
-The seventeen domain packages  one package per concrete source domain
+The eighteen domain packages   one package per concrete source domain
         ▲                      json/ yaml/ xml/ markdown/ rst/ book/ math/ julia/
         │                      sql/ database/ graph/ chart/
-        │                      sequencechart/ dbcatalog/ formula/ fsm/ process/.
+        │                      sequencechart/ dbcatalog/ formula/ fsm/ process/
+        │                      pivot/.
         │                      Each holds its
         │                      documents, its parser and its projections.
         │                      Deps: the kernel, the platform,
@@ -133,7 +134,7 @@ ProjecturedIntegrations        depends on Projectured and the six packages that
                                with a package extension when the package it
                                joins is loaded.
 ProjecturedAll (all/)          re-exports the kernel, the platform, Console,
-                               Pdf and the 17 domains as one flat namespace for
+                               Pdf and the 18 domains as one flat namespace for
                                the tests, the examples and the REPL.
 
 The five backends (depend on the kernel and the platform):
@@ -143,13 +144,14 @@ The five backends (depend on the kernel and the platform):
   Web     (web/)       → opt-in, HTTP/JSON3                    WebBackend; assets in web/assets/
   Video   (video/)     → opt-in, FFMPEG; depends on Sdl         record_video method on the kernel seam
 
-The eight adapters (opt-in, loaded only when you `using` them):
+The nine adapters (opt-in, loaded only when you `using` them):
   Tulip      (tulip/) → Platform's layout slice      MathOptInterface/Tulip       the linear-programming constraint solver
   Odbc       (odbc/)  → Sql, DbCatalog, Database      ODBC/DBInterface/Tables      OdbcDatabaseAdapter, live-query projections
   Adaptagrams          → Graph                        native C++ shim              the graph layout engine
   Mcp        (mcp/)   → Kernel, McpLog                ModelContextProtocol         McpServer, make_agent_server(:mcp)
   Anthropic            → Kernel                       HTTP/JSON3                   AnthropicLlm; make_llm(:anthropic)
   Ollama               → Kernel                       HTTP/JSON3                   OllamaLlm; make_llm(:ollama)
+  Acp        (acp/)    → Kernel                       JSON3                        AcpConnection; make_agent_connection(:acp)
   OpenRouter           → Kernel                       HTTP/JSON3                   the relevance model on the Decisions API
   DataFrames           → Kernel, Platform; DataFrames.jl                           DataFrameView
 ```
@@ -206,7 +208,7 @@ loaded `Backend` subtype by type-name reflection where it isn't. So the SQL and 
 kernel-resident (the `tool` layer's `ToolSet`), and the LLM/MCP seams are
 kernel-resident too (the `llm` and `agent` layers); only the MCP transport and
 the HTTP clients of the model providers are in the opt-in `ProjecturedMCP`,
-`ProjecturedAnthropic` and `ProjecturedOllama`.
+`ProjecturedAnthropic`, `ProjecturedOllama` and, for an external agent, `ProjecturedACP`.
 
 > The inventory below cites a file by name. Every one of them lives in
 > `source/<group>/<slice>/`, one folder per slice in the folder of its group, and the package that includes it is
@@ -247,7 +249,7 @@ the HTTP clients of the model providers are in the opt-in `ProjecturedMCP`,
 | `TextDocument.jl` | `TextBlock`, `TextString`, `TextNewline` |
 | `SyntaxDocument.jl` | `SyntaxLeaf`, `SyntaxNode`; wrapper types `SyntaxDelimitation`, `SyntaxIndentation`, `SyntaxCollapsible`, `SyntaxNavigation`, `SyntaxConcatenation`, `SyntaxSeparation` |
 | `GraphicsDocument.jl` | `GraphicsText`, `GraphicsRect`, `GraphicsCanvas`, `GraphicsViewport`, `GraphicsImage`, `GraphicsFence` |
-| `WidgetDocument.jl` | Core: `WidgetInsertion`, `WidgetLabel`, `WidgetText`, `WidgetCheckbox`, `WidgetButton`, `WidgetTooltip`, `WidgetMenu`, `WidgetMenuItem`, `WidgetToolbarItem`, `WidgetComposite`, `WidgetToolbar`, `WidgetShell`, `WidgetTitlePane`, `WidgetSplitPane`, `WidgetTabbedPane`, `WidgetScrollPane`, `WidgetScrollBar`. Extension: `WidgetBadge`, `WidgetSeparator`, `WidgetCard`, `WidgetSwitch`, `WidgetProgress`, `WidgetSlider`, `WidgetRadioGroup`, `WidgetAvatar`, `WidgetAlert`, `WidgetSkeleton`, `WidgetSwatch`, `WidgetToggle`, `WidgetToggleGroup`, `WidgetSelect`, `WidgetTextarea`, `WidgetAccordion`, `WidgetTable`, `WidgetTree` |
+| `WidgetDocument.jl` | Core: `WidgetInsertion`, `WidgetLabel`, `WidgetText`, `WidgetCheckbox`, `WidgetButton`, `WidgetTooltip`, `WidgetMenu`, `WidgetMenuItem`, `WidgetToolbarItem`, `WidgetComposite`, `WidgetToolbar`, `WidgetShell`, `WidgetTitlePane`, `WidgetSplitPane`, `WidgetTabbedPane`, `WidgetScrollPane`, `WidgetScrollBar`. Extension: `WidgetBadge`, `WidgetSeparator`, `WidgetCard`, `WidgetSwitch`, `WidgetProgressBar`, `WidgetProgressRing`, `WidgetSlider`, `WidgetRadioGroup`, `WidgetAvatar`, `WidgetAlert`, `WidgetSkeleton`, `WidgetSwatch`, `WidgetToggle`, `WidgetToggleGroup`, `WidgetSelect`, `WidgetTextarea`, `WidgetAccordion`, `WidgetTable`, `WidgetTree` |
 | `PaneDocument.jl` | `PaneTree`, `PaneSplit`, `PaneGroup`, `PaneTab` |
 | `BookDocument.jl` | `BookBook`, `BookChapter`, `BookParagraph`, `BookList`, `BookPicture` |
 | `MathDocument.jl` | `MathVariable`, `MathBinaryOperation`, `MathParenthesized`, `MathAssignment` |
@@ -374,14 +376,14 @@ enforces.
 **Between packages:**
 
 ```
-ProjecturedKernel ◄── ProjecturedPlatform ◄── the 17 domains ◄── ProjecturedAll
+ProjecturedKernel ◄── ProjecturedPlatform ◄── the 18 domains ◄── ProjecturedAll
        ▲                  ▲       ▲                 ▲
        │                  │       │                 │
        │                  │   Projectured      Odbc, Adaptagrams
        │                  │        ▲
        │                  │        │
    Mcp, Anthropic,  Console, Pdf, AutoIntegration
-   Ollama,          Sdl, Web,
+   Ollama, Acp,     Sdl, Web,
    OpenRouter       Video, Tulip,
                      DataFrames
 
@@ -401,7 +403,7 @@ dependency, and loads each one with a package extension when the package it
 joins is loaded. `ProjecturedAll` also depends on Console and Pdf.
 
 The platform's thirty-nine slices form their own DAG, and so do the
-seventeen domains. [package-rules.md](../rule/package-rules.md) has the
+eighteen domains. [package-rules.md](../rule/package-rules.md) has the
 platform's table; [domain-inventory.md](domain-inventory.md)
 has the domain table.
 
@@ -515,13 +517,13 @@ not slices of the platform.)
    help            the document-type list, the projection list, and the about page
    conversation    the evaluator documents and the chat transcript
    assistant       the chat with a model, and the turn that streams a reply
-   application     the window of files, the navigator and the assistant, and
+   application     the window of files, the Files pane and the assistant, and
                    the command line of a binary
 ```
 
-**The seventeen domain packages** — one package per concrete source domain,
+**The eighteen domain packages** — one package per concrete source domain,
 each holding one slice: its documents, its parser and its projections.
-Thirteen need only the engine and the platform; four build on one layer of
+Thirteen need only the engine and the platform; five build on one layer of
 domains. The assistant and the conversation slice it builds on are slices of
 the platform, not domains. [domain-inventory.md](domain-inventory.md) has the table and the rules
 for adding one.

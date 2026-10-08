@@ -1,6 +1,6 @@
 name = "ProjecturedSQLTest"
 uuid = "74717b3c-e326-42b6-b898-33b3a53c04ca"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -17,14 +17,14 @@ ProjecturedSQLExample = "6f92ce12-1ac0-47da-9eed-863a565badaf"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
-ProjecturedConsole = "0.1.0"
-ProjecturedKernel = "0.1.0"
-ProjecturedKernelExample = "0.1.0"
-ProjecturedKernelTest = "0.1.0"
-ProjecturedPDF = "0.1.0"
-ProjecturedPlatform = "0.1.0"
-ProjecturedPlatformExample = "0.1.0"
-ProjecturedPlatformTest = "0.1.0"
-ProjecturedSQL = "0.1.0"
-ProjecturedSQLExample = "0.1.0"
+ProjecturedConsole = "0.1.1"
+ProjecturedKernel = "0.1.1"
+ProjecturedKernelExample = "0.1.1"
+ProjecturedKernelTest = "0.1.1"
+ProjecturedPDF = "0.1.1"
+ProjecturedPlatform = "0.2.0"
+ProjecturedPlatformExample = "0.1.1"
+ProjecturedPlatformTest = "0.1.1"
+ProjecturedSQL = "0.1.1"
+ProjecturedSQLExample = "0.1.1"
 julia = "1.12"

@@ -47,14 +47,16 @@ taste; it is the whole mechanism, and [the next section](#why-the-leaf-matters)
 says why. `test_package_graph()` asserts it, along with two more:
 
 - an example package is a dependency only of a leaf, an example or a test;
-- a `@compile_workload` lives only in a leaf.
+- a `@compile_workload` lives in a leaf, or in the entry file of a package that
+  a user loads and whose first window it compiles (see
+  [the next section](#why-the-leaf-matters)).
 
 ### A package with a third-party dependency is a stem, not a sub-stem
 
 `ProjecturedAll` aggregates the kernel, the platform, the console and PDF
-backends and the seventeen domain packages, none of which has a third-party
+backends and the eighteen domain packages, none of which has a third-party
 dependency. It deliberately does not aggregate `ProjecturedSDL`, `ProjecturedODBC`, `ProjecturedTulip`,
-`ProjecturedVideo`, `ProjecturedAnthropic`, `ProjecturedOllama`, `ProjecturedMCP`,
+`ProjecturedVideo`, `ProjecturedAnthropic`, `ProjecturedOllama`, `ProjecturedACP`, `ProjecturedMCP`,
 `ProjecturedWeb`, `ProjecturedDataFrames` or
 `ProjecturedAdaptagrams`, each of which owns one. The umbrella `Projectured`
 depends on `ProjecturedPlatform` and `AutoIntegration`, and re-exports only the
@@ -92,9 +94,50 @@ Measured, a first paint of a JSON document in a fresh session:
 | with no workload anywhere | 8.36 s |
 | with a workload in the leaf | **0.66 s** |
 
-That is why `@compile_workload` is asserted to live only in a leaf, and why the
-body it calls — `ProjecturedExample.precompile_workload(level)` — is an ordinary
-function rather than code inside the macro. Both leaves call the same one.
+That is why the workload of the development session lives in a leaf, and why
+the body it calls — `ProjecturedExample.precompile_workload(level)` — is an
+ordinary function rather than code inside the macro. Both leaves call the same
+one.
+
+### A package that a user loads compiles its own first window
+
+A user of the released packages loads no leaf of ours: a session writes `using
+Projectured, DataFrames, SimpleDirectMediaLayer`, and its first window must not
+wait for the compiler. So each package that such a session loads and whose code
+the first window runs holds a `@compile_workload` in its entry file:
+`ProjecturedPlatform`, `ProjecturedDataFrames` and `ProjecturedSDL`. Each calls
+`run_display_workload` of the platform, which runs the first window of
+`display_in_editor`, with a backend that has no device or with an offscreen SDL
+window, and gives it the gestures of a first look.
+
+That code survives only where no package loaded later can invalidate it. Three
+rules keep it valid with any packages that a session loads after it:
+
+1. **A value of unknown type gets its type before a call that other packages
+   extend.** A value from a cell is `Any`. Give it its concrete type with an
+   assertion (`::Int`, `::String`, `::NamedTuple`) before it reaches `Int`,
+   `length`, `merge`, `sort!` or the like, and assert the result of a call that
+   gives up during inference. Do not annotate the argument of such a helper with
+   a narrow abstract type: `size::Integer` makes Julia infer the body for
+   `Integer`, where `Int(size)` meets every constructor that a package adds. Ask
+   `hasfield(typeof(x), name)` of a struct, not `hasproperty`, which DataFrames
+   extends.
+2. **A call of a protocol that packages loaded later extend goes through
+   `invokelatest`.** No argument type can keep such a call valid. The editor loop
+   calls the backend protocol so, and so do the window check and the choice of a
+   backend.
+3. **An integration loads the packages below it before the package that it
+   joins**, as a session does: `ProjecturedDataFrames` loads the platform, then
+   DataFrames. Its build then meets the platform code that the joined package
+   invalidates, and its workload compiles that code into its image.
+
+Measured on the session of the README, the first frame of a data frame of
+100 000 rows (Julia 1.13.1, one thread, the window offscreen):
+
+| | first frame |
+| --- | ---: |
+| with no workload in a package | 48.3 s |
+| with a workload in each package, and the three rules | **0.75 s** |
 
 ## The session
 
@@ -199,7 +242,7 @@ guard of the platform checks every edge below against the code.
 | `graphics` | Collection, Projection, Style | — |
 | `screen` | Collection, Graphics, Primitive, Projection | — |
 | `layout` | Collection, Focus, Graphics, Projection | — |
-| `text` | Collection, Domain, Graphics, Primitive, Projection, Style | — |
+| `text` | Collection, Domain, Graphics, Layout, Primitive, Projection, Style | — |
 | `widget` | Collection, Domain, Focus, Graphics, Layout, Primitive, Projection, Screen, Serialization, Style, Text | — |
 | `reflection` | Collection, Widget | — |
 | `clipboard` | Collection, Domain, Primitive, Projection, Serialization, Text | — |
@@ -211,6 +254,7 @@ guard of the platform checks every edge below against the code.
 | `gesturehelp` | Collection, Graphics, Projection, Screen, Style, Syntax, Text | — |
 | `gesturelog` | Collection, Domain, Graphics, Natural, Projection, Serialization, Style, Syntax, Text | — |
 | `mcplog` | Collection, Domain, Layout, Natural, Primitive, Projection, Serialization, Shell, Style, Widget | — |
+| `task` | Collection, Domain, Focus, Graphics, Layout, Natural, Pane, Primitive, Projection, Style, Widget | — |
 | `fileformat` | Collection, Domain, Layout, Natural, Primitive, Projection, Serialization, Style, Syntax, Text, Widget | — |
 | `fault` | Collection, Domain, Graphics, Natural, Projection, Serialization, Style, Syntax, Text, Widget | — |
 | `display` | Natural, Screen, Style, Widget | — |
@@ -225,7 +269,7 @@ forty-two. `ProjecturedConsole` and `ProjecturedPDF` are backend packages,
 not slices of the platform, even though neither carries a third-party
 dependency.
 
-### The seventeen domains
+### The eighteen domains
 
 Each domain depends on the kernel, on the platform, and on the domains it
 embeds. [domain-inventory.md](../design/domain-inventory.md) has the table.
@@ -236,6 +280,7 @@ embeds. [domain-inventory.md](../design/domain-inventory.md) has the table.
 | --- | --- | --- |
 | `ProjecturedAnthropic` | Kernel | HTTP, JSON3 |
 | `ProjecturedOllama` | Kernel | HTTP, JSON3 |
+| `ProjecturedACP` | Kernel | JSON3 |
 | `ProjecturedOpenRouter` | Kernel | HTTP, JSON3 |
 | `ProjecturedMCP` | Kernel, McpLog | ModelContextProtocol |
 | `ProjecturedTulip` | Layout | MathOptInterface, Tulip |
@@ -253,7 +298,7 @@ embeds. [domain-inventory.md](../design/domain-inventory.md) has the table.
 | `Projectured` (umbrella) | the platform, AutoIntegration |
 | `AutoIntegration` | — (its own repository, `projectured/AutoIntegration.jl`; the TOML standard library alone) |
 | `ProjecturedIntegrations` | the umbrella, the six packages that own a third-party dependency |
-| `ProjecturedAll` (released) | Kernel, the platform, Console, PDF, the 17 domains |
+| `ProjecturedAll` (released) | Kernel, the platform, Console, PDF, the 18 domains |
 | `ProjecturedPlatformExample` | the platform, KernelExample |
 | `ProjecturedPlatformTest` | the platform, KernelTest, PlatformExample |
 | `<Stem>Example` | `<Stem>`, the Examples below it |
@@ -289,5 +334,7 @@ becomes an optional stem like `ProjecturedODBC`, named in the table above.
    domain, [domain-inventory.md](../design/domain-inventory.md) has the rest.
 2. Give it the kinds it needs, with the reserved suffixes.
 3. Name every third-party dependency in the table above, with its reason.
-4. Do not depend on a leaf, and do not put a `@compile_workload` outside one.
+4. Do not depend on a leaf. Put a `@compile_workload` in a leaf, or in a
+   package that a user loads, by the rules of
+   [the section above](#a-package-that-a-user-loads-compiles-its-own-first-window).
 5. Run `test_package_graph()` — it asserts 2 and 4, and it fails loudly.

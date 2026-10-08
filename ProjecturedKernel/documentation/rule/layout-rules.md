@@ -63,7 +63,9 @@ constructor is the same constant wearing a keyword: it wins over every offer and
 nobody wrote it, so a widget that can measure its content has none. A widget that
 cannot — a progress bar, a slider, a skeleton, a highlight, an avatar — keeps its
 number, and that number is what it **authored**: see the note on style parameters
-below for why it is not its content.
+below for why it is not its content. A progress ring can measure: its content is
+one line of the theme font, so it authors no size. An offer stretches its box,
+and the ring keeps its diameter at the start of the box.
 
 **A style parameter is not a constant.** A checkbox's 18-pixel box, a switch's
 44×24 track, a progress bar's 8-pixel thickness and a slider's 24-pixel height are
@@ -214,6 +216,16 @@ its own panes — a transcript above a composer — then scrolls as one block.
 
 A scroll pane inside a clipped slot means two viewports over the same rectangle. That
 is a scissor rect, not a surface, and the alternative is a type test in the printer.
+
+**A widget of rows scrolls by itself.** A `WidgetTable`, a `WidgetList` and a
+`WidgetTree` that get a slot on the vertical axis fill it and scroll their rows
+there, inside their border; with no slot they are as tall as their rows. So the
+maker of such a widget brings no pane, and a pane around one has nothing left to
+scroll.
+
+**A bar is an overlay.** A scroll bar lies over the content, at the inner edge of
+the border of the widget that scrolls, and takes no space. So a bar that shows
+changes no extent, and a text does not wrap again at a narrower edge.
 
 ## 4. When a stack distributes instead of summing
 

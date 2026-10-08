@@ -2,7 +2,7 @@
 # test/backend/video/editor/ApplicationVideoTest.jl
 #
 # Smoke test for `record_application_video`: a short clip of the application
-# window with no file — the navigator, an empty tab, no assistant — typing
+# window with no file — the Files pane, an empty tab, no assistant — typing
 # `repl` into a freshly opened tab and pressing Enter. Asserts the file exists
 # and, when `ffprobe` is available, bounds its reported duration rather than
 # pinning it to the timeline's own scripted total: a cold, unprecompiled
@@ -141,7 +141,7 @@ end
 @testset "the pointer is drawn where the last mouse event left it" begin
     width, height = 480, 360
     timeline = Any[(event = MouseMove(300, 200, MouseButtons(), ModifierKeys(); time = 0.0), hold = 0.5)]
-    # One folder for both takes: the navigator shows its name.
+    # One folder for both takes: the Files pane shows its name.
     root = mktempdir()
     frames = map((true, false)) do pointer
         filename = tempname() * ".mp4"
@@ -169,7 +169,7 @@ end
 @testset "the views of the window and its Appearance tab draw with the appearance of the take" begin
     appearance = ProjecturedPlatform.Appearance()
     seen = Ref{Any}(nothing)
-    timeline = Any[(await = editor -> (seen[] = ProjecturedPlatform.find_editor_appearance(editor); true),
+    timeline = Any[(await = editor -> (seen[] = ProjecturedPlatform.find_editor_appearance(; editor); true),
                     hold = 1.0)]
     filename = tempname() * ".mp4"
     try
@@ -194,7 +194,7 @@ end
     takes = map((1.0, 1.5)) do zoom
         opened = Ref(false)
         timeline = Any[(event = MouseClick(:left, 63, 65, 1, ModifierKeys(); time = 0.0), hold = 0.6),
-                       (await = editor -> (opened[] = ProjecturedPlatform.find_pane(editor, "Evaluator") !== nothing;
+                       (await = editor -> (opened[] = ProjecturedPlatform.find_pane("Evaluator"; editor) !== nothing;
                                            true), hold = 1.0)]
         filename = tempname() * ".mp4"
         record_application_video(String[], timeline, filename; width, height, fps = 10, assistant = :none,
@@ -266,11 +266,11 @@ end
     # file fail from the frame after the insert on, whichever projection draws
     # it, and after eight failed paints the editor stops painting.
     break_paint = (await = editor -> begin
-                       items = get_edited_document(find_pane(editor, "items.json"))
+                       items = get_edited_document(find_pane("items.json"; editor))
                        broken = JsonString("tea")
                        set_cell_computation!(getfield(broken, :value),
                                              () -> error("the text of this string can not be computed"))
-                       insert_elements!(editor, items, 1, [broken])
+                       insert_elements!(items, 1, [broken]; editor)
                        true
                    end, hold = 1.0)
     timeline = Any[

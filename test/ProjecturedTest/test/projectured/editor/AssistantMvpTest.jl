@@ -264,6 +264,62 @@ function _mvp_test_submit_while_streaming()
     end
 end
 
+# The stop button and Escape stop a turn of a model. The turn ends at its next
+# event, keeps what it streamed, and its stop reason is `:cancelled`.
+function _mvp_test_stop_turn()
+    @testset "a stop ends a turn of a model, which keeps what it streamed" begin
+        reply = repeat("word ", 200)
+        a = Assistant(; llm = FakeLlm(reply; delay = 0.01))
+        editor = _mvp_editor(a)
+        button = make_assistant_stop_button(a)
+        @test !button.enabled
+        a.input.value = "Go"
+        evaluate_operation(editor, SubmitProseOperation(a))
+        @test is_assistant_turn_running(a) && button.enabled
+        @test timedwait(() -> count("word", format_conversation(a.conversation)) >= 3, 10.0;
+                        pollint = 0.01) === :ok
+        # The composer's Escape stops the turn while it runs.
+        @test read_intent(AssistantToWidgetSplitPane(), (input = a,),
+                          ComposerRevertOperation(a.draft)) isa CancelAssistantTurnOperation
+        evaluate_operation(editor, InvokeActionOperation(button.action))
+        @test _mvp_wait_idle!(a) === :idle
+        @test collect(a.conversation.turns)[end].stop_reason === :cancelled
+        @test 3 <= count("word", format_conversation(a.conversation)) < 200
+        @test a.turn_control === nothing && !button.enabled
+        # With no turn that runs, Escape reverts the draft, and a submit starts a turn.
+        @test read_intent(AssistantToWidgetSplitPane(), (input = a,),
+                          ComposerRevertOperation(a.draft)) isa ComposerRevertOperation
+        a.llm = FakeLlm("Again.")
+        a.input.value = "Once more"
+        evaluate_operation(editor, SubmitProseOperation(a))
+        @test _mvp_wait_idle!(a) === :idle
+        @test collect(a.conversation.turns)[end].stop_reason === :end_turn
+    end
+
+    @testset "a stop while a tool runs keeps its result and runs no next round" begin
+        started, release = Channel{Nothing}(1), Channel{Nothing}(1)
+        tools = register_default_tools!(ToolSet())
+        register_tool!(tools, Tool("wait"; description = "Waits until the test lets it go.",
+                                   parameters = NamedTuple[],
+                                   handler = (target, args) -> (put!(started, nothing); take!(release); "waited")))
+        llm = ScriptedLlm([_tool_use_script("tu_1", "wait", Dict{String,Any}()), _final_text_script("Done.")])
+        a = Assistant(; llm)
+        editor = Editor(a, make_assistant_projection_example(); backend = HeadlessBackend(),
+                        devices = Device[], tools = tools)
+        a.input.value = "Go"
+        evaluate_operation(editor, SubmitProseOperation(a))
+        @test timedwait(() -> isready(started), 5.0; pollint = 0.01) === :ok
+        evaluate_operation(editor, CancelAssistantTurnOperation(a))
+        put!(release, nothing)
+        @test _mvp_wait_idle!(a) === :idle
+        last_turn = collect(a.conversation.turns)[end]
+        @test last_turn.stop_reason === :cancelled
+        form = only(part.content for part in collect(last_turn.parts) if part.content isa EvaluatorForm)
+        @test form.output == "waited"
+        @test !occursin("Done.", format_conversation(a.conversation))
+    end
+end
+
 # Alt+Return and the prose submit have the same guard as Return: a user turn in
 # the middle of a streamed turn would come between a tool call and its result.
 function _mvp_test_evaluate_while_streaming()
@@ -399,9 +455,56 @@ end
 Run the Assistant MVP test suite: the four scripted scenes
 plus the reactive-thunk probe. No SDL, no network.
 """
+# The transcript of the assistant is a pane in the output of the view, and its bar
+# is a part that the view drew. A press on the thumb starts a drag that names the
+# pane through the view, and the drag comes back along that path and scrolls the
+# transcript.
+function _mvp_test_transcript_bar_drag()
+    @testset "a drag of the thumb of the transcript scrolls it" begin
+        turns = [ConversationTurn(:user, [ConversationPart("line $i")]) for i in 1:40]
+        a = Assistant(; conversation = ConversationConversation(turns), llm = FakeLlm("ok"))
+        chain = make_assistant_projection_example(; measure = _mvp_measure)
+        offer = ProjectionModule.with_exact_size(ProjectionModule.PrinterContext();
+                                                 width = Cell(Int32(600)), height = Cell(Int32(400)))
+        iomap = print_document(chain, nothing, a, offer)
+        pane = iomap.step_iomaps[1][].output.elements[1].child
+        @test pane isa WidgetModule.WidgetScrollPane
+        plain = ModifierKeys()
+        read(gesture, route = nothing) =
+            read_intent(chain, nothing, Intent(gesture, nothing, "", "", route), iomap).operation
+        names_bar(x, y) = occursin("vertical_scroll_bar",
+                                   string(strip_reference_types(compute_part_at_point(iomap, x, y))))
+        # The bar is the first point from the right edge that names it.
+        x = something(findfirst(x -> names_bar(x, 40), 599:-1:400), 0)
+        @test x > 0
+        x = 600 - x
+        # The thumb is where a press starts a drag.
+        starts(y) = (answer = read(MouseDown(:left, x, y, plain; time = 0.0));
+                     answer isa CompoundOperation && any(o -> o isa StartDragOperation, answer.operations))
+        y = something(findfirst(starts, 1:399), 0)
+        @test y > 0
+        press = read(MouseDown(:left, x, y, plain; time = 0.0))
+        start = only(o for o in press.operations if o isa StartDragOperation)
+        function apply!(answer)
+            for o in (answer isa CompoundOperation ? answer.operations : Any[answer])
+                write = o isa ReplaceViewStateOperation ? get_wrapped_operation(o) : o
+                write isa ReplaceReferencedValueOperation && write.document !== nothing &&
+                    evaluate_operation(nothing, o)
+            end
+        end
+        apply!(press)
+        @test pane.follow_end
+        # Up from the end: the transcript leaves its end and scrolls up.
+        apply!(read(DragMove(x, y - 60, plain; time = 0.0), start.path))
+        @test !pane.follow_end
+        apply!(read(DragEnd(x, y - 60, plain; time = 0.0), start.path))
+    end
+end
+
 function test_assistant_mvp()
     @testset "Assistant MVP" begin
         _mvp_test_card_fills_its_page()
+        _mvp_test_transcript_bar_drag()
         _mvp_test_reactive_thunk()
         _mvp_test_scenes()
         _mvp_test_fake_llm_dispatch()
@@ -414,6 +517,7 @@ function test_assistant_mvp()
         _mvp_test_backend_must_be_named()
         _mvp_test_submit_while_streaming()
         _mvp_test_evaluate_while_streaming()
+        _mvp_test_stop_turn()
         _mvp_test_turn_writes_on_editor_task()
         _mvp_test_markdown_tool_result()
         _mvp_test_markdown_result_table()

@@ -18,6 +18,7 @@ a fold of its own.
 """
 module ConversationModule
 
+using ..AgentModule
 using ..CellModule
 using ..CollectionModule
 using ..DocumentModule
@@ -50,6 +51,7 @@ import ..DomainModule: accepts_pasted_document, accepts_pasted_text,
 import ..FocusModule: is_selection_walk_stop
 import ..SelectionModule: has_dormant_selection
 import ..OperationModule: evaluate_operation
+import ..SerializationModule: pred_arguments, make_pred_document
 import ..ProjectionModule: get_projection_gesture_bindings
 import ..ProjectionModule: print_document, read_intent, map_reference_forward, map_reference_backward
 
@@ -59,6 +61,7 @@ export EvaluatorDocument, make_evaluator_result_text, get_evaluation_kind_label,
        ToggleEvaluatorOptionOperation,
        RecallEvaluatorFormOperation
 export ConversationDocument, make_conversation_thinking_part
+export ConversationPermissionRequest, is_permission_request_open, answer_permission_request!
 export ConversationTheme, ScaledConversationTheme
 export ConversationConversationToWidgetComposite,
        ConversationTurnToWidgetComposite,

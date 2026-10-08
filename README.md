@@ -33,10 +33,10 @@ julia> using Projectured, DataFrames, SimpleDirectMediaLayer
 julia> display_in_editor(DataFrame(n = 1:100_000, square = (1:100_000) .^ 2))
 ```
 
-> The first `display_in_editor` of a session can take a long time before the
-> window opens. Julia compiles the code of the editor the first time that it
-> runs. The next calls in the same session do not compile it again, so the
-> window opens fast.
+> The first `using` after an install compiles the packages, which takes a few
+> minutes. After that, a session loads them in a second or two, and its first
+> `display_in_editor` opens the window in about a second: each package holds
+> the compiled code of its first window.
 
 `using Projectured` loads [the kernel](ProjecturedKernel),
 [the platform](ProjecturedPlatform) and [AutoIntegration](https://github.com/projectured/AutoIntegration.jl).
@@ -115,28 +115,6 @@ So each integration is its own package, and you install only the ones that you
 add. Some users want the integrations to load by themselves, and some users
 name each package. The setting for each package lets you choose.
 
-## Faster sessions
-
-A Julia session compiles the code that it runs, and it keeps that code only
-until it ends. So each new session that shows a data frame compiles the editor
-again. [AutoPrecompile](https://github.com/projectured/AutoPrecompile.jl) keeps that code for the next session:
-
-```
-pkg> add AutoPrecompile
-
-julia> using AutoPrecompile, Projectured, DataFrames, SimpleDirectMediaLayer
-julia> display_in_editor(DataFrame(n = 1:100_000, square = (1:100_000) .^ 2))
-```
-
-Each package of ProjecturEd ships the precompile statements that its
-recordings compiled, in its folder `precompile/`. In the first session,
-AutoPrecompile builds one package image for the packages that you loaded, in
-the background, and logs that it does. A later session that loads the same
-packages loads that image, so it compiles almost nothing of what the
-recordings hold. The images take at most 2048 MB together; the entry
-`disk_limit_mb` of the table `[AutoPrecompile]` in `LocalPreferences.toml`
-sets another limit.
-
 ## Which repository is which
 
 | Repository | What it is |
@@ -145,7 +123,8 @@ sets another limit.
 | [Projectured.jl](https://github.com/projectured/Projectured.jl) | This repository: the released packages, which the release writes from projectured-julia. |
 | [ProjecturedRegistry](https://github.com/projectured/ProjecturedRegistry) | The Julia registry that names each version of these packages. |
 | [AutoIntegration.jl](https://github.com/projectured/AutoIntegration.jl) | The package that loads an installed package when its triggers are loaded. `Projectured` depends on it. |
-| [AutoPrecompile.jl](https://github.com/projectured/AutoPrecompile.jl) | The package that builds one package image for the packages that a session loads, from recorded precompile statements. |
+| [AgentClientProtocol.jl](https://github.com/projectured/AgentClientProtocol.jl) | The Agent Client Protocol (ACP) in Julia, for a client and for an agent. `ProjecturedACP` depends on it. |
+| [ClaudeCodeACP.jl](https://github.com/projectured/ClaudeCodeACP.jl) | An ACP agent that runs Claude Code. `ProjecturedACP` runs it as its built-in agent. |
 
 ## The packages
 
@@ -156,6 +135,7 @@ sets another limit.
 | [ProjecturedPlatform](ProjecturedPlatform) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedPlatform.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedPlatform.yml) | What every kind of data shares: text, syntax, graphics, layout, widgets, panes, windows, the generic views and the application. |
 | [ProjecturedIntegrations](ProjecturedIntegrations) |  | Installs every integration of ProjecturEd and the packages that they join, and loads each integration when the package that it joins is loaded. |
 | [ProjecturedAll](ProjecturedAll) |  | Every package of ProjecturEd that needs no package of another author, with all their names in one namespace. It loads much more than most programs need. |
+| [ProjecturedACP](ProjecturedACP) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedACP.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedACP.yml) | Lets the AI assistant of ProjecturEd talk to an agent that runs its own loop, such as Claude, over the Agent Client Protocol (ACP). |
 | [ProjecturedAnthropic](ProjecturedAnthropic) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedAnthropic.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedAnthropic.yml) | Runs the AI assistant of ProjecturEd with a Claude model, through the Anthropic API. |
 | [ProjecturedBook](ProjecturedBook) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedBook.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedBook.yml) | Structured prose: a book, its chapters, paragraphs of styled text, lists and pictures. |
 | [ProjecturedChart](ProjecturedChart) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedChart.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedChart.yml) | Line, scatter, bar, histogram and strip charts as documents, drawn with no plotting library. |
@@ -175,6 +155,7 @@ sets another limit.
 | [ProjecturedOllama](ProjecturedOllama) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedOllama.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedOllama.yml) | Runs the AI assistant of ProjecturEd with a model on your own machine, through a local Ollama server. |
 | [ProjecturedOpenRouter](ProjecturedOpenRouter) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedOpenRouter.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedOpenRouter.yml) | A relevance model for the search of the AI assistant, which asks a model through the API of OpenRouter. |
 | [ProjecturedPDF](ProjecturedPDF) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedPDF.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedPDF.yml) | Writes a view as a vector PDF with selectable text, with no third-party package. |
+| [ProjecturedPivot](ProjecturedPivot) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedPivot.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedPivot.yml) | A table cut into parts by the values of its dimensions, as nested row and column headers, with a view of each part in its cell. |
 | [ProjecturedProcess](ProjecturedProcess) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedProcess.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedProcess.yml) | An algorithm as a structured flowchart: steps, decisions, loops and jumps. It runs with breakpoints and a live trace. |
 | [ProjecturedRST](ProjecturedRST) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedRST.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedRST.yml) | reStructuredText as a tree of documents, with a parser and two presentations. |
 | [ProjecturedSDL](ProjecturedSDL) | [![tests](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedSDL.yml/badge.svg)](https://github.com/projectured/Projectured.jl/actions/workflows/ProjecturedSDL.yml) | Shows the editor in native windows with SDL2, and writes images of a view. |

@@ -1,6 +1,6 @@
 name = "ProjecturedKernel"
 uuid = "a3e3499a-684d-4df9-a0d6-de2d1797b1f3"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [compat]

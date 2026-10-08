@@ -51,7 +51,7 @@ of 120 pixels, a row of buttons 32 pixels high. A layout takes it as
 
 # Example
 
-    open_pane!(editor, VerticalLayout(Any[WidgetLabel("Runs"), WidgetLabel("Results")];
+    open_pane!(VerticalLayout(Any[WidgetLabel("Runs"), WidgetLabel("Results")];
                                       gap = 4, child_width = Fixed(200));
                title = "Fixed width")
 
@@ -70,7 +70,7 @@ button beside a field that fills the rest. It is the default of every layout.
 
 # Example
 
-    open_pane!(editor, GridLayout(Any[WidgetLabel("Filter"), WidgetText(""; width = 120)], 2;
+    open_pane!(GridLayout(Any[WidgetLabel("Filter"), WidgetText(""; width = 120)], 2;
                                   column_policies = [Content, Fill]);
                title = "Form")
 
@@ -89,10 +89,10 @@ takes two thirds beside a plot that takes one. `Fill` is `Relative(1.0)`.
 
 # Example
 
-    root = get_project_result_directory(editor)
+    root = get_project_result_directory()
     table = make_result_table(get_simulation_scalar_results(root))
     plot = make_result_plot(get_simulation_vector_results(root))
-    open_pane!(editor, GridLayout(Any[table, plot], 2; column_policies = [Relative(2.0), Relative(1.0)]); title = "Two thirds")
+    open_pane!(GridLayout(Any[table, plot], 2; column_policies = [Relative(2.0), Relative(1.0)]); title = "Two thirds")
 
 See also `Fill`, `Fixed` and `Content`.
 """
@@ -109,9 +109,9 @@ that takes the whole pane, two plots that share a row equally.
 
 # Example
 
-    root = get_project_result_directory(editor)
+    root = get_project_result_directory()
     table = make_result_table(get_simulation_scalar_results(root))
-    open_pane!(editor, VerticalLayout(Any[table]; child_width = Fill); title = "Wide")
+    open_pane!(VerticalLayout(Any[table]; child_width = Fill); title = "Wide")
 
 See also `Relative`, `Fixed` and `Content`.
 """
@@ -136,7 +136,7 @@ Use it to put widgets or documents side by side in one row, from left to right.
 
 # Example
 
-    open_pane!(editor, HorizontalLayout([table, plot]; gap = 8); title = "Side by side")
+    open_pane!(HorizontalLayout([table, plot]; gap = 8); title = "Side by side")
 
 See also `VerticalLayout`, `GridLayout`.
 """
@@ -183,7 +183,7 @@ bottom.
 
 # Example
 
-    open_pane!(editor, VerticalLayout([plot, table]; gap = 8); title = "Stacked")
+    open_pane!(VerticalLayout([plot, table]; gap = 8); title = "Stacked")
 
 See also `HorizontalLayout`, `GridLayout`.
 """
@@ -232,7 +232,7 @@ and `columns` says how many in a row.
 
 # Example
 
-    open_pane!(editor, GridLayout([plot_a, plot_b, table_a, table_b], 2); title = "Overview")
+    open_pane!(GridLayout([plot_a, plot_b, table_a, table_b], 2); title = "Overview")
 
 See also `HorizontalLayout`, `VerticalLayout`, `FlowLayout`.
 
@@ -389,7 +389,7 @@ Use it to put many widgets in a row that wraps to the next line when it is full
 
 # Example
 
-    open_pane!(editor, FlowLayout(cards; max_width = 800); title = "Cards")
+    open_pane!(FlowLayout(cards; max_width = 800); title = "Cards")
 
 See also `GridLayout` for fixed columns.
 """
@@ -922,6 +922,116 @@ function _anchored_overlaps(pi, ei, pj, ej)
     wi, hi = ei[1], ei[2]
     wj, hj = ej[1], ej[2]
     xi < xj + wj && xj < xi + wi && yi < yj + hj && yj < yi + hi
+end
+
+# ── ScrollLayout ─────────────────────────────────────────────────────────────
+#
+# A center and the parts around it. On its own the layout puts the parts in a
+# grid of three columns and three rows. A scroll pane that shows a
+# `ScrollLayout` takes it apart, and gives each part a viewport of its own that
+# moves with the one offset of the pane on the axes on which the part scrolls.
+
+"""
+    ScrollLayout(; center, top, bottom, left, right,
+                 top_left, top_right, bottom_left, bottom_right)
+
+A `center` and up to four edges and four corners around it, each any document
+or `nothing`. On its own it puts its parts in three columns and three rows (see
+[`compute_scroll_layout_extents`](@ref)). In a `WidgetScrollPane` the pane moves
+the center on both axes, the top and the bottom edge left and right with it, the
+left and the right edge up and down with it, and the corners not at all, so the
+edges and the corners stay in view.
+
+The content that makes the parts makes them agree: a left edge as high as the
+center, with its rows beside the rows of the center, as a gutter stands beside
+the lines of a text.
+"""
+@document struct ScrollLayout <: LayoutDocument
+    center::Union{Document, Nothing} = nothing
+    top::Union{Document, Nothing} = nothing
+    bottom::Union{Document, Nothing} = nothing
+    left::Union{Document, Nothing} = nothing
+    right::Union{Document, Nothing} = nothing
+    top_left::Union{Document, Nothing} = nothing
+    top_right::Union{Document, Nothing} = nothing
+    bottom_left::Union{Document, Nothing} = nothing
+    bottom_right::Union{Document, Nothing} = nothing
+end
+
+"""
+    SCROLL_LAYOUT_PARTS
+
+The names of the parts of a `ScrollLayout`, row by row from the top left. Its
+projection keeps and draws the parts in this order, and the functions of the
+layout name a part by its index here.
+"""
+const SCROLL_LAYOUT_PARTS = (:top_left, :top, :top_right, :left, :center, :right,
+                             :bottom_left, :bottom, :bottom_right)
+
+"""
+    get_scroll_layout_cell(index) -> (column, row)
+
+The column (1 left, 2 middle, 3 right) and the row (1 top, 2 middle, 3 bottom) of
+the part at `index` of [`SCROLL_LAYOUT_PARTS`](@ref).
+"""
+get_scroll_layout_cell(index::Integer) = (mod1(index, 3), div(index - 1, 3) + 1)
+
+"""
+    compute_scroll_layout_extents(sizes) -> (widths, heights)
+
+The widths of the three columns and the heights of the three rows of a
+`ScrollLayout`. `sizes` holds one `(w, h)` for each part of
+[`SCROLL_LAYOUT_PARTS`](@ref), in that order, or `nothing` for a part that is
+absent. A column is as wide as its widest part, and a row as high as its highest
+part. Pure, so it is tested on numbers alone.
+"""
+function compute_scroll_layout_extents(sizes)
+    widths = [0, 0, 0]
+    heights = [0, 0, 0]
+    for (index, size) in enumerate(sizes)
+        size === nothing && continue
+        column, row = get_scroll_layout_cell(index)
+        widths[column] = max(widths[column], Int(size[1]))
+        heights[row] = max(heights[row], Int(size[2]))
+    end
+    (Tuple(widths), Tuple(heights))
+end
+
+"""
+    get_scroll_layout_place(index, widths, heights) -> (x, y)
+
+Where the part at `index` of `SCROLL_LAYOUT_PARTS` stands in the layout that puts
+the parts together: the left edge of its column and the top edge of its row.
+"""
+function get_scroll_layout_place(index::Integer, widths, heights)
+    column, row = get_scroll_layout_cell(index)
+    (sum(widths[1:column-1]; init = 0), sum(heights[1:row-1]; init = 0))
+end
+
+"""
+    find_scroll_layout_part_at(x, y, widths, heights) -> index | nothing
+
+The index in `SCROLL_LAYOUT_PARTS` of the cell of the three columns and the three
+rows that holds the point `(x, y)` of the layout that puts the parts together, or
+`nothing` for a point outside it. The cell can be the place of a part that is
+absent. The layout, the scroll pane and the content that made the parts find a
+part by this one function, so they agree.
+"""
+function find_scroll_layout_part_at(x::Integer, y::Integer, widths, heights)
+    column = _find_scroll_band(x, widths)
+    row = _find_scroll_band(y, heights)
+    (column === nothing || row === nothing) ? nothing : (row - 1) * 3 + column
+end
+
+# The band of `extents` that holds `v`, or `nothing` when `v` is outside them all.
+function _find_scroll_band(v::Integer, extents)
+    v < 0 && return nothing
+    edge = 0
+    for (k, extent) in enumerate(extents)
+        edge += extent
+        v < edge && return k
+    end
+    nothing
 end
 
 # ── ConstraintLayout ─────────────────────────────────────────────────────────

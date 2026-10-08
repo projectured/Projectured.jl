@@ -38,11 +38,13 @@ using ..ProjectionModule
 using ..ReferenceModule
 using ..SelectionModule
 using ..FocusModule
+using ..NaturalModule
 using ..GraphicsModule
 using ..GestureHelpModule
 using ..GestureLogModule
 using ..HelpModule
 using ..StyleModule
+using ..ToolModule
 using ..TooltipModule
 using ..WidgetModule
 using ..AssistantModule

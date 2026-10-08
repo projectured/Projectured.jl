@@ -1,6 +1,6 @@
 name = "ProjecturedSDLTest"
 uuid = "906fdffd-1f7c-40f9-9b74-85400d88fea6"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -15,12 +15,12 @@ ProjecturedSDL = "f0002b97-94ba-416c-b93c-86cdc095626f"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
-ProjecturedConsole = "0.1.0"
-ProjecturedJSON = "0.1.0"
-ProjecturedJSONExample = "0.1.0"
-ProjecturedKernel = "0.1.0"
-ProjecturedKernelTest = "0.1.0"
-ProjecturedPDF = "0.1.0"
-ProjecturedPlatform = "0.1.0"
-ProjecturedSDL = "0.1.0"
+ProjecturedConsole = "0.1.1"
+ProjecturedJSON = "0.1.1"
+ProjecturedJSONExample = "0.1.1"
+ProjecturedKernel = "0.1.1"
+ProjecturedKernelTest = "0.1.1"
+ProjecturedPDF = "0.1.1"
+ProjecturedPlatform = "0.2.0"
+ProjecturedSDL = "0.1.1"
 julia = "1.12"

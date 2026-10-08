@@ -1,4 +1,4 @@
-function make_navigator_projection_example(; measure=FontFileMeasure())
+function make_files_projection_example(; measure=FontFileMeasure())
     ChainingProjection(
         RecursiveProjection(WorkspaceToFileSystem()),
         RecursiveProjection(FileSystemToSyntax()),

@@ -269,15 +269,19 @@ function _find_child_point(entry, x::Int, y::Int; bounded::Bool)
 end
 
 # A move of the pointer: the child that the pointer leaves, then the child it
-# is on (`route` finds that one), each re-rooted into its own `children[i]`.
-function _read_layout_move(document, entries::Vector, evt::MouseMove, route)
+# is on (`route` finds that one), each re-rooted into its own place. By default
+# the place of entry `i` is `children[i]`, and the child that the pointer was on
+# is the one that the mouse target of the layout names; `reroot` and `old` say
+# otherwise for a layout that names its children by fields.
+function _read_layout_move(document, entries::Vector, evt::MouseMove, route;
+                           reroot = _reroot_into_child,
+                           old = _get_target_layout_slot(document, length(entries)))
     new = route(entries, evt)
-    new_answer = new === nothing ? nothing : _reroot_into_child(document, new...)
-    old = _get_target_layout_slot(document, length(entries))
+    new_answer = new === nothing ? nothing : reroot(document, new...)
     (old == 0 || (new !== nothing && new[2] == old) || entries[old] === nothing) &&
         return new_answer
     old_answer = read_child_leave(last(entries[old]), evt, get_child_frame_offset(entries[old])...)
-    join_move_answers(_reroot_into_child(document, old_answer, old), new_answer)
+    join_move_answers(reroot(document, old_answer, old), new_answer)
 end
 
 _route_scroll(entries, evt::MouseScroll) =
@@ -568,13 +572,14 @@ drawn children of `canvas`, the container's own canvas, and the slot holds a
 wrapper: a canvas that places the child (`_wrap_child`), or a viewport that clips
 it (`clip_child_to_slot`), one `content` step deeper. The node of the slot says
 which, so this reads that one node of the output. `drawn` is the test that the
-container's own build used. The mirror of `_backward_descend`.
+container's own build used. An entry that is `nothing`, a part that is absent,
+takes no slot. The mirror of `_backward_descend`.
 """
 function make_slot_reference(canvas, entries::Vector, index::Int, inner::Reference;
                              drawn = output -> output isa GraphicsDocument)
     slot = 0
     for i in 1:index
-        child = entries[i][3]
+        child = entries[i] === nothing ? nothing : entries[i][3]
         if child === nothing || !drawn(child.output)
             i == index && return nothing
             continue
@@ -639,6 +644,7 @@ _children_forward(iomap::_LayoutChildrenIoMap, reference,
 function _drawn_child_index(entries::Vector, slot::Integer, drawn)
     seen = 0
     for i in 1:length(entries)
+        entries[i] === nothing && continue
         iomap = entries[i][3]
         iomap === nothing && continue
         drawn(iomap.output) || continue
@@ -662,8 +668,12 @@ a child's area but not on anything inside it should answer.
 caller splices this into an `@reference` literal, and that literal refuses a path
 with an untyped node — which is how a container that answered an untyped path
 showed up: not as a wrong selection, but as a throw one projection higher.
+
+`steps_of(index)` names the steps from the document to the child of an entry; by
+default the entries are the `children` in order.
 """
-function _backward_descend(document, entries::Vector, field::String, reference, drawn)
+function _backward_descend(document, entries::Vector, reference, drawn;
+                           steps_of = _get_layout_child_steps)
     reference isa ConcreteReference || return nothing
     head = reference.head
     (head isa FieldReferenceStep && head.name == "elements") || return nothing
@@ -691,9 +701,11 @@ function _backward_descend(document, entries::Vector, field::String, reference, 
         answer === nothing && return nothing
         inside = answer
     end
-    annotate_reference_types(document,
-        ConcreteReference(FieldReferenceStep(field),
-            ConcreteReference(RangeReferenceStep(index - 1, index), inside)))
+    path = inside
+    for step in Base.reverse(steps_of(index))
+        path = ConcreteReference(step, path)
+    end
+    annotate_reference_types(document, path)
 end
 
 """
@@ -706,7 +718,7 @@ function _children_backward(iomap::_LayoutChildrenIoMap, reference,
     entries = getfield(iomap, :child_iomaps)[]::Vector
     point = find_reference_point(reference)
     point === nothing || return _point_backward(iomap.input, entries, point; topmost_first)
-    _backward_descend(iomap.input, entries, "children", reference, drawn)
+    _backward_descend(iomap.input, entries, reference, drawn)
 end
 
 """
@@ -1351,7 +1363,7 @@ function _gl_extents_cell(count_cell, policy_of, content::Vector{Cell},
                           gap::Cell, avail; reads = k -> !_gl_offers(policy_of(k)),
                           extra_gap = c -> 0)
     Cell(Computation(function ()
-        c = count_cell[]
+        c = count_cell[]::Int
         c <= 0 && return Int[]
         c = min(c, length(content))
         mins = Vector{Int}(undef, c); maxs = Vector{Int}(undef, c)
@@ -1495,11 +1507,11 @@ function print_document(p::GridLayoutToGraphicsCanvas,
     function gap_above(r::Int)
         gaps = doc.row_gaps
         gap = gaps isa AbstractVector && 2 <= r <= length(gaps) ? gaps[r] : nothing
-        gap === nothing ? Int(vgap[]) : Int(gap)
+        gap === nothing ? Int(vgap[])::Int : Int(gap)::Int
     end
     row_extents = _gl_extents_cell(row_count_cell, policy_of_row, content_row_h, vgap, avail_h;
                                    reads = k -> !offers_to_row_cells(k),
-                                   extra_gap = c -> sum((gap_above(r) - Int(vgap[]) for r in 2:c); init = 0))
+                                   extra_gap = c -> sum((gap_above(r) - Int(vgap[])::Int for r in 2:c); init = 0))
     col_w = Cell[_gl_extent_cell(col_extents, k) for k in 1:n]
     row_h = Cell[_gl_extent_cell(row_extents, k) for k in 1:n]
 
@@ -2375,6 +2387,173 @@ end
 read_intent(::AnchoredLayoutToGraphicsCanvas, iomap::ChildrenIoMap, evt) =
     _route_stack_event(iomap, evt)
 
+# ── ScrollLayout ───────────────────────────────────────────────────────────
+#
+# A `ScrollLayout` in a place that does not scroll it: the parts in three columns
+# and three rows, with no offset. A scroll pane takes the same document apart in
+# its own printer. The IoMap keeps one entry for each part of
+# `SCROLL_LAYOUT_PARTS`, in that order, and `nothing` for a part that is absent,
+# so the index of an entry names its part.
+
+"""
+    ScrollLayoutToGraphicsCanvas()
+
+Project a [`ScrollLayout`](@ref) to one canvas: each part at its place in three
+columns and three rows ([`compute_scroll_layout_extents`](@ref)). The edges and
+the corners get a free range. The center gets the range of the layout less the
+widths of the left and the right column and the heights of the top and the
+bottom row, so a text in the center wraps at what is left; the edges never read
+the range of the center, so the cells make no cycle.
+"""
+struct ScrollLayoutToGraphicsCanvas <: Projection end
+
+# The index of the part named `name` in `SCROLL_LAYOUT_PARTS`, or `nothing`.
+_find_scroll_part_index(name::AbstractString) =
+    findfirst(part -> String(part) == name, SCROLL_LAYOUT_PARTS)
+
+# The steps from a `ScrollLayout` to its part at `index`.
+_get_scroll_part_steps(index::Integer) = (FieldReferenceStep(String(SCROLL_LAYOUT_PARTS[index])),)
+
+# The index of the part that `path` begins with, or 0.
+function _get_scroll_part_slot(path)
+    path isa ConcreteReference || return 0
+    head = path.head
+    head isa FieldReferenceStep || return 0
+    something(_find_scroll_part_index(head.name), 0)
+end
+
+_reroot_into_scroll_part(document, op, index::Integer) =
+    _annotate_operation(document, reroot_operation(op, _get_scroll_part_steps(index)))
+
+# The `(w, h)` of each part, or `nothing` for a part that is absent.
+_get_scroll_part_sizes(iomaps::Vector) =
+    Any[iomap === nothing ? nothing : (_child_w(iomap), _child_h(iomap)) for iomap in iomaps]
+
+# The size of each part along the axes on which it decides a band around the
+# center, and 0 along the others: a part beside the center decides the width of
+# its column and not the height of the middle row, a part above or below it the
+# height of its row and not the width of the middle column, and the center
+# decides no band. So the extents of the bands around the center never read an
+# extent that can follow the center, such as the height of a gutter beside lines
+# that wrap.
+function _get_scroll_part_band_sizes(iomaps::Vector)
+    sizes = Any[]
+    for (index, iomap) in enumerate(iomaps)
+        if iomap === nothing
+            push!(sizes, nothing)
+            continue
+        end
+        column, row = get_scroll_layout_cell(index)
+        push!(sizes, (column == 2 ? 0 : _child_w(iomap), row == 2 ? 0 : _child_h(iomap)))
+    end
+    sizes
+end
+
+function _scroll_layout_build(recursion, doc::ScrollLayout, ctx)
+    iomaps = Any[nothing for _ in SCROLL_LAYOUT_PARTS]
+    center_index = _find_scroll_part_index("center")
+    for (index, part) in enumerate(SCROLL_LAYOUT_PARTS)
+        index == center_index && continue
+        child = getproperty(doc, part)
+        child === nothing && continue
+        cctx = with_exact_size(make_child_context(ctx, doc, _get_scroll_part_steps(index)...);
+                               width = nothing, height = nothing)
+        iomaps[index] = _recurse_child(recursion, child, cctx)
+    end
+    # The extents of the bands around the center, which the range of the center
+    # is reduced by. The center can take its width from its range, so they read
+    # no extent that can follow the center (`_get_scroll_part_band_sizes`).
+    around = Cell(@computation compute_scroll_layout_extents(_get_scroll_part_band_sizes(iomaps)))
+    center = doc.center
+    if center !== nothing
+        inset_w = Cell(@computation (e = around[]; Int32(e[1][1] + e[1][3])))
+        inset_h = Cell(@computation (e = around[]; Int32(e[2][1] + e[2][3])))
+        cctx = with_inner_size(make_child_context(ctx, doc, _get_scroll_part_steps(center_index)...);
+                               width = inset_w, height = inset_h)
+        iomaps[center_index] = _recurse_child(recursion, center, cctx)
+    end
+    extents = Cell(@computation compute_scroll_layout_extents(_get_scroll_part_sizes(iomaps)))
+    entries = Any[]
+    wrapped = Any[]
+    for (index, iomap) in enumerate(iomaps)
+        if iomap === nothing
+            push!(entries, nothing)
+            continue
+        end
+        x = Cell(@computation Int32(get_scroll_layout_place(index, extents[]...)[1]))
+        y = Cell(@computation Int32(get_scroll_layout_place(index, extents[]...)[2]))
+        push!(entries, (x, y, iomap))
+        output = iomap.output
+        output isa GraphicsDocument && push!(wrapped, _wrap_child(output, x, y))
+    end
+    (wrapped = wrapped, entries = entries, extents = extents)
+end
+
+function print_document(p::ScrollLayoutToGraphicsCanvas, recursion, doc::ScrollLayout, ctx)
+    build = Cell(@computation _scroll_layout_build(recursion, doc, ctx))
+    outer = GraphicsCanvas(Cell(Int32(0)), Cell(Int32(0)),
+                           Cell(@computation Int32(sum(build[].extents[][1]))),
+                           Cell(@computation Int32(sum(build[].extents[][2]))),
+                           CellVector(@computation build[].wrapped),
+                           layout_none, true, Cell(nothing))
+    ChildrenIoMap(p, doc, outer, Cell(@computation build[].entries))
+end
+
+# `part/...` maps to the node that draws the part, followed by what the part's own
+# mapper answers.
+function map_reference_forward(::ScrollLayoutToGraphicsCanvas, iomap, reference)
+    reference isa Reference || return nothing
+    reference = strip_reference_types(reference)
+    reference isa EmptyReference && return EmptyReference()
+    reference isa ConcreteReference || return nothing
+    index = _get_scroll_part_slot(reference)
+    index == 0 && return nothing
+    entries = getfield(iomap, :child_iomaps)[]::Vector
+    entries[index] === nothing && return nothing
+    child = entries[index][3]
+    child.output isa GraphicsDocument || return nothing
+    inner = map_reference_forward(child.projection, child, reference.tail)
+    inner === nothing && return nothing
+    make_slot_reference(iomap.output, entries, index, inner)
+end
+
+# A path into the canvas, or a point of it, maps to the part that draws it.
+function map_reference_backward(::ScrollLayoutToGraphicsCanvas, iomap, reference)
+    entries = getfield(iomap, :child_iomaps)[]::Vector
+    point = find_reference_point(reference)
+    point === nothing ||
+        return _point_backward(iomap.input, entries, point; steps_of = _get_scroll_part_steps)
+    _backward_descend(iomap.input, entries, reference, output -> output isa GraphicsDocument;
+                      steps_of = _get_scroll_part_steps)
+end
+
+# A pointer event goes to the part at its point, and an event with no point to
+# the part that the selection of the layout names. The answer is re-rooted into
+# the field of the part.
+function read_intent(::ScrollLayoutToGraphicsCanvas, iomap::ChildrenIoMap, evt)
+    entries = getfield(iomap, :child_iomaps)[]::Vector
+    document = iomap.input
+    evt isa MouseMove &&
+        return _read_layout_move(document, entries, evt, _route_move;
+                                 reroot = _reroot_into_scroll_part,
+                                 old = _get_scroll_part_slot(get_mouse_target(document)))
+    result = @gesture_case evt begin
+        MouseClick  => _route_click(entries, evt)
+        MouseDwell  => _route_dwell(entries, evt)
+        MouseScroll => _route_scroll(entries, evt)
+        MouseDown   => _route_downup(entries, evt)
+        MouseUp     => _route_downup(entries, evt)
+        _ => begin
+            slot = _get_scroll_part_slot(getfield(document, :selection)[])
+            slot == 0 ? nothing : _forward_layout_event_slot(entries, evt, slot)
+        end
+    end
+    result === nothing && return read_container_gesture(nothing, evt, document)
+    op, index = result
+    read_container_gesture(_reroot_into_scroll_part(document, op, index), evt, document;
+                           steps = _get_scroll_part_steps(index))
+end
+
 # ── Factory ────────────────────────────────────────────────────────────────
 
 """
@@ -2398,6 +2577,7 @@ function LayoutToGraphics(; theme::Union{GraphicsTheme, ScaledGraphicsTheme, Not
         LayoutConstraint => LayoutConstraintToGraphicsCanvas(),
         ConstraintLayout => ConstraintLayoutToGraphicsCanvas(; graphics_style),
         AnchoredLayout   => AnchoredLayoutToGraphicsCanvas(; graphics_style),
+        ScrollLayout     => ScrollLayoutToGraphicsCanvas(),
     )
 end
 
@@ -2407,7 +2587,8 @@ end
 const _PlacingLayoutProjection = Union{
     HorizontalLayoutToGraphicsCanvas, VerticalLayoutToGraphicsCanvas,
     GridLayoutToGraphicsCanvas, FlowLayoutToGraphicsCanvas, StackLayoutToGraphicsCanvas,
-    ConstraintLayoutToGraphicsCanvas, AnchoredLayoutToGraphicsCanvas}
+    ConstraintLayoutToGraphicsCanvas, AnchoredLayoutToGraphicsCanvas,
+    ScrollLayoutToGraphicsCanvas}
 
 ProjectionModule.read_child_by_route(::_PlacingLayoutProjection, recursion, change::Intent,
                                      iomap, child) =

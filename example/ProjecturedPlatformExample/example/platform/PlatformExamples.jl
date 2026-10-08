@@ -50,6 +50,9 @@ const nested_object_to_widget_example = Example("nested_object_to_widget", make_
 const object_field_form_example = Example("object_field_form", make_object_field_form_document_example, make_object_field_form_projection_example)
 const object_field_syntax_example = Example("object_field_syntax", make_object_field_document_example, make_object_field_syntax_projection_example)
 const line_numbering_example = Example("line_numbering", make_line_numbering_document_example, make_line_numbering_projection_example)
+const text_gutter_example    = Example("text_gutter",    make_text_gutter_document_example,    make_text_gutter_projection_example)
+const text_folding_example   = Example("text_folding",   make_text_folding_document_example,   make_text_folding_projection_example)
+const syntax_folding_example = Example("syntax_folding", make_syntax_folding_document_example, make_syntax_folding_projection_example)
 const word_wrapping_example  = Example("word_wrapping",  make_word_wrapping_document_example,  make_word_wrapping_projection_example)
 const text_filtering_example = Example("text_filtering", make_text_filtering_document_example, make_text_filtering_projection_example)
 const text_highlighting_example = Example("text_highlighting", make_text_highlighting_document_example, make_text_highlighting_projection_example)
@@ -81,7 +84,8 @@ const widget_separator_example   = Example("widget_separator",   make_widget_sep
 const widget_card_example        = Example("widget_card",        make_widget_card_document_example,        make_widget_projection_example)
 const widget_collapsible_card_example = Example("widget_collapsible_card", make_widget_collapsible_card_document_example, make_widget_projection_example)
 const widget_switch_example      = Example("widget_switch",      make_widget_switch_document_example,      make_widget_projection_example)
-const widget_progress_example    = Example("widget_progress",    make_widget_progress_document_example,    make_widget_projection_example)
+const widget_progress_bar_example = Example("widget_progress_bar", make_widget_progress_bar_document_example, make_widget_projection_example)
+const widget_progress_ring_example = Example("widget_progress_ring", make_widget_progress_ring_document_example, make_widget_projection_example)
 const widget_slider_example      = Example("widget_slider",      make_widget_slider_document_example,      make_widget_projection_example)
 const widget_radio_group_example = Example("widget_radio_group", make_widget_radio_group_document_example, make_widget_projection_example)
 const widget_avatar_example      = Example("widget_avatar",      make_widget_avatar_document_example,      make_widget_projection_example)
@@ -125,6 +129,9 @@ const platform_examples = Example[
     object_field_form_example,
     object_field_syntax_example,
     line_numbering_example,
+    text_gutter_example,
+    text_folding_example,
+    syntax_folding_example,
     word_wrapping_example,
     text_filtering_example,
     text_highlighting_example,
@@ -156,7 +163,8 @@ const platform_examples = Example[
     widget_card_example,
     widget_collapsible_card_example,
     widget_switch_example,
-    widget_progress_example,
+    widget_progress_bar_example,
+    widget_progress_ring_example,
     widget_slider_example,
     widget_radio_group_example,
     widget_avatar_example,
@@ -236,7 +244,8 @@ const platform_atomic_documents = AtomicDocument[
     AtomicDocument(:widget, "menu",                  make_widget_menu_document_example),
     AtomicDocument(:widget, "menu_item",             make_widget_menu_item_document_example),
     AtomicDocument(:widget, "option",                make_widget_option_document_example),
-    AtomicDocument(:widget, "progress",              make_widget_progress_document_example),
+    AtomicDocument(:widget, "progress_bar",          make_widget_progress_bar_document_example),
+    AtomicDocument(:widget, "progress_ring",         make_widget_progress_ring_document_example),
     AtomicDocument(:widget, "radio_group",           make_widget_radio_group_document_example),
     AtomicDocument(:widget, "scroll_bar",            make_widget_scroll_bar_document_example),
     AtomicDocument(:widget, "scroll_pane",           make_widget_scroll_pane_document_example),
@@ -285,4 +294,8 @@ const platform_atomic_documents = AtomicDocument[
     AtomicDocument(:collection, "vector",    make_collection_document_example),
     AtomicDocument(:collection, "table",     make_cell_table_document_example),
     AtomicDocument(:collection, "list_node", make_list_node_document_example),
+    # A navigator, the copy of its address in the path view, and its list of choices.
+    AtomicDocument(:navigator, "navigator",   make_navigator_document_example),
+    AtomicDocument(:navigator, "address",     make_navigator_address_document_example),
+    AtomicDocument(:navigator, "choice_list", make_navigator_choice_list_document_example),
 ]

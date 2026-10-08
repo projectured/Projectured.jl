@@ -36,7 +36,7 @@ shows as its text.
 
 # Example
 
-    open_pane!(editor, WidgetLabel("The delay of every run"); title = "Note")
+    open_pane!(WidgetLabel("The delay of every run"); title = "Note")
 
 See also `WidgetText`, which a person edits, `WidgetBadge` for one status word,
 and `WidgetAlert` for a message with a title.
@@ -108,7 +108,7 @@ or beside a button that uses it.
 
 # Example
 
-    open_pane!(editor, WidgetText("name =~ *delay*"; width = 240); title = "Filter")
+    open_pane!(WidgetText("name =~ *delay*"; width = 240); title = "Filter")
 
 `width` is a floor and not a size: the box is at least that many pixels wide and
 grows with what is typed into it. It is `0` by default, which is the box that
@@ -208,7 +208,7 @@ bound of `nothing` is no bound. `width` is a floor, as it is on `WidgetText`.
 
 # Example
 
-    open_pane!(editor, WidgetSpinBox(10; min = 1, max = 100, width = 80); title = "Runs")
+    open_pane!(WidgetSpinBox(10; min = 1, max = 100, width = 80); title = "Runs")
 
 The `validator` is a hook for typed entry; a step is always numeric.
 
@@ -255,7 +255,7 @@ hits, and Up and Down move the selection.
 
 # Example
 
-    open_pane!(editor, WidgetList(["Fifo", "TandemQueue"]; selected = 1, width = 200); title = "Configurations")
+    open_pane!(WidgetList(["Fifo", "TandemQueue"]; selected = 1, width = 200); title = "Configurations")
 
 The row under the pointer lights. The list reads that row from its mouse target,
 `items[i]`, which a move writes; the list holds no state of its own for it.
@@ -266,6 +266,11 @@ so a reader returns a `ReplaceSelectionOperation` like every other widget and an
 enclosing projection can map the reference across domains. The `selected`
 keyword is 1-based sugar (`0` = none) that builds that reference; read the
 selection back with [`get_widget_list_selected`](@ref).
+
+A list that gets a slot on the vertical axis fills it and scrolls its rows
+there, inside its border, as a table does; with no slot it is as tall as its
+rows. `scroll_position` is the offset of the rows, and `vertical_scroll_bar` and
+`horizontal_scroll_bar` are its bars, as a `WidgetScrollPane` takes them.
 
 See also `WidgetTable` for rows with columns, `WidgetSelect` for a list that
 opens on a click, and `WidgetRadioGroup` for a few choices that stay visible.
@@ -280,6 +285,9 @@ opens on a click, and `WidgetRadioGroup` for a few choices that stay visible.
     border::Inset
     padding::Inset
     style::Any
+    scroll_position::Point2D     # view state: the offset of the rows of a list that scrolls itself
+    vertical_scroll_bar::Any     # :auto, nothing, or the WidgetScrollBar of an owner
+    horizontal_scroll_bar::Any   # :auto, nothing, or the WidgetScrollBar of an owner
     tooltip::Any
 end
 
@@ -317,10 +325,13 @@ get_widget_list_selected(w::WidgetList) = _widget_element_selected(w.selection, 
 function WidgetList(items::Vector; position::Point2D=Point2D(0, 0),
                     selected::Integer=0, width::Integer=0,
                     visible::Bool=true, enabled::Bool=true,
-                    margin=nothing, border=nothing, padding=nothing, style=nothing, tooltip=nothing)
+                    margin=nothing, border=nothing, padding=nothing, style=nothing,
+                    scroll_position::Point2D=Point2D(0, 0),
+                    vertical_scroll_bar=:auto, horizontal_scroll_bar=:auto, tooltip=nothing)
     WidgetList(Cell(position), CellVector(Cell[Cell(x) for x in items]),
                Cell(Int(width)), Cell(visible), Cell(enabled),
-               Cell(margin), Cell(border), Cell(padding), Cell(style), Cell(tooltip),
+               Cell(margin), Cell(border), Cell(padding), Cell(style),
+               Cell(scroll_position), Cell(vertical_scroll_bar), Cell(horizontal_scroll_bar), Cell(tooltip),
                Cell(make_widget_list_selection(selected)))
 end
 
@@ -339,7 +350,7 @@ the box too. A form that puts its labels in a column of their own gives none.
 
 # Example
 
-    open_pane!(editor, WidgetCheckbox(true; label = "Record vectors"); title = "Option")
+    open_pane!(WidgetCheckbox(true; label = "Record vectors"); title = "Option")
 
 `enabled` (default `true`) is a shared interactivity flag alongside `visible`:
 when `false` the checkbox renders muted and its reader refuses to emit the toggle
@@ -391,8 +402,8 @@ pixels.
 
 # Example
 
-    open_pane!(editor, WidgetButton("Run again";
-                                    action = editor -> run_simulations!(select_simulations!(editor; config = "TandemQueue")));
+    open_pane!(WidgetButton("Run again";
+                                    action = editor -> run_simulations!(select_simulations!(; config = "TandemQueue")));
                title = "Runner")
 
 `action` is that command. Pass an `Action` to bind a shared one: the button
@@ -796,7 +807,7 @@ child reach the edge; a `LayoutConstraint` gives one child its own.
 
 # Example
 
-    open_pane!(editor, WidgetComposite(Any[WidgetLabel("Delay"),
+    open_pane!(WidgetComposite(Any[WidgetLabel("Delay"),
                                                           WidgetLabel("Throughput"; position = Point2D(0, 24))]);
                title = "Placed")
 
@@ -1109,8 +1120,8 @@ documents.
 
 # Example
 
-    table = make_result_table(get_simulation_scalar_results(get_project_result_directory(editor)))
-    open_pane!(editor, WidgetTitlePane("Delay", table); title = "Delay")
+    table = make_result_table(get_simulation_scalar_results(get_project_result_directory()))
+    open_pane!(WidgetTitlePane("Delay", table); title = "Delay")
 
 See also `WidgetCard`, which adds a description and a footer, and `open_pane!`,
 whose `title` names a tab.
@@ -1153,10 +1164,10 @@ two documents in tabs of their own, use `show_layout` and the panes.
 
 # Example
 
-    root = get_project_result_directory(editor)
+    root = get_project_result_directory()
     table = make_result_table(get_simulation_scalar_results(root))
     plot = make_result_plot(get_simulation_vector_results(root))
-    open_pane!(editor, WidgetSplitPane(:horizontal, Any[table, plot]; sizes = [400, 400]); title = "Split")
+    open_pane!(WidgetSplitPane(:horizontal, Any[table, plot]; sizes = [400, 400]); title = "Split")
 
 `active_splitter` and `drag_anchor` are **transient UI state** holding an
 in-progress splitter drag (see `StartSplitterDragOperation`): `active_splitter`
@@ -1226,7 +1237,7 @@ is `selector.text{k}`.
                            badges = Any[WidgetBadge("37/40"; role = :accent),
                                         WidgetBadge("2 failed"; role = :error)],
                            tooltip = "37 of 40 finished")
-    open_pane!(editor, WidgetTabbedPane(Any[WidgetTabPage(label, WidgetLabel("…"))]);
+    open_pane!(WidgetTabbedPane(Any[WidgetTabPage(label, WidgetLabel("…"))]);
                title = "Tasks")
 
 A label with a text only draws as a plain string selector draws.
@@ -1287,10 +1298,10 @@ this is for tabs inside a widget.
 
 # Example
 
-    root = get_project_result_directory(editor)
+    root = get_project_result_directory()
     table = make_result_table(get_simulation_scalar_results(root))
     plot = make_result_plot(get_simulation_vector_results(root))
-    open_pane!(editor, WidgetTabbedPane(Any[("Scalars", table), ("Vectors", plot)]); title = "Results")
+    open_pane!(WidgetTabbedPane(Any[("Scalars", table), ("Vectors", plot)]); title = "Results")
 
 Each pair is wrapped in a [`WidgetTabPage`](@ref). `closable` draws a close
 button on every tab, `new_tab` draws a new-tab button after the last one, and
@@ -1349,10 +1360,24 @@ set_cell_computation!(w::WidgetTabbedPane, f::Function) = (set_cell_computation!
 
 """
     WidgetScrollPane(content; position, size,
-                     scroll_position, follow_end, <base kwargs>)
+                     scroll_position, follow_end,
+                     vertical_scroll_bar = :auto, horizontal_scroll_bar = :auto,
+                     <base kwargs>)
 
 A viewport a person scrolls over content that is taller or wider than its
 space.
+
+The pane draws a scroll bar on each axis over the content, at the inner edge of
+its border, and the bar takes no space. Each of `vertical_scroll_bar` and
+`horizontal_scroll_bar` is `:auto`, `nothing` or a `WidgetScrollBar`:
+
+- `:auto`: the pane makes the bar from the extents of its content and its view,
+  and shows it while the content is larger than the view. A list that runs
+  along the axis has no extent, and gets no bar.
+- `nothing`: no bar on that axis. The wheel still scrolls it.
+- a `WidgetScrollBar`: the pane draws that bar at its edge while its thumb is
+  shorter than its track, and computes nothing. The maker of the bar sets its
+  `value` and `thumb_size`, and turns a write of its `value` into a scroll.
 
 Use it to show a long table or a long text inside a bounded `size`. With
 `follow_end = true` the pane keeps the end of its content in view as content is
@@ -1360,8 +1385,8 @@ added, which is what a log or a transcript wants.
 
 # Example
 
-    table = make_result_table(get_simulation_scalar_results(get_project_result_directory(editor)))
-    open_pane!(editor, WidgetScrollPane(table; size = Point2D(600, 300)); title = "Scalars")
+    table = make_result_table(get_simulation_scalar_results(get_project_result_directory()))
+    open_pane!(WidgetScrollPane(table; size = Point2D(600, 300)); title = "Scalars")
 
 With `follow_end=true` the pane sticks to the *bottom* of its content — newly
 appended content (e.g. streaming chat turns) stays in view instead of scrolling
@@ -1384,6 +1409,8 @@ See also `WidgetCard`, whose `height` bounds a body that scrolls.
     size::Point2D
     scroll_position::Point2D
     follow_end::Bool
+    vertical_scroll_bar::Any     # :auto, nothing, or the WidgetScrollBar of a maker
+    horizontal_scroll_bar::Any   # :auto, nothing, or the WidgetScrollBar of a maker
     visible::Bool
     margin::Inset
     border::Inset
@@ -1397,6 +1424,7 @@ function WidgetScrollPane(content;
                           size=nothing,
                           scroll_position::Union{Point2D,AbstractCell}=Point2D(0, 0),
                           follow_end::Union{Bool,AbstractCell}=false,
+                          vertical_scroll_bar=:auto, horizontal_scroll_bar=:auto,
                           visible::Bool=true,
                           margin=nothing, border=nothing, padding=nothing,
                           style=nothing, tooltip=nothing)
@@ -1404,6 +1432,7 @@ function WidgetScrollPane(content;
                      Cell(position), Cell(size),
                      scroll_position isa AbstractCell ? scroll_position : Cell(scroll_position),
                      follow_end isa AbstractCell ? follow_end : Cell(follow_end),
+                     Cell(vertical_scroll_bar), Cell(horizontal_scroll_bar),
                      Cell(visible), Cell(margin), Cell(border), Cell(padding),
                      Cell(style), Cell(tooltip), Cell(nothing))
 end
@@ -1460,14 +1489,26 @@ set_cell_computation!(w::WidgetTransformPane, f::Function) = (set_cell_computati
 """
     WidgetScrollBar(orientation; value, thumb_size, position, size, <base kwargs>)
 
-A scroll bar.  `orientation` is `:horizontal` or `:vertical`.
-`value` ∈ [0,1] is the current scroll position; `thumb_size` ∈ [0,1] is
-the visible-fraction represented by the thumb.
+A scroll bar. `orientation` is `:horizontal` or `:vertical`. `value`, from 0
+to 1, is the place of the view in the content, and `thumb_size`, from 0 to 1,
+is the part of the content that the view shows.
+
+A press on the track moves the value one page toward the pointer, and
+Shift and a press put the middle of the thumb under the pointer. A press on the
+thumb starts a drag that keeps the point where the pointer took the thumb;
+Escape during the drag puts back the value of the press. One page is
+`thumb_size / (1 - thumb_size)` in units of the value.
+
+A `WidgetScrollPane`, a `WidgetList`, a `WidgetTree` and a `WidgetTable` draw
+their own bars. Give one of them a bar of your own when only you know where the
+view is, as the owner of a list that the widget walks from its head: set its
+`value` and `thumb_size`, and turn a write of its `value` into a scroll.
 """
 @document struct WidgetScrollBar <: WidgetDocument
     orientation::Symbol
     value::Float64
     thumb_size::Float64
+    thumb_drag::Any      # view state: the drag of the thumb that is on, `(along, value, travel)` at the press, or nothing
     position::Point2D
     size::Point2D
     visible::Bool
@@ -1486,7 +1527,7 @@ function WidgetScrollBar(orientation::Symbol;
                          visible::Bool=true,
                          margin=nothing, border=nothing, padding=nothing,
                          style=nothing, tooltip=nothing)
-    WidgetScrollBar(Cell(orientation), Cell(value), Cell(thumb_size),
+    WidgetScrollBar(Cell(orientation), Cell(value), Cell(thumb_size), Cell(nothing),
                     Cell(position), Cell(size),
                     Cell(visible), Cell(margin), Cell(border), Cell(padding),
                     Cell(style), Cell(tooltip), Cell(nothing))
@@ -1545,7 +1586,7 @@ and the badge then follows what the function reads.
 
 # Example
 
-    open_pane!(editor, HorizontalLayout(Any[WidgetLabel("TandemQueue"),
+    open_pane!(HorizontalLayout(Any[WidgetLabel("TandemQueue"),
                                             WidgetBadge("running"),
                                             WidgetBadge("2 failed"; role = :error)]; gap = 8);
                title = "Status")
@@ -1585,7 +1626,7 @@ Use it to put a line between two groups in a column or a row. `orientation` is
 
 # Example
 
-    open_pane!(editor, VerticalLayout(Any[WidgetLabel("Runs"),
+    open_pane!(VerticalLayout(Any[WidgetLabel("Runs"),
                                           WidgetSeparator(; length = 300),
                                           WidgetLabel("Results")]; gap = 8);
                title = "Divided")
@@ -1625,8 +1666,8 @@ surface is.
 
 # Example
 
-    table = make_result_table(get_simulation_scalar_results(get_project_result_directory(editor)))
-    open_pane!(editor, WidgetCard(; title = "Delay", content = table, width = 600); title = "Delay")
+    table = make_result_table(get_simulation_scalar_results(get_project_result_directory()))
+    open_pane!(WidgetCard(; title = "Delay", content = table, width = 600); title = "Delay")
 
 `collapsed` is transient view state (like `WidgetScrollPane.scroll_position`): a
 click on the chevron of a collapsible card emits `ToggleCollapseOperation(card)`,
@@ -1731,7 +1772,7 @@ switch too. A form that puts its labels in a column of their own gives none.
 
 # Example
 
-    open_pane!(editor, WidgetSwitch(; checked = true, label = "Live update"); title = "Setting")
+    open_pane!(WidgetSwitch(; checked = true, label = "Live update"); title = "Setting")
 
 The knob snaps to its new position. `duration`, `anim_from` and `anim_t0` hold
 the state of a slide of the knob, but `WidgetSwitchToGraphicsCanvas` draws no
@@ -1765,27 +1806,29 @@ WidgetSwitch(; label = nothing, position::Point2D=Point2D(0, 0), checked::Bool=f
                  Cell(Int(duration)), Cell(0.0), Cell(NaN), Cell(gestures), Cell(tooltip))
 get_instance_gesture_bindings(w::WidgetSwitch) = w.gestures
 
-# ── WidgetProgress ──────────────────────────────────────────────────────────
+# ── WidgetProgressBar ───────────────────────────────────────────────────────
 
 """
-    WidgetProgress(value; position, width=240)
+    WidgetProgressBar(value = nothing; position, width=240)
 
 A bar filled to a share between zero and one.
 
 Use it to show how far a set of runs or a long job is. `value` is a number, a
-cell that holds one, or a function of no arguments that the bar follows; a number
-is written as the job advances. `width` is the bar's length in pixels.
+cell that holds one, a function of no arguments that the bar follows, or
+`nothing`; a number is written as the job advances. While the value is
+`nothing` the share is not known, and a quarter of the track moves from its
+start to its end once a second. `width` is the bar's length in pixels.
 
 # Example
 
-    open_pane!(editor, WidgetProgress(0.4; width = 300); title = "Progress")
+    open_pane!(WidgetProgressBar(0.4; width = 300); title = "Progress")
 
-See also `WidgetSlider`, which a person drags, and `WidgetBadge` for a state
-in one word.
+See also `WidgetProgressRing`, which shows the same value in one line of text,
+`WidgetSlider`, which a person drags, and `WidgetBadge` for a state in one word.
 """
-@document struct WidgetProgress <: WidgetDocument
+@document struct WidgetProgressBar <: WidgetDocument
     position::Point2D
-    value::Float64
+    value::Union{Nothing, Float64}
     width::Int
     visible::Bool
     margin::Inset
@@ -1794,14 +1837,57 @@ in one word.
     style::Any
     tooltip::Any
 end
+# The cell of the value of a progress widget: a share, or `nothing` when the share
+# is not known. A function that answers `nothing` gives `nothing`.
+_make_share_cell(value::Nothing) = Cell(nothing)
 _make_share_cell(value::Real) = Cell(Float64(value))
 _make_share_cell(value::Cell) = value
-_make_share_cell(value::Function) = Cell(@computation Float64(value()))
+_make_share_cell(value::Function) = Cell(@computation _convert_share(value()))
+_convert_share(value::Nothing) = nothing
+_convert_share(value::Real) = Float64(value)
 
-WidgetProgress(value::Union{Real, Cell, Function}; position::Point2D=Point2D(0, 0), width::Integer=240, visible::Bool=true,
-               margin=nothing, border=nothing, padding=nothing, style=nothing, tooltip=nothing) =
-    WidgetProgress(Cell(position), _make_share_cell(value), Cell(Int(width)), Cell(visible),
-                   Cell(margin), Cell(border), Cell(padding), Cell(style), Cell(tooltip), Cell(nothing))
+WidgetProgressBar(value::Union{Nothing, Real, Cell, Function} = nothing; position::Point2D=Point2D(0, 0),
+                  width::Integer=240, visible::Bool=true,
+                  margin=nothing, border=nothing, padding=nothing, style=nothing, tooltip=nothing) =
+    WidgetProgressBar(Cell(position), _make_share_cell(value), Cell(Int(width)), Cell(visible),
+                      Cell(margin), Cell(border), Cell(padding), Cell(style), Cell(tooltip), Cell(nothing))
+
+# ── WidgetProgressRing ──────────────────────────────────────────────────────
+
+"""
+    WidgetProgressRing(value = nothing; position)
+
+A ring filled clockwise from the top to a share between zero and one, as tall as
+a line of text.
+
+Use it where a bar does not fit: in a cell of a table, beside a label, in a row
+of a list. `value` is a number, a cell that holds one, a function of no
+arguments that the ring follows, or `nothing`. While the value is `nothing` the
+share is not known, and a quarter of the ring turns around it once a second. The
+ring takes no width: its diameter is one line of the text of the theme.
+
+# Example
+
+    open_pane!(WidgetProgressRing(0.4); title = "Progress")
+
+See also `WidgetProgressBar`, which shows the same value as a bar.
+"""
+@document struct WidgetProgressRing <: WidgetDocument
+    position::Point2D
+    value::Union{Nothing, Float64}
+    visible::Bool
+    margin::Inset
+    border::Inset
+    padding::Inset
+    style::Any
+    tooltip::Any
+end
+
+WidgetProgressRing(value::Union{Nothing, Real, Cell, Function} = nothing; position::Point2D=Point2D(0, 0),
+                   visible::Bool=true, margin=nothing, border=nothing, padding=nothing, style=nothing,
+                   tooltip=nothing) =
+    WidgetProgressRing(Cell(position), _make_share_cell(value), Cell(visible),
+                       Cell(margin), Cell(border), Cell(padding), Cell(style), Cell(tooltip), Cell(nothing))
 
 # ── WidgetSlider ────────────────────────────────────────────────────────────
 
@@ -1815,9 +1901,9 @@ the runs. `value` is the share, and `width` is the track's length in pixels.
 
 # Example
 
-    open_pane!(editor, WidgetSlider(0.5; width = 300); title = "Threshold")
+    open_pane!(WidgetSlider(0.5; width = 300); title = "Threshold")
 
-See also `WidgetSpinBox` for a number chosen by steps, and `WidgetProgress` for
+See also `WidgetSpinBox` for a number chosen by steps, and `WidgetProgressBar` for
 a share that is only shown.
 """
 @document struct WidgetSlider <: WidgetDocument
@@ -1892,7 +1978,7 @@ select the next or the previous option.
 
 # Example
 
-    open_pane!(editor, WidgetRadioGroup(["Scalars", "Vectors", "Histograms"]; selected = 2); title = "Kind")
+    open_pane!(WidgetRadioGroup(["Scalars", "Vectors", "Histograms"]; selected = 2); title = "Kind")
 
 See also `WidgetToggleGroup` for the same choice in one row, and `WidgetSelect`
 for many choices that open on a click.
@@ -1954,7 +2040,7 @@ fault; `:default` is calm.
 
 # Example
 
-    open_pane!(editor, WidgetAlert("Run failed"; description = "TandemQueue run 3 stopped with an error.", variant = :destructive, width = 400);
+    open_pane!(WidgetAlert("Run failed"; description = "TandemQueue run 3 stopped with an error.", variant = :destructive, width = 400);
                title = "Alert")
 
 See also `WidgetBadge` for one word of status, and `WidgetLabel` for a plain
@@ -2016,7 +2102,7 @@ color near the background shows too. A swatch takes no input.
 
 # Example
 
-    open_pane!(editor, WidgetSwatch(color_solarized_blue); title = "Color")
+    open_pane!(WidgetSwatch(color_solarized_blue); title = "Color")
 """
 @document struct WidgetSwatch <: WidgetDocument
     position::Point2D
@@ -2091,9 +2177,10 @@ WidgetToggle(content; position::Point2D=Point2D(0, 0), pressed::Bool=false, visi
 # ── WidgetToggleGroup ───────────────────────────────────────────────────────
 
 """
-    WidgetToggleGroup(options; position, selected=1, values=nothing, target=nothing, field="selected")
+    WidgetToggleGroup(options; position, selected=1, values=nothing, target=nothing, field="selected",
+                      look=:row)
 
-A row of segments where one is pressed.
+A row of segments where one is pressed, or one segment that steps through them.
 
 Use it to let a person pick one of a few short choices in one row: scalars,
 vectors, histograms. `options` is what each segment says, and `selected` is the
@@ -2101,7 +2188,7 @@ vectors, histograms. `options` is what each segment says, and `selected` is the
 
 # Example
 
-    open_pane!(editor, WidgetToggleGroup(["Scalars", "Vectors", "Histograms"]; selected = 1); title = "Kind")
+    open_pane!(WidgetToggleGroup(["Scalars", "Vectors", "Histograms"]; selected = 1); title = "Kind")
 
 `values` is what each one **means** — the value written when it is picked — and
 with none the value is the segment's index.
@@ -2112,6 +2199,14 @@ own state and tells nobody. A target is how a segmented control says what it is
 *for*: [`WidgetOption`](@ref) carries its `select` the same way, so a pick names
 what it changes instead of leaving an enclosing projection to work out which
 control was pressed.
+
+`look` chooses how the group looks and what a press does. `:row`, the default,
+shows every option, and a press picks the segment under it. `:step` shows the
+selected option alone, as wide as the widest option, so the control does not
+move when the option changes: a press picks the next option, a press with Shift
+the one before, and so do Return and Space, with no modifier, while the group
+has the focus. The last option steps to the first. It takes less room for a
+choice that a person seldom changes.
 
 See also `WidgetRadioGroup` for the same choice in a column, and `WidgetSwitch`
 for on or off.
@@ -2129,16 +2224,18 @@ for on or off.
     values::Any        # what each option means, or nothing = its index
     target::Any        # what a pick writes to, or nothing = this group
     field::String      # which field of the target a pick writes
+    look::Symbol       # :row, every option, or :step, the selected one, which a press steps
     tooltip::Any
 end
 WidgetToggleGroup(options::Vector; position::Point2D=Point2D(0, 0), selected::Integer=1, visible::Bool=true,
                   enabled::Bool=true, margin=nothing, border=nothing, padding=nothing, style=nothing,
                   values=nothing, target=nothing,
-                  field::AbstractString="selected", tooltip=nothing) =
+                  field::AbstractString="selected", look::Symbol=:row, tooltip=nothing) =
     WidgetToggleGroup(Cell(position), CellVector(Cell[Cell(o) for o in options]),
                       Cell(Int(selected)), Cell(visible), Cell(enabled),
                       Cell(margin), Cell(border), Cell(padding), Cell(style),
-                      Cell(values), Cell(target), Cell(String(field)), Cell(tooltip), Cell(nothing))
+                      Cell(values), Cell(target), Cell(String(field)), Cell(look), Cell(tooltip),
+                      Cell(nothing))
 
 """
     resolve_toggle_group_write(w, segment) -> (document, field, value)
@@ -2166,7 +2263,7 @@ lists what can be picked.
 
 # Example
 
-    open_pane!(editor, WidgetSelect("TandemQueue"; options = ["Fifo", "TandemQueue"], width = 200); title = "Configuration")
+    open_pane!(WidgetSelect("TandemQueue"; options = ["Fifo", "TandemQueue"], width = 200); title = "Configuration")
 
 A click on the box opens a dropdown of those options as a floating popup window
 (see `WidgetSelectToGraphicsCanvas`'s reader and [`WidgetOption`]). Picking an
@@ -2246,7 +2343,7 @@ types a line break.
 
 # Example
 
-    open_pane!(editor, WidgetTextarea("The delay grows with the load.\\nThe queue is the bottleneck."; width = 400, rows = 4); title = "Note")
+    open_pane!(WidgetTextarea("The delay grows with the load.\\nThe queue is the bottleneck."; width = 400, rows = 4); title = "Note")
 
 See also `WidgetText` for one line, and `WidgetLabel` for text that is only
 read.
@@ -2300,10 +2397,10 @@ the open one.
 
 # Example
 
-    root = get_project_result_directory(editor)
+    root = get_project_result_directory()
     table = make_result_table(get_simulation_scalar_results(root))
     plot = make_result_plot(get_simulation_vector_results(root))
-    open_pane!(editor, WidgetAccordion(Any[("Scalars", table), ("Vectors", plot)]; expanded = 2, width = 600); title = "Results")
+    open_pane!(WidgetAccordion(Any[("Scalars", table), ("Vectors", plot)]; expanded = 2, width = 600); title = "Results")
 
 Each item is wrapped in a [`WidgetAccordionItem`](@ref).
 
@@ -2331,28 +2428,80 @@ WidgetAccordion(items::Vector; position::Point2D=Point2D(0, 0), expanded::Intege
 # ── WidgetTable ─────────────────────────────────────────────────────────────
 
 """
-    WidgetTableColumns()
+    WidgetTableRow(; policy = nothing)
 
-The value of the field `columns` of a [`WidgetTable`](@ref): what the path
-`columns[c]` of a whole column steps through. It holds nothing, and `[c]` gives
-the column `c`.
+The data of a whole row of a table, what the path `rows[r]` names, apart from
+its header `row_headers[r]` and from its cells `cells[r][c]`. `policy` is the
+`SizePolicy` of the row, or `nothing` for the `row_policy` of the table. Each
+field is a cell, so a write of one field reaches only what reads it.
 """
-struct WidgetTableColumns end
-
-Base.getindex(::WidgetTableColumns, c::Integer) = WidgetTableColumn(c)
-
-"""
-    WidgetTableColumn(index)
-
-A whole column of a table, what the path `columns[c]` names, apart from its
-header `column_headers[c]`. It holds its number.
-"""
-struct WidgetTableColumn
-    index::Int
+@document struct WidgetTableRow
+    policy::Any
 end
 
+WidgetTableRow(; policy = nothing) = WidgetTableRow(Cell(policy), Cell(nothing))
+
 """
-    WidgetTable(; position, column_headers, rows, column_count, row_headers, ...)
+    WidgetTableColumn(; policy = nothing, align = nothing, cell_policy = nothing)
+
+The data of a whole column of a table, what the path `columns[c]` names, apart
+from its header `column_headers[c]` and from its cells: `policy`, the
+`SizePolicy` of the column, or `nothing` for the `column_policy` of the table;
+`align`, where a cell sits in it, `:left`, `:center` or `:right`, or `nothing`
+for `:left`; and `cell_policy`, `:clip` or `:wrap`, or `nothing` for the
+`cell_policy` of the table. Each field is a cell: the drag of the edge of a
+header writes `columns[c].policy`, and nothing that reads only the alignment
+computes again.
+"""
+@document struct WidgetTableColumn
+    policy::Any
+    align::Any
+    cell_policy::Any
+end
+
+WidgetTableColumn(; policy = nothing, align = nothing, cell_policy = nothing) =
+    WidgetTableColumn(Cell(policy), Cell(align), Cell(cell_policy), Cell(nothing))
+
+"""
+    WidgetTableRows(count = nothing)
+    WidgetTableColumns(count = nothing)
+
+The value of the field `rows` or `columns` of a [`WidgetTable`](@ref) that a
+caller gave no data for: it holds the count of the rows or of the columns, or
+`nothing` for a list with no end, and `[k]` gives a `WidgetTableRow` or a
+`WidgetTableColumn` with the defaults of the table. It keeps the one of each
+number that a path reached, so a path meets the same document each time.
+"""
+struct WidgetTableRows
+    count::Union{Nothing,Int}
+    reached::Dict{Int,WidgetTableRow}
+end
+
+struct WidgetTableColumns
+    count::Union{Nothing,Int}
+    reached::Dict{Int,WidgetTableColumn}
+end
+
+WidgetTableRows(count::Union{Nothing,Integer} = nothing) =
+    WidgetTableRows(count === nothing ? nothing : Int(count), Dict{Int,WidgetTableRow}())
+WidgetTableColumns(count::Union{Nothing,Integer} = nothing) =
+    WidgetTableColumns(count === nothing ? nothing : Int(count), Dict{Int,WidgetTableColumn}())
+
+function Base.getindex(rows::WidgetTableRows, r::Integer)
+    (rows.count === nothing || 1 <= r <= rows.count) || throw(BoundsError(rows, r))
+    get!(WidgetTableRow, rows.reached, Int(r))
+end
+
+function Base.getindex(columns::WidgetTableColumns, c::Integer)
+    (columns.count === nothing || 1 <= c <= columns.count) || throw(BoundsError(columns, c))
+    get!(WidgetTableColumn, columns.reached, Int(c))
+end
+
+Base.show(io::IO, rows::WidgetTableRows) = print(io, "WidgetTableRows(", rows.count, ")")
+Base.show(io::IO, columns::WidgetTableColumns) = print(io, "WidgetTableColumns(", columns.count, ")")
+
+"""
+    WidgetTable(; position, column_headers, cells, rows, columns, row_headers, ...)
     WidgetTable(headers::Vector, rows::Vector; position)
 
 A grid of cells with optional column headers and row headers.
@@ -2367,7 +2516,7 @@ widget.
 
 # Example
 
-    open_pane!(editor, WidgetTable(["name", "age"], [["Ada", 36], ["Bob", 41]]); title = "People")
+    open_pane!(WidgetTable(["name", "age"], [["Ada", 36], ["Bob", 41]]); title = "People")
 
 The single table abstraction. A grid of **document cells** (each cell is a
 `Document`, recursed through the shared recursion — so a cell can be a
@@ -2384,38 +2533,64 @@ that the grids report ("layout is just layout").
 - `column_headers::CellVector` — optional top strip; each entry a `Document` (or
   `nothing`). Empty vector ⇒ no column-header strip.
 - `row_headers::CellVector` — optional left strip; each entry a `Document` (or
-  `nothing`). Empty vector ⇒ no row-header strip. When `rows` is a list, a
+  `nothing`). Empty vector ⇒ no row-header strip. When `cells` is a list, a
   `ListNode` of headers that moves in step with it: its head is the header of
   the head row.
+- A header that is a `CellVector` has levels: one label for each level, the
+  outer level first, and every header of the row or of the column has the same
+  count of levels. Two neighbours whose labels agree on the first levels share
+  them, and the table draws such a run as one header: a run of columns spans
+  them, and a run of rows shows its label in its first row and in the row at the
+  top of the cells. The last level never merges. `column_headers[c][l]` and
+  `row_headers[r][l]` name a label and its run; a press on a run of an outer
+  level selects the label of its first column or row, and the table lights the
+  run. A `corner` that is a `CellVector` names the levels of the row headers.
+  Levels need a table that scrolls its own parts and whose columns are a vector.
 - `corner` — `nothing`, or the `Document` drawn where the header row and the
   header column meet. A corner makes the table a table of a list, whose rows
   are a list or, at first, an empty vector. The header column is at least as
   wide as the corner, and the header row at least as tall.
-- `rows` — the body: a `CellVector` of rows, or a `ListNode` whose values are
-  rows; a row is a `CellVector` of `Document` cells either way. A list is drawn
-  one row at a time as a viewport reaches it, and `rows[i]` counts from the
-  list's head — the head is row 1, and a row reached through `prev` has an
+- `cells` — the body: a `CellVector` of rows of cells, or a `ListNode` whose
+  values are rows of cells; a row of cells is a `CellVector` of `Document`
+  cells, or a `ListNode` of them in a table whose columns are a list. A list is
+  drawn one row at a time as a viewport reaches it, and `cells[i]` counts from
+  the list's head — the head is row 1, and a row reached through `prev` has an
   index of zero or less.
-- `columns` — a [`WidgetTableColumns`](@ref), which holds nothing: what the path
-  `columns[c]` of a whole column steps through.
+- `cell_order` — `:row_major`, the default, where the body holds rows of cells
+  and a cell is `cells[r][c]`, or `:column_major`, where the body holds columns
+  of cells, the same way, and a cell is `cells[c][r]`. Each direction can be a
+  list on its own, whatever the order; the order only says which index is the
+  outer one. A column-major body has a row where a column of a vector has one,
+  so a shorter column is empty at its end; a list of columns has the rows of
+  its head column. Its rows move their head as a list of rows does only when
+  each column is a list.
+- `rows` — the data of the rows: a vector of [`WidgetTableRow`](@ref), or a
+  [`WidgetTableRows`](@ref) that holds their count when a caller gave none. The
+  path `rows[r]` of a whole row steps through it.
+- `columns` — the data of the columns: a vector of
+  [`WidgetTableColumn`](@ref), a `ListNode` of them beside a list of column
+  headers, or a [`WidgetTableColumns`](@ref) that holds their count when a
+  caller gave none. The path `columns[c]` of a whole column steps through it,
+  and the count of the columns is its length or its count.
 
 The paths of a table are its field names: `rows[r]` is a row, `columns[c]` a
-column, `rows[r][c]` a cell, `column_headers[c]` the header of a column and
-`row_headers[r]` the header of a row, each a part of its own. A press on a
-column header selects its column and a press on a row header its row; a press
-in the content of a header goes to the header.
-- `column_count::Int` — number of columns.
+column, `cells[r][c]` a cell (`cells[c][r]` in a column-major table),
+`column_headers[c]` the header of a column and `row_headers[r]` the header of a
+row, each a part of its own, `column_headers` the header row, `row_headers` the
+header column, and `corner` the corner. A plain press goes to the content of a
+part first; one that the content declines selects its row or its column: a
+cell its row, a row header its row, a column header its column, and the corner
+the table. An Alt+press selects the part itself.
 - `border_width::Int` — the width of the outer frame and the grid lines. The
   padding inside a cell is the projection's `cell_padding`, from the theme.
+- `column_policy`, `row_policy` — the `SizePolicy` of a column and of a row
+  whose data names none.
 - `cell_policy::Symbol` — what a cell does with text wider than its column,
   when the column was given a width: `:clip` draws one line and cuts it at the
-  column's edge, `:wrap` breaks the lines there and the row grows. A column
-  that is its content has no edge to cut at, and the policy does nothing there.
-- `column_cell_policies` — `Vector{Symbol}`, the body columns whose cell policy
-  differs from the table's; a column past its end takes the table's.
-- `column_align` — `Vector{Symbol}`, where a cell sits in its body column:
-  `:left`, `:center` or `:right`; a column past its end is `:left`. A header
-  cell sits as the cells of its column do.
+  column's edge, `:wrap` breaks the lines there and the row grows, for a column
+  whose data names none. A column that is its content has no edge to cut at,
+  and the policy does nothing there. A header cell sits as the cells of its
+  column do.
 - `visible::Bool` — standard Document field; `selection` is macro-injected.
 - `margin`, `border`, `padding` — the box around the frame and the grid, each
   `nothing` or an `Inset`; `nothing` takes the projection's default (transparent,
@@ -2429,6 +2604,12 @@ in the content of a header goes to the header.
   on, as `(column, x, width)`, the column and the point and the width at the
   press, or `nothing`. A left press within 3 pixels of that edge starts it, and
   each move gives the column a width ([`SetTableColumnWidthOperation`](@ref)).
+- `vertical_scroll_bar`, `horizontal_scroll_bar` — the bars of the cells, as a
+  `WidgetScrollPane` takes them: `:auto`, the default, a bar that the table makes
+  from the extents of its cells; `nothing`, no bar; or a `WidgetScrollBar` of an
+  owner that knows where a list of rows is. The vertical bar starts under the
+  header row, and the horizontal bar to the right of the header column. On an
+  axis whose parts are a list, `:auto` shows no bar.
 - `open_cells` — the cells that the owner of the table holds open, a person's
   edit there that is not committed yet, as `(row = k, column = c, reason)` in the
   numbers of the paths of the table; `reason` is why the last commit of the cell
@@ -2452,17 +2633,14 @@ See also `make_result_table` and `WidgetList` for one column.
     column_headers::CellVector   # of Document (or nothing) — optional top strip
     row_headers::CellVector      # of Document (or nothing) — optional left strip; a ListNode beside a list of rows
     corner::Any                  # Document or nothing — where the header row and the header column meet
-    rows::Any                    # CellVector of rows, or a ListNode of them; a row is a CellVector of Document cells
-    columns::Any                 # WidgetTableColumns: what the path `columns[c]` of a whole column steps through
-    column_count::Int
+    cells::Any                   # CellVector of rows of cells, or a ListNode of them; a row is a CellVector of Document cells
+    cell_order::Symbol           # :row_major (cells[r][c]) or :column_major (cells[c][r])
+    rows::Any                    # the data of the rows: a vector of WidgetTableRow, or a WidgetTableRows
+    columns::Any                 # the data of the columns: a vector or a ListNode of WidgetTableColumn, or a WidgetTableColumns
     border_width::Int
-    column_policy::Any           # SizePolicy — what every body column is
-    row_policy::Any              # SizePolicy — what every body row is
-    column_policies::Any         # Vector{SizePolicy} — the body columns that differ
-    row_policies::Any            # Vector{SizePolicy} — the body rows that differ
-    cell_policy::Symbol          # :clip | :wrap — what every body column's cells do
-    column_cell_policies::Any    # Vector{Symbol} — the body columns that differ
-    column_align::Any            # Vector{Symbol} — :left, :center or :right for each body column
+    column_policy::Any           # SizePolicy — a body column whose data names none
+    row_policy::Any              # SizePolicy — a body row whose data names none
+    cell_policy::Symbol          # :clip | :wrap — the cells of a body column whose data names none
     visible::Bool
     margin::Inset
     border::Inset
@@ -2471,6 +2649,8 @@ See also `make_result_table` and `WidgetList` for one column.
     scroll_position::Point2D     # view state: the one offset of the parts of a table that scrolls itself
     top_row::Int                 # view state: the row at the top of a list of rows, counted from its head
     column_drag::Any             # view state: the drag of the edge of a column that is on, or nothing
+    vertical_scroll_bar::Any     # :auto, nothing, or the WidgetScrollBar of an owner, beside the cells
+    horizontal_scroll_bar::Any   # :auto, nothing, or the WidgetScrollBar of an owner, under the cells
     open_cells::Any              # the cells that an owner holds open, as `(row, column, reason)`, or `nothing`
     tooltip::Any
 end
@@ -2496,102 +2676,143 @@ _table_cell_doc(v)           = WidgetLabel(string(v))
 
 # Wrap one body row (a Vector of values or Documents) into a CellVector of cells.
 _table_row(r) = CellVector(Cell[Cell(_table_cell_doc(c)) for c in r])
+# A column of a column-major body that is a list stays the list.
+_table_row(r::ListNode) = r
 
-# The body of a table: a vector of rows becomes a collection of rows, and a list
-# of rows stays the list, which the table draws one row at a time.
-_table_rows(rows::Vector) = CellVector(Cell[Cell(_table_row(r)) for r in rows])
-_table_rows(rows::ListNode) = Cell(rows)
+# The body of a table: a vector of rows of cells becomes a collection of them,
+# and a list stays the list, which the table draws one row at a time.
+_table_cells(cells::Vector) = CellVector(Cell[Cell(_table_row(r)) for r in cells])
+_table_cells(cells::ListNode) = Cell(cells)
 
 """
-    WidgetTable(; position, column_headers, rows, column_count, row_headers=Any[],
-                corner=nothing, border_width=1, visible=true,
-                column_policy=Content, row_policy=Content,
-                column_policies=Any[], row_policies=Any[],
-                cell_policy=:clip, column_cell_policies=Symbol[], column_align=Symbol[],
+    WidgetTable(; position, column_headers, cells, cell_order=:row_major, rows=nothing, columns=nothing,
+                row_headers=Any[], corner=nothing, border_width=1, visible=true,
+                column_policy=Content, row_policy=Content, cell_policy=:clip,
                 scroll_position=Point2D(0, 0))
 
 Document-cell constructor. `column_headers` and `row_headers` are `Vector`s of
 `Document`/`nothing`, and a table has no row headers unless it is given some.
-`rows` is a `Vector` of rows, each a `Vector` of `Document`/value cells, or a
-`ListNode` of rows.
+`cells` is a `Vector` of rows, each a `Vector` of `Document`/value cells, or a
+`ListNode` of rows; with `cell_order = :column_major` it holds columns the same
+way, and a cell is `cells[c][r]`. `rows` is a `Vector` of
+[`WidgetTableRow`](@ref) and `columns` a `Vector` of
+[`WidgetTableColumn`](@ref), the data of the rows and of
+the columns, or `nothing`: then the table counts the rows of `cells`, and the
+columns of `column_headers` or else of the widest row.
 
 **A table whose rows are a list** is drawn one row at a time as a viewport
 reaches it, with no count and no end it has to have. Each node's value is a row,
 which [`make_widget_table_row`](@ref) builds from a vector of values or
 documents. Every column must be given a width — `Fixed`, or a weight — and the
-rows are `Fixed` or `Content`. Its `row_headers` are a `ListNode` too, which
-moves in step with `rows`, and then every row is `Fixed`: the header column is
-as wide as `corner` and as the header of the head row. When
-`column_headers` is a `ListNode` too, the columns are a list as well: the
-cells of every row are a `ListNode` anchored at the same column, and so is
-`column_align` when it names each column; every column is `column_policy`,
-which must be `Fixed`, and at least as wide as its header, and every row is
-`Fixed`. Such a table fills
-the height that it is offered and scrolls its own parts there: the header row
-holds still above the rows, and `scroll_position` is the offset of both.
-`top_row` is the row at the top of the cells, counted from the head of the
-list, which the table writes as it scrolls. When that row is far from the head,
-the table moves the head of `rows` to it, so the rows that it builds stay near
-the head.
+rows are `Fixed` or `Content`, all alike, so such a table takes no `rows`. Its
+`row_headers` are a `ListNode` too, which moves in step with `cells`, and then
+every row is `Fixed`: the header column is as wide as `corner` and as the header
+of the head row. When `column_headers` is a `ListNode` too, the columns are a
+list as well: the cells of every row are a `ListNode` anchored at the same
+column, and so is `columns` when it holds data; every column is at least as wide
+as its header, and every row is `Fixed`. Such a table fills the height that it
+is offered and scrolls its own parts there: the header row holds still above
+the rows, and `scroll_position` is the offset of both. `top_row` is the row at
+the top of the cells, counted from the head of the list, which the table writes
+as it scrolls. When that row is far from the head, the table moves the head of
+`cells` to it, so the rows that it builds stay near the head.
 
 **A body column and a body row take a `SizePolicy`**, the way a `GridLayout`'s
-do: `column_policy` / `row_policy` say what every one is and the two vectors name
-the ones that differ. A table whose columns are a list takes `column_policies`
-as a list beside its headers, as it takes `column_align`: a value that is a
-`Fixed` gives that column its width, and `nothing` leaves the column at
-`column_policy` and at least as wide as its header. Both default to `Content`, which is what a table has always
-been. A header strip is always `Content` — it is as wide, or as tall, as the
-labels in it — so the policies below are the BODY's and the table shifts them
-over the strip itself.
+do: `column_policy` / `row_policy` say what every one is, and the `policy` of a
+column or a row in `columns` or `rows` names one that differs. In a table whose
+columns are a list, a column whose `policy` is `nothing` is at least as wide as
+its header. Both default to `Content`, which is what a table has always been. A
+header strip is always `Content` — it is as wide, or as tall, as the labels in
+it — so the policies are the BODY's and the table shifts them over the strip
+itself.
 
 **A cell of a column that was given a width clips or wraps**, by `cell_policy`
-for every column and `column_cell_policies` for the ones that differ. A table
-is a data table until someone says otherwise, so the default is `:clip`: one
-line, cut at the column's edge.
+for every column and the `cell_policy` of a column for one that differs. A
+table is a data table until someone says otherwise, so the default is `:clip`:
+one line, cut at the column's edge.
 
-**A cell sits at the left of its column** unless `column_align` names `:center`
-or `:right` for that column, as a `GridLayout`'s `column_align` does.
+**A cell sits at the left of its column** unless the `align` of the column is
+`:center` or `:right`, as a `GridLayout`'s `column_align` says.
 """
 function WidgetTable(; position::Point2D=Point2D(0, 0), column_headers::Union{Vector,ListNode},
-                     rows::Union{Vector,ListNode}, column_count::Integer,
+                     cells::Union{Vector,ListNode}, cell_order::Symbol=:row_major, rows=nothing, columns=nothing,
                      row_headers::Union{Vector,ListNode}=Any[], corner=nothing,
                      border_width::Integer=1, visible::Bool=true,
                      column_policy::SizePolicy=Content, row_policy::SizePolicy=Content,
-                     column_policies=Any[], row_policies=Any[],
-                     cell_policy::Symbol=:clip, column_cell_policies=Symbol[],
-                     column_align=Symbol[], scroll_position::Point2D=Point2D(0, 0),
-                     open_cells=nothing,
+                     cell_policy::Symbol=:clip, scroll_position::Point2D=Point2D(0, 0),
+                     vertical_scroll_bar=:auto, horizontal_scroll_bar=:auto, open_cells=nothing,
                      margin=nothing, border=nothing, padding=nothing, style=nothing, tooltip=nothing)
     cell_policy in (:clip, :wrap) ||
         error("WidgetTable: cell_policy is :clip or :wrap, not ", repr(cell_policy))
-    if !(column_align isa ListNode)
-        for align in column_align
-            align in (:left, :center, :right) ||
-                error("WidgetTable: a column aligns :left, :center or :right, not ", repr(align))
+    cell_order in (:row_major, :column_major) ||
+        error("WidgetTable: cell_order is :row_major or :column_major, not ", repr(cell_order))
+    (rows === nothing || (rows isa Vector && all(row -> row isa WidgetTableRow, rows))) ||
+        error("WidgetTable: `rows` takes the data of the rows, a vector of WidgetTableRow; ",
+              "the cells of a table go in `cells`")
+    (columns === nothing || ((columns isa Vector || columns isa ListNode) &&
+                             (columns isa ListNode || all(column -> column isa WidgetTableColumn, columns)))) ||
+        error("WidgetTable: `columns` takes the data of the columns, a vector or a list of WidgetTableColumn")
+    if columns isa Vector
+        for column in columns
+            column.align in (nothing, :left, :center, :right) ||
+                error("WidgetTable: a column aligns :left, :center or :right, not ", repr(column.align))
+            column.cell_policy in (nothing, :clip, :wrap) ||
+                error("WidgetTable: a column's cell_policy is :clip or :wrap, not ", repr(column.cell_policy))
         end
     end
-    rows isa ListNode && row_headers isa Vector && !isempty(row_headers) &&
-        error("WidgetTable: a table whose rows are a list takes its row headers as a list")
-    rows isa Vector && row_headers isa ListNode &&
-        error("WidgetTable: a table whose rows are a vector takes its row headers as a vector")
-    rows isa Vector && !isempty(rows) && corner !== nothing &&
-        error("WidgetTable: a table with a corner draws its rows as a list, and takes a list ",
-              "of rows or an empty vector")
-    WidgetTable(Cell(position),
-                column_headers isa ListNode ? Cell(column_headers) :
-                    CellVector(Cell[Cell(_table_cell_doc(h)) for h in column_headers]),
+    if cell_order === :row_major
+        cells isa ListNode && row_headers isa Vector && !isempty(row_headers) &&
+            error("WidgetTable: a table whose rows are a list takes its row headers as a list")
+        cells isa Vector && row_headers isa ListNode &&
+            error("WidgetTable: a table whose rows are a vector takes its row headers as a vector")
+        cells isa Vector && !isempty(cells) && corner !== nothing &&
+            error("WidgetTable: a table with a corner draws its rows as a list, and takes a list ",
+                  "of rows or an empty vector")
+    end
+    headers = column_headers isa ListNode ? Cell(column_headers) :
+              CellVector(Cell[Cell(_table_cell_doc(h)) for h in column_headers])
+    body = _table_cells(cells)
+    column_major = cell_order === :column_major
+    WidgetTable(Cell(position), headers,
                 row_headers isa ListNode ? Cell(row_headers) :
                     CellVector(Cell[Cell(_table_cell_doc(h)) for h in row_headers]),
-                Cell(_table_cell_doc(corner)),
-                _table_rows(rows), Cell(WidgetTableColumns()),
-                Cell(Int(column_count)), Cell(Int(border_width)),
-                Cell(column_policy), Cell(row_policy),
-                Cell(column_policies isa ListNode ? column_policies : collect(Any, column_policies)),
-                Cell(collect(Any, row_policies)),
-                Cell(cell_policy), Cell(collect(Symbol, column_cell_policies)),
-                Cell(column_align isa ListNode ? column_align : collect(Symbol, column_align)),
+                Cell(_table_cell_doc(corner)), body, Cell(cell_order),
+                _make_table_rows(rows, body, column_major), _make_table_columns(columns, headers, body, column_major),
+                Cell(Int(border_width)), Cell(column_policy), Cell(row_policy), Cell(cell_policy),
                 Cell(visible), Cell(margin), Cell(border), Cell(padding), Cell(style),
-                Cell(scroll_position), Cell(1), Cell(nothing), Cell(open_cells === nothing ? nothing : collect(Any, open_cells)), Cell(tooltip))
+                Cell(scroll_position), Cell(1), Cell(nothing),
+                Cell(vertical_scroll_bar), Cell(horizontal_scroll_bar),
+                Cell(open_cells === nothing ? nothing : collect(Any, open_cells)), Cell(tooltip))
+end
+
+# The field `rows` of a table: the data that a caller gave, or the count of the
+# rows of `body`, which follows it: its length, or in a column-major table the
+# length of its longest column; a list has no count.
+_make_table_rows(rows::Vector, body, column_major::Bool) = Cell(collect(Any, rows))
+function _make_table_rows(::Nothing, body, column_major::Bool)
+    body isa CellVector || return Cell(WidgetTableRows(nothing))
+    column_major || return Cell(@computation WidgetTableRows(length(body)))
+    Cell(@computation any(column -> column isa ListNode, body) ? WidgetTableRows(nothing) :
+                      WidgetTableRows(maximum((length(column) for column in body); init = 0)))
+end
+
+# The field `columns` of a table: the data that a caller gave, or the count of
+# the columns, of `headers` or else of the widest row of `body`, or of the
+# columns of a column-major body, which follows them; a list has no count.
+_make_table_columns(columns::Vector, headers, body, column_major::Bool) = Cell(collect(Any, columns))
+_make_table_columns(columns::ListNode, headers, body, column_major::Bool) = Cell(columns)
+function _make_table_columns(::Nothing, headers, body, column_major::Bool)
+    headers isa CellVector || return Cell(WidgetTableColumns(nothing))
+    Cell(@computation begin
+        n = length(headers)
+        if n > 0
+            WidgetTableColumns(n)
+        elseif !(body isa CellVector)
+            WidgetTableColumns(column_major ? nothing : 0)
+        else
+            WidgetTableColumns(column_major ? length(body) : maximum((length(row) for row in body); init = 0))
+        end
+    end)
 end
 
 """
@@ -2605,29 +2826,44 @@ of a list-backed table holds.
 make_widget_table_row(values) = _table_row(values)
 
 # String convenience shim: headers become a column-header strip, rows become the
-# body, columns inferred from the header count (or the widest row). A value that
+# body, and `columns` is the data of the columns, or `nothing`, which counts them
+# from the headers (or the widest row). A value that
 # is not a document becomes a `WidgetLabel` through `_table_cell_doc`, and a
 # function a live one.
 function WidgetTable(headers::Vector, rows::Vector; position::Point2D=Point2D(0, 0),
-                     border_width::Integer=1, visible::Bool=true,
+                     columns=nothing, border_width::Integer=1, visible::Bool=true,
                      column_policy::SizePolicy=Content, row_policy::SizePolicy=Content,
-                     column_policies=Any[], row_policies=Any[],
-                     cell_policy::Symbol=:clip, column_cell_policies=Symbol[],
-                     column_align=Symbol[],
+                     cell_policy::Symbol=:clip,
                      margin=nothing, border=nothing, padding=nothing, style=nothing,
                      tooltip=nothing)
-    column_count = isempty(headers) ?
-        (isempty(rows) ? 0 : maximum(length(r) for r in rows)) : length(headers)
     WidgetTable(; position = position, column_headers = collect(Any, headers), row_headers = Any[],
-                rows = collect(Any, rows), column_count = column_count,
+                cells = collect(Any, rows), columns,
                 border_width=border_width, visible=visible,
-                column_policy=column_policy, row_policy=row_policy,
-                column_policies=column_policies, row_policies=row_policies,
-                cell_policy=cell_policy, column_cell_policies=column_cell_policies,
-                column_align=column_align,
+                column_policy=column_policy, row_policy=row_policy, cell_policy=cell_policy,
                 margin=margin, border=border, padding=padding, style=style,
                 tooltip=tooltip)
 end
+
+"""
+    get_widget_table_column_count(table) -> Int or nothing
+
+The count of the columns of `table`: the length of its data of the columns, or
+the count that its `WidgetTableColumns` holds; `nothing` for columns that are a
+list.
+"""
+get_widget_table_column_count(table::WidgetTable) = _count_table_columns(table.columns)
+_count_table_columns(columns::WidgetTableColumns) = columns.count
+_count_table_columns(columns::AbstractVector) = length(columns)
+_count_table_columns(columns) = nothing
+
+"""
+    get_widget_table_row_count(table) -> Int or nothing
+
+The count of the rows of `table`: the length of its data of the rows, or the
+count that its `WidgetTableRows` holds; `nothing` for rows that are a list.
+"""
+get_widget_table_row_count(table::WidgetTable) =
+    (rows = table.rows; rows isa WidgetTableRows ? rows.count : length(rows))
 
 # What the REPL and the answer of a tool show of a table: how many rows and
 # columns it has, and its column headers, which say what it holds. The rows are
@@ -2636,13 +2872,16 @@ end
 # table is as it was.
 function Base.show(io::IO, ::MIME"text/plain", table::WidgetTable)
     headers = [_describe_table_header(header) for header in table.column_headers]
-    columns = isempty(headers) ? table.column_count : length(headers)
-    print(io, "WidgetTable(", _count_table_rows(table.rows), " rows × ", columns, " columns")
+    columns = isempty(headers) ? something(get_widget_table_column_count(table), 0) : length(headers)
+    rows = table.cell_order === :column_major ?
+        something(_count_table_rows(table.rows), 0) : _count_table_rows(table.cells)
+    print(io, "WidgetTable(", rows, " rows × ", columns, " columns")
     isempty(headers) || print(io, ": ", join(headers, ", "))
     print(io, ")")
 end
 
 _count_table_rows(rows) = try count(_ -> true, rows) catch; 0 end
+_count_table_rows(rows::WidgetTableRows) = rows.count
 
 _describe_table_header(header::Cell) = _describe_table_header(header[])
 _describe_table_header(header::AbstractString) = String(header)
@@ -2697,7 +2936,7 @@ constructor makes it a `WidgetTreeNode` with no icon, so that a reference of the
 tree reaches each child as `children[j]`. Parent nodes get
 an expand chevron; an icon (when present) is drawn in its own column before the
 label; children are indented. (A widget-styled counterpart to the file-system /
-navigator trees.)
+explorer trees.)
 
 `expanded` is **transient UI state** (like [`WidgetButton`](@ref)'s `pressed`):
 the set of node paths (1-based index chains) whose children show, toggled by
@@ -2709,6 +2948,11 @@ path from the mouse target of the tree.
 `margin`, `border` and `padding` are `nothing` or an `Inset`, each `nothing`
 taking the projection's default (transparent, zero width); `style` is `nothing`,
 a `WidgetStyle`, or a `WidgetTreeStyle`, overriding one color of the projection.
+
+A tree that gets a slot on the vertical axis fills it and scrolls its rows
+there, inside its border, as a table does; with no slot it is as tall as its
+open rows. `scroll_position` is the offset of the rows, and `vertical_scroll_bar`
+and `horizontal_scroll_bar` are its bars, as a `WidgetScrollPane` takes them.
 """
 @document struct WidgetTree <: WidgetDocument
     position::Point2D
@@ -2720,14 +2964,20 @@ a `WidgetStyle`, or a `WidgetTreeStyle`, overriding one color of the projection.
     style::Any
     expanded::Set{Vector{Int}}   # transient: node paths whose children show
     gestures::Any                # per-instance tree-level gesture bindings
+    scroll_position::Point2D     # view state: the offset of the rows of a tree that scrolls itself
+    vertical_scroll_bar::Any     # :auto, nothing, or the WidgetScrollBar of an owner
+    horizontal_scroll_bar::Any   # :auto, nothing, or the WidgetScrollBar of an owner
     tooltip::Any
 end
 WidgetTree(roots::Vector; position::Point2D=Point2D(0, 0), visible::Bool=true,
            margin=nothing, border=nothing, padding=nothing, style=nothing,
-           expanded=Set{Vector{Int}}(), gestures=GestureBinding[], tooltip=nothing) =
+           expanded=Set{Vector{Int}}(), gestures=GestureBinding[],
+           scroll_position::Point2D=Point2D(0, 0), vertical_scroll_bar=:auto,
+           horizontal_scroll_bar=:auto, tooltip=nothing) =
     WidgetTree(Cell(position), CellVector(Cell[Cell(_convert_to_tree_node(n)) for n in roots]),
                Cell(visible), Cell(margin), Cell(border), Cell(padding), Cell(style),
-               Cell(Set{Vector{Int}}(expanded)), Cell(gestures), Cell(tooltip))
+               Cell(Set{Vector{Int}}(expanded)), Cell(gestures),
+               Cell(scroll_position), Cell(vertical_scroll_bar), Cell(horizontal_scroll_bar), Cell(tooltip))
 
 # A `(label, children)` tuple becomes a node with no icon, and so do the tuples
 # among its children. Any other node is kept as it is.
@@ -2837,10 +3087,13 @@ end
 
 Give column `column` of `table` the width `width`, the width of its cells in
 pixels: the drag of the right edge of a header answers it at each move. A table
-whose columns are a vector keeps it as `Fixed(width)` in `column_policies`, and
-`column` counts from its first column. A table whose columns are a list counts
+whose columns are a vector, or that holds only their count, keeps it as
+`Fixed(width)` in the `policy` of the column, `columns[c].policy`, and `column`
+counts from its first column; a table with no data of its columns gets them,
+with the defaults, at the first width. A table whose columns are a list counts
 `column` from its head column and keeps no width of its own: the owner that
-gives its policies as a list reads the operation and keeps the width.
+gives the data of its columns as a list reads the operation and keeps the
+width.
 """
 struct SetTableColumnWidthOperation <: Operation
     table::WidgetTable
@@ -2909,8 +3162,8 @@ with none otherwise.
 
 # Example
 
-    again = Action("Run again"; callback = editor -> run_simulations!(select_simulations!(editor; config = "TandemQueue")))
-    open_pane!(editor, WidgetButton(again); title = "Runner")
+    again = Action("Run again"; callback = editor -> run_simulations!(select_simulations!(; config = "TandemQueue")))
+    open_pane!(WidgetButton(again); title = "Runner")
 
 `shortcut` is a `KeyDownPattern` (build one with [`Shortcut`]); `icon` is the
 name of an icon drawn before the label. A click invokes it through
@@ -3141,16 +3394,19 @@ evaluate_operation(editor, ::Union{EditTableCellOperation,CommitTableCellOperati
 
 function evaluate_operation(editor, op::SetTableColumnWidthOperation)
     table = op.table
-    policies = table.column_policies
-    (policies isa AbstractVector && op.column >= 1) || return nothing
-    width = Fixed(op.width)
-    op.column <= length(policies) && policies[op.column] == width && return nothing
-    written = Any[policies...]
-    while length(written) < op.column
-        push!(written, table.column_policy)
+    columns = table.columns
+    (columns isa ListNode || op.column < 1) && return nothing
+    if !(columns isa AbstractVector && op.column <= length(columns))
+        count = max(op.column, something(_count_table_columns(columns), 0))
+        has(c) = columns isa AbstractVector ? c <= length(columns) :
+                 (columns.count === nothing || c <= columns.count)
+        columns = Any[has(c) ? columns[c] : WidgetTableColumn() for c in 1:count]
+        table.columns = columns
     end
-    written[op.column] = width
-    table.column_policies = written
+    column = columns[op.column]
+    width = Fixed(op.width)
+    column.policy == width && return nothing
+    column.policy = width
     nothing
 end
 

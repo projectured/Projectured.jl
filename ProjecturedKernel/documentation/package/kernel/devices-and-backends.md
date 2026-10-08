@@ -307,8 +307,9 @@ Client → server (raw browser key fields; the server maps them):
 The server maps the keys (`convert_web_key_to_symbol`) to the names of the event
 layer. A letter key has the name of its lower-case letter, as in the SDL and the
 console backends. The page names the left, the middle and the right button, and
-it sends no `mousedown` and no `mouseup` for a side button; the server also drops
-a message with another button name. A wheel turn away from the user sends a
+the side buttons `back` and `forward`, whose default the page stops, so the
+browser does not leave the page; the server drops a message with another button
+name. A wheel turn away from the user sends a
 positive `dy`, as SDL does.
 
 #### Incremental rendering (dirty-rect patches)
@@ -737,6 +738,14 @@ Three rules follow from the shape. A `nothing` rule must carry a description,
 because the description is the name and there is no pattern to derive one from. A
 `nothing` rule binds no pattern variable, so its body reads `doc` and `sel` only.
 `override(nothing)` is an error, because override claims a key and there is none.
+
+An `override` rule takes a click too, after a stage nearer the output answered it,
+as a text view answers each click with a caret. The template reads the claimed
+click along the path of the part that the click selected, mapped into its input,
+innermost first, also through a part that no template prints; each part answers
+with the bindings of its projection, then with its table. So a link in a text view
+binds `override(Ctrl+click)` in its table, and a view in which a plain click
+follows a link binds `override(click)` on the projection of the link.
 
 `name` is filled in by `@gestures`, and only when the author wrote a description
 **and** the rule reads no event. A rule that binds a pattern variable — JSON's

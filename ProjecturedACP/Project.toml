@@ -1,0 +1,15 @@
+name = "ProjecturedACP"
+uuid = "c086a6dc-7bb1-453d-ac62-5c5ddfbfdd44"
+version = "0.1.0"
+authors = []
+
+[deps]
+AgentClientProtocol = "9897b34e-e318-42ec-8700-51bd28135f60"
+ClaudeCodeACP = "397ce549-bc36-418a-97e7-6295a63dbdc4"
+ProjecturedKernel = "a3e3499a-684d-4df9-a0d6-de2d1797b1f3"
+
+[compat]
+AgentClientProtocol = "0.1"
+ClaudeCodeACP = "0.1"
+ProjecturedKernel = "0.1.1"
+julia = "1.12"

@@ -11,7 +11,7 @@ function test_cell_table_to_widget_table()
     wt = iomap.output
 
     @test wt isa WidgetTable
-    @test wt.column_count == 2
+    @test get_widget_table_column_count(wt) == 2
 
     # column headers from row 1, Primitive-wrapped
     @test length(wt.column_headers) == 2
@@ -19,12 +19,12 @@ function test_cell_table_to_widget_table()
     @test wt.column_headers[2] isa PrimitiveString && wt.column_headers[2].value == "age"
 
     # two data rows, each a CellVector of Primitive cells with the right types
-    @test length(wt.rows) == 2
-    row1 = wt.rows[1]
+    @test length(wt.cells) == 2
+    row1 = wt.cells[1]
     @test length(row1) == 2
     @test row1[1] isa PrimitiveString && row1[1].value == "Alice"
     @test row1[2] isa PrimitiveNumber && row1[2].value == 30
-    row2 = wt.rows[2]
+    row2 = wt.cells[2]
     @test row2[1] isa PrimitiveString && row2[1].value == "Bob"
     @test row2[2] isa PrimitiveNumber && row2[2].value == 25
 
@@ -49,7 +49,7 @@ end
     chain = ChainingProjection(view, renderer)
     iomap = print_document(chain, ct)
     view_iomap = iomap.step_iomaps[1][]
-    cell = [FieldReferenceStep("rows"), RangeReferenceStep(0, 1), RangeReferenceStep(0, 1)]
+    cell = [FieldReferenceStep("cells"), RangeReferenceStep(0, 1), RangeReferenceStep(0, 1)]
     _goes_through_cell(path) =
         (steps = collect(get_reference_steps(strip_reference_types(path)));
          length(steps) >= 3 && steps[1:3] == cell)

@@ -1,6 +1,6 @@
 name = "ProjecturedTulip"
 uuid = "bf3b10cf-befa-4ac9-98d3-9c1678f27146"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -10,7 +10,7 @@ Tulip = "6dd1b50a-3aae-11e9-10b5-ef983d2400fa"
 
 [compat]
 MathOptInterface = "1"
-ProjecturedPlatform = "0.1.0"
+ProjecturedPlatform = "0.2.0"
 Tulip = "0.9"
 julia = "1.12"
 

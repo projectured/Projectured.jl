@@ -67,7 +67,7 @@ jobs:
         package:
           - ProjecturedVideo
         include:
-          - {package: ProjecturedVideo, develop: 'ProjecturedKernel ProjecturedPlatform ProjecturedConsole ProjecturedJSON ProjecturedPDF example/ProjecturedKernelExample test/ProjecturedKernelTest example/ProjecturedPlatformExample test/ProjecturedPlatformTest example/ProjecturedJSONExample ProjecturedSDL ProjecturedVideo example/ProjecturedSDLExample test/ProjecturedVideoTest', coverage: 'ProjecturedVideo/src'}
+          - {package: ProjecturedVideo, develop: 'ProjecturedKernel ProjecturedPlatform example/ProjecturedKernelExample test/ProjecturedKernelTest ProjecturedConsole ProjecturedJSON ProjecturedPDF example/ProjecturedPlatformExample test/ProjecturedPlatformTest example/ProjecturedJSONExample ProjecturedSDL ProjecturedVideo example/ProjecturedSDLExample test/ProjecturedVideoTest', coverage: 'ProjecturedVideo/src'}
     env:
       SDL_VIDEODRIVER: offscreen      # SDL draws into memory; the runner has no display
       JULIA_PKG_PRECOMPILE_AUTO: '0'  # the test compiles what it loads
@@ -84,14 +84,14 @@ jobs:
           # longer than a key may be.
           include-matrix: false
           cache-name: julia-cache;package=${{ matrix.package }};julia=${{ matrix.julia }}
-      # AutoIntegration is a package of another repository, which no job
-      # develops. ProjecturedRegistry is private and a job has no token for
-      # it, so the package comes from its public repository, and General
-      # comes by itself.
-      - name: Add AutoIntegration
+      # AutoIntegration, AgentClientProtocol and ClaudeCodeACP are packages of
+      # other repositories, which no job develops. They come from
+      # ProjecturedRegistry, which the job adds beside General.
+      - name: Add the registries
         run: >-
           julia --project="$RUNNER_TEMP/environment"
-          -e 'using Pkg; Pkg.add(url = "https://github.com/projectured/AutoIntegration.jl")'
+          -e 'using Pkg; Pkg.Registry.add("General");
+          Pkg.Registry.add(url = "https://github.com/projectured/ProjecturedRegistry")'
       - name: Develop the packages that the test needs
         run: >-
           julia --project="$RUNNER_TEMP/environment"

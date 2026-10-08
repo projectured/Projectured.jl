@@ -1,6 +1,6 @@
 name = "ProjecturedSequenceChartExample"
 uuid = "5b64cb16-3395-4b64-9318-fc74b96892aa"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -13,11 +13,11 @@ ProjecturedPlatformExample = "5049da3f-9201-47d6-95d8-24bb99c7096c"
 ProjecturedSequenceChart = "52f7693d-4ffe-48c4-8e5b-a1c83c826c09"
 
 [compat]
-ProjecturedConsole = "0.1.0"
-ProjecturedKernel = "0.1.0"
-ProjecturedKernelExample = "0.1.0"
-ProjecturedPDF = "0.1.0"
-ProjecturedPlatform = "0.1.0"
-ProjecturedPlatformExample = "0.1.0"
-ProjecturedSequenceChart = "0.1.0"
+ProjecturedConsole = "0.1.1"
+ProjecturedKernel = "0.1.1"
+ProjecturedKernelExample = "0.1.1"
+ProjecturedPDF = "0.1.1"
+ProjecturedPlatform = "0.2.0"
+ProjecturedPlatformExample = "0.1.1"
+ProjecturedSequenceChart = "0.1.1"
 julia = "1.12"

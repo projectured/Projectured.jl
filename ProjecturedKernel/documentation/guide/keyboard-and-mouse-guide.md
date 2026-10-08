@@ -21,7 +21,7 @@ A key press goes to the view under the selection, and each view says which keys 
 | Shift + F2, while a menu is open | show one menu fewer |
 | rest the pointer | a tooltip says what the thing under it is |
 | click | put the selection where you click |
-| double click on a file in the navigator | open that file |
+| double click on a file in the Files pane | open that file |
 
 A selection is a path into the data, so it survives a filter, a sort and a change somewhere else in the document.
 
@@ -67,14 +67,37 @@ The clipboard holds a part of the data, not text, so a paste puts a structure ba
 | Ctrl + Tab, Ctrl + Shift + Tab | the next or the previous group of tabs |
 | F2 | put the caret in the name of the tab, Escape leaves it; while a tooltip or a menu is open, F2 goes to it |
 
+## Pages of a navigator
+
+A navigator shows one part of a document at a time, its page, with Back,
+Forward and Parent buttons and the address above it
+([navigator.md](../package/platform/navigator/navigator.md)). These keys work on
+every page, also where the page uses the same key.
+
+| Key | What it does |
+| --- | --- |
+| Ctrl + Return | open the selected part as a page |
+| Ctrl + [ | go back to the page before |
+| Ctrl + ] | go forward to the next page |
+| Ctrl + Up | go to the page that holds this page |
+| the back and the forward side button of the mouse | go back, go forward |
+| click on a name in the address | open that page |
+| click on the arrow before a name in the address | the list of the other parts at the place of that name: type to narrow it, or a number to go to that element; Up and Down move the row, Enter or a click opens the row, Escape closes the list |
+| click on **Names**, **Path** or **Types** in the bar | show the address as the next of the three views; Shift + click shows the one before |
+| Ctrl + click on a link in a markdown or rst source view | follow the link; Ctrl + Shift + click opens it in a new tab |
+| click on a link in a rendered markdown or rst page | follow the link; Ctrl + click opens it in a new tab |
+| Ctrl + L, or click on the path in the path view | edit the path in place; Tab takes the hint of a field name, Enter opens the path, Escape ends the edit |
+| right click on a part of a page | **Open as a page** or **Open in a new tab** |
+| double click on the number of a row of a data frame | open the row as a page: a form of its columns |
+
 ## Files
 
 | Key | What it does |
 | --- | --- |
 | Ctrl + S | save the file of the focused tab |
 | Ctrl + O | read that file again from disk |
-| Enter on a file in the navigator | open it |
-| **Open** and **Save As** in the menu bar | a file outside the directory the navigator lists |
+| Enter on a file in the Files pane | open it |
+| **Open** and **Save As** in the menu bar | a file outside the directory the Files pane lists |
 
 ## A tool in a tab
 
@@ -84,7 +107,7 @@ A new tab is empty. Type the name of a tool into it, and the tab becomes that to
 | --- | --- |
 | `assistant` | a conversation with the AI assistant |
 | `repl` | a read-eval-print loop: Julia code you type runs in the program |
-| `explorer` | the file navigator |
+| `explorer` | the explorer: the tree of the files of a folder |
 | `log` | what the program says while it runs |
 | `gestures` | the gestures of this session, and what each one did |
 | `selection` | the selection of another document, as it changes |

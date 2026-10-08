@@ -40,7 +40,7 @@ A path that does not exist opens as `make_document_seed(Val(extension))`. A doma
 
 `make_file_tab_content(path, wrap = identity)` makes the content of a tab that shows the file: the file document of `make_file_tab` in a `WidgetScrollPane`, so a file longer than its tab scrolls. The scroll is made where the file tab is made, and not by the tab, because a tab page gets no scroll of its own: a page can hold two parts that each scroll. The application and `OpenFileOperation` open each file tab with it.
 
-`FileToContent` is the projection of a `FileDocument` in the general renderer. It prints `content` through the recursion, so a tab with a `JsonFile` shows the JSON document exactly as a bare `JsonDocument` would show. The forward map passes the path below `content` to the child. The backward map puts the `content` step in front with `concat_references`. The `^` splice of `@reference` would move the type checkpoints of the path, and the selection would then match no document.
+`FileToContent` is the projection of a `FileDocument` in the general renderer. It prints `content` through the recursion, so a tab with a `JsonFile` shows the JSON document exactly as a bare `JsonDocument` would show. The forward map passes the path below `content` to the child. The backward map puts the `content` step in front with `concat_references`. The `^` splice of `@reference` would move the type checkpoints of the path, and the selection would then match no document. `FileToContent(; content, accepts)` prints and reads a content that `accepts` answers `true` for with the projection `content` in place of the recursion: the view of a file of a domain, which a document of that domain inside another document does not have. Any other content, such as one that an opener wraps in a document of its own, prints through the recursion. The Julia domain gives `JuliaFile` such a view through `make_graphics_projection`, whose rows come before the row of `FileDocument`.
 
 Its reader gives a gesture to the content first, so a click puts the caret in the JSON and a key edits it, and it puts the `content` step in front of the answer. Only when the content does not answer do the file's own keys answer, Ctrl+S and Ctrl+O. An Alt+click therefore selects the object under the pointer inside the file, and Alt+Up walks out to the file as a whole. A collection of gestures, for the command palette and the help window, takes the content's and the file's.
 
@@ -55,7 +55,7 @@ The save calls `save_file!`, which uses the `emit_text` of the file type, and no
 
 ### The tool set
 
-`make_file_api()` lists the file verbs that a language model can call: `make_file_tab`, `read_document_file`, `write_document_file`, `SaveFileOperation`, `ReloadFileOperation`, `import_document` and `export_document`. It does not say where a file comes from. A workspace, a file navigator or a dialog belongs to the host application.
+`make_file_api()` lists the file verbs that a language model can call: `make_file_tab`, `read_document_file`, `write_document_file`, `SaveFileOperation`, `ReloadFileOperation`, `import_document` and `export_document`. It does not say where a file comes from. A workspace, a file list or a dialog belongs to the host application.
 
 ## How it fits
 
@@ -68,7 +68,7 @@ It registers one natural row: `register_natural_graphics!(:fileformat, …)` wit
 - **This slice selects a format and adds none.** Each domain owns its text form, and the serialization slice owns the binary form and the file types. A new domain gets file input and output from its registrations alone.
 - **The export raises an error on a wrong registered extension.** A `JsonObject` written to `a.xml` would be read back with the XML parser. An extension that no domain registered is allowed.
 - **A save goes through the file type.** `save_file!` dispatches on the file object, so a `TextFile` and a `JsonFile` save the same way.
-- **The file verbs of the tool set end at the path.** The host application owns the source of a path, so this package does not depend on a file navigator.
+- **The file verbs of the tool set end at the path.** The host application owns the source of a path, so this package does not depend on a file list.
 
 ## Usage
 

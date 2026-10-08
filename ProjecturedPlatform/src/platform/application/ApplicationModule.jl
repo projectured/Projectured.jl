@@ -1,7 +1,7 @@
 """
     ApplicationModule
 
-The ProjecturEd application: a window that shows files, with a file navigator
+The ProjecturEd application: a window that shows files, with a Files pane
 and the assistant beside them, and the command line of the `projectured`
 binary.
 
@@ -49,7 +49,7 @@ export APPLICATION_ASSISTANTS, get_application_greeting_text, make_application_a
        make_application_api,
        APPLICATION_SYSTEM, run_application, parse_application_arguments,
        run_application_command, evaluate_reachable_cells!, warm_application,
-       start_application!, make_application_settings, make_history_wrap
+       start_application!, make_application_settings
 export StartSettings
 
 include("DefaultBackend.jl")

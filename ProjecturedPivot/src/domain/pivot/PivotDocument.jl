@@ -1,0 +1,281 @@
+# Fragment of `PivotModule`.
+#
+# The documents of a pivot: the table with its five zones of dimensions and
+# measures, a dimension, a measure, and the kinds of the view of a cell. The
+# zones are `CellVector`s, so a move of a dimension from one zone to another is
+# a `MoveRangeOperation`, which keeps the cell of the dimension and has an
+# inverse.
+
+@domain Pivot
+
+"""
+    PivotDimension(column; order = :natural, descending = false, hidden_values = Any[], limit = 0)
+
+A dimension of a pivot: the values of column `column` of the source cut the
+rows into parts. `order` says how its values follow each other: `:natural`, the
+order of `isless` with `missing` last; `:first`, the order in which the values
+first occur in the source; or `:measure`, the order of the value of the first
+measure of the pivot over the rows of each value. `descending` turns the order
+round. `hidden_values` holds the values that the pivot leaves out, with their
+rows, and `limit`, when it is not 0, keeps only that many values, the first in
+the order, so a descending order by the measure keeps the top `limit`.
+
+`bin` derives the value of a row from the value of its column: `nothing` takes
+the value itself; a positive number is the width of the bins of a number, so a
+value is the [`PivotBin`](@ref) that holds it; `:year`, `:month` and `:day` take
+the year, the [`PivotMonth`](@ref) or the day of a date.
+"""
+@document struct PivotDimension <: PivotDocument
+    column::String
+    order::Symbol = :natural
+    descending::Bool = false
+    hidden_values::Vector{Any} = Any[]
+    limit::Int = 0
+    bin::Any = nothing
+end
+
+PivotDimension(column::AbstractString; order::Symbol = :natural, descending::Bool = false,
+               hidden_values::AbstractVector = Any[], limit::Integer = 0, bin = nothing) =
+    PivotDimension(String(column), order, descending, Any[hidden_values...], Int(limit), bin, nothing)
+
+"""
+    PivotMeasure(column, aggregate)
+
+A measure of a pivot: what a cell computes from the values of column `column`
+in its part. `aggregate` is one of `:count`, `:sum`, `:mean`, `:minimum`,
+`:maximum` and `:distinct_count`. `:count` counts the rows of the part and
+reads no column, so its `column` can be empty.
+"""
+@document struct PivotMeasure <: PivotDocument
+    column::String = ""
+    aggregate::Symbol = :count
+end
+
+PivotMeasure(column::AbstractString, aggregate::Symbol) = PivotMeasure(String(column), aggregate, nothing)
+
+"""
+    PivotCellView
+
+The kind of the view of a cell of a pivot: what a cell shows of its part. Each
+kind is a subtype, and the menu of the cell view lists the subtypes that are
+loaded.
+"""
+abstract type PivotCellView <: PivotDocument end
+
+"""
+    PivotNumberView()
+
+A cell shows the value of each measure of the pivot for its part, and the count
+of its rows when the pivot has no measure.
+"""
+@document struct PivotNumberView <: PivotCellView
+end
+
+"""
+    PivotRowsView()
+
+A cell shows the rows of its part as a table: the columns that the cell
+dimensions name, or every column when there is no cell dimension. A data frame
+shows its part as a `DataFrameView`, so an edit in the cell writes the frame.
+"""
+@document struct PivotRowsView <: PivotCellView
+end
+
+"""
+    PivotBarChartView()
+
+A cell shows a bar chart of the first measure over the values of the first cell
+dimension in its part, with a series for each value of the second cell
+dimension. Every cell has the same categories and the same range of values.
+"""
+@document struct PivotBarChartView <: PivotCellView
+end
+
+"""
+    PivotLineChartView()
+
+A cell shows a line chart of the first measure over the values of the first cell
+dimension, which are its x when they are numbers, with a line for each value of
+the second cell dimension. Every cell has the same range on both axes.
+"""
+@document struct PivotLineChartView <: PivotCellView
+end
+
+"""
+    PivotPieChartView()
+
+A cell shows a pie chart of the first measure over the values of the first cell
+dimension in its part. A value has the same colour in every cell.
+"""
+@document struct PivotPieChartView <: PivotCellView
+end
+
+"""
+    PivotGroupView()
+
+The table shows the rows of the source in the order of their groups, under the
+columns of the cell dimensions or under every column that is no row dimension,
+and the headers of the rows name the group of each row once, across its rows.
+A closed group is one row that counts its rows. Columns do not divide the rows:
+a group holds its rows of every column.
+"""
+@document struct PivotGroupView <: PivotCellView
+end
+
+"""
+    PivotChartCell(chart)
+
+The document of a cell that shows a chart: `chart`, a `Chart` of the chart
+domain, which the cell draws at its own size, with no title, no legend and no
+labels of the axes.
+"""
+@document struct PivotChartCell <: PivotDocument
+    chart::Any
+end
+
+"""
+    PivotPartTable(part, columns)
+
+The columns `columns` of `part`, a table of the table interface, shown as a
+read-only table: what a cell of the rows view shows when the package of the
+source has no document of its own for it.
+"""
+@document struct PivotPartTable <: PivotDocument
+    part::Any
+    columns::Vector{String}
+end
+
+PivotPartTable(part, columns::Vector{String}) = PivotPartTable(part, columns, nothing)
+
+"""
+    PivotTable
+
+A table cut into parts by the values of its dimensions, and the view of each
+part. `source` is any table of the table interface: a data frame, a vector of
+named tuples, a named tuple of vectors. The five zones hold the dimensions and
+the measures, in the order of the rows of the bar above the table:
+
+- `unused_dimensions`, the field row: the dimensions that no zone uses;
+- `column_dimensions`: their values make the column headers, one level each;
+- `row_dimensions`: their values make the row headers, one level each;
+- `cell_dimensions`: the dimensions that the view of a cell uses inside it;
+- `measures`: the [`PivotMeasure`](@ref)s that a cell computes.
+
+`cell_view` is the [`PivotCellView`](@ref) of each cell, or `nothing` for the
+choice that follows from the cell dimensions. `totals` adds a row and a column
+of totals, and a subtotal row under each run of an outer row dimension.
+`collapsed` holds the key prefixes of the runs of the row headers that are
+closed: a closed run shows only its subtotal row. A program that changes the source
+in place writes `source_version`, and every computation over the source reads it.
+
+`cross_table` is the [`PivotCrossTable`](@ref) of the source, computed again when
+a zone, a dimension or `source_version` changes. A path names a cell of the
+pivot by its row and its column in that table: `cells[r][c]`, through the field
+`cells`, which holds the [`PivotCells`](@ref) of the pivot. Make a pivot with
+[`make_pivot_table`](@ref), which sets both.
+
+`drag` is the state of the drag of an item of the bar, view state that a history
+does not record: `nothing`, or the zone and the place of the item, the point of
+the press, whether the drag started, and the zone and the place where a drop
+puts the item now.
+"""
+@document struct PivotTable <: PivotDocument
+    source::Any
+    unused_dimensions::CellVector
+    column_dimensions::CellVector
+    row_dimensions::CellVector
+    cell_dimensions::CellVector
+    measures::CellVector
+    cell_view::Any
+    totals::Bool
+    collapsed::Vector{Any}
+    source_version::Int
+    cross_table::Any
+    cells::Any
+    drag::Any
+end
+
+"""
+    PivotCells(pivot)
+
+The value of the field `cells` of a [`PivotTable`](@ref): what the path
+`cells[r][c]` steps through. `[r]` gives row `r` of the cross table, a
+[`PivotCellRow`](@ref), and `[r][c]` the document of the cell where row `r` and
+column `c` meet. `rows` keeps the row of each number that a path reached, so a
+path into a row meets the same row each time. `documents` keeps the document of
+each cell by the keys of its row and its column and by the kind of its view, so a
+change of the pivot that keeps both keys and the view keeps the document, and a
+selection inside it. `cross` is a `Ref` of the cross table that `documents` was
+last pruned for: a new cross table drops the documents of the keys that it does
+not have. `memo` keeps what the views of the cells compute over the whole
+source, such as the range that every chart shares: one value for each kind, with
+what it is computed from. The four are caches, which no computation depends on.
+"""
+@document struct PivotCells <: PivotDocument
+    pivot::Any
+    rows::Any
+    documents::Any
+    cross::Any
+    memo::Any
+end
+
+PivotCells(pivot) = PivotCells(pivot, Dict{Int,Any}(), Dict{Any,Any}(), Ref{Any}(nothing), Dict{Any,Any}(), nothing)
+
+"""
+    PivotCellRow(pivot, row)
+
+Row `row` of the cross table of `pivot`, what the path `cells[r]` names. `[c]`
+gives the document of the cell in column `c`.
+"""
+@document struct PivotCellRow <: PivotDocument
+    pivot::Any
+    row::Int
+end
+
+function Base.getindex(cells::PivotCells, r::Integer)
+    pivot = cells.pivot
+    1 <= r <= get_pivot_row_count(pivot.cross_table) || throw(BoundsError(cells, r))
+    get!(() -> PivotCellRow(pivot, Int(r), nothing), cells.rows, Int(r))
+end
+
+Base.length(row::PivotCellRow) = get_pivot_column_count(row.pivot.cross_table)
+
+function Base.getindex(row::PivotCellRow, c::Integer)
+    1 <= c <= length(row) || throw(BoundsError(row, c))
+    get_pivot_cell_document(row.pivot, row.row, Int(c))
+end
+
+# Each holds the pivot, which holds it, so each prints by its kind alone.
+Base.show(io::IO, ::PivotCells) = print(io, "PivotCells(…)")
+Base.show(io::IO, row::PivotCellRow) = print(io, "PivotCellRow(…, ", row.row, ")")
+
+# The computed fields of `pivot`: its cross table, and the cells that the paths
+# step through.
+function _set_pivot_fields!(pivot::PivotTable)
+    set_cell_computation!(getfield(pivot, :cross_table), () -> compute_pivot_cross_table(pivot))
+    getfield(pivot, :cells)[] = PivotCells(pivot)
+    pivot
+end
+
+"""
+    make_pivot_table(source; rows = String[], columns = String[], cells = String[],
+                     measures = PivotMeasure[], cell_view = nothing, totals = false) -> PivotTable
+
+A pivot of `source` whose row, column and cell dimensions are the columns of the
+source named in `rows`, `columns` and `cells`, in that order. Every other column
+of the source is an unused dimension, in the order of the source.
+"""
+function make_pivot_table(source; rows = String[], columns = String[], cells = String[],
+                          measures = PivotMeasure[], cell_view = nothing, totals::Bool = false)
+    is_table(source) || throw(ArgumentError("a pivot needs a table, not a $(typeof(source))"))
+    names = get_table_column_names(source)
+    used = Set{String}(vcat(rows, columns, cells))
+    for name in used
+        name in names || throw(ArgumentError("the source has no column \"$name\""))
+    end
+    make_dimensions(list) = CellVector(Any[PivotDimension(String(name)) for name in list])
+    _set_pivot_fields!(PivotTable(source, make_dimensions(filter(name -> !(name in used), names)),
+                                  make_dimensions(columns), make_dimensions(rows), make_dimensions(cells),
+                                  CellVector(Any[measures...]), cell_view, totals, Any[], 0, nothing,
+                                  nothing, nothing, nothing))
+end

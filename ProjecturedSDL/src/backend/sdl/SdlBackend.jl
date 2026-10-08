@@ -546,16 +546,20 @@ end
 # Mouse helpers
 # ════════════════════════════════════════════════════════════════════════
 
-# The name of an SDL button: 1 is the left, 2 the middle and 3 the right button. A
-# side button, 4 or more, has no name in the event layer, and the answer is `nothing`.
+# The name of an SDL button: 1 is the left, 2 the middle and 3 the right button,
+# and 4 and 5 (`X1` and `X2`) the side buttons, back and forward. Another number
+# has no name in the event layer, and the answer is `nothing`.
 _sdl_button_sym(b::UInt8) =
-    b == 0x01 ? :left : b == 0x02 ? :middle : b == 0x03 ? :right : nothing
+    b == 0x01 ? :left : b == 0x02 ? :middle : b == 0x03 ? :right :
+    b == 0x04 ? :back : b == 0x05 ? :forward : nothing
 
 # The buttons that an SDL button mask holds: the `state` of a motion event.
 _get_held_mouse_buttons(bstate::UInt32) =
     MouseButtons(left = (bstate & UInt32(0x01)) != UInt32(0),
                  middle = (bstate & UInt32(0x02)) != UInt32(0),
-                 right = (bstate & UInt32(0x04)) != UInt32(0))
+                 right = (bstate & UInt32(0x04)) != UInt32(0),
+                 back = (bstate & UInt32(0x08)) != UInt32(0),
+                 forward = (bstate & UInt32(0x10)) != UInt32(0))
 
 # ════════════════════════════════════════════════════════════════════════
 # Native window lifecycle (internal helpers; driven by the reconciler in
@@ -1723,6 +1727,58 @@ function _render_circle!(renderer::Ptr{SDL_Renderer}, circ::GraphicsCircle, ox::
     end
 end
 
+# ── Render a GraphicsArc element ─────────────────────────────────────
+
+# Fill the band between the radii `rad` and `rad - bw` from `start` through
+# `sweep` degrees (0 at the top, clockwise on the screen) as one strip of
+# triangles with float vertices. A segment is about two device pixels of the
+# outer edge long, so the supersample downsample smooths the curve as it smooths
+# the rows of `_stroke_ring!`.
+function _fill_arc_band!(renderer::Ptr{SDL_Renderer}, cx::Int, cy::Int, rad::Int, bw::Int,
+                         start::Float64, sweep::Float64,
+                         r::UInt8, g::UInt8, b::UInt8, a::UInt8)
+    fx = Ref{Cfloat}(0); fy = Ref{Cfloat}(0)
+    SDL_RenderGetScale(renderer, fx, fy)
+    f = Float64(fx[]); f <= 0 && (f = 1.0)
+    rin = rad - bw
+    n = max(2, ceil(Int, deg2rad(sweep) * rad * f / 2))
+    col = SDL_Color(r, g, b, a)
+    z = SDL_FPoint(0.0f0, 0.0f0)
+    verts = Vector{SDL_Vertex}(undef, 2 * (n + 1))
+    for k in 0:n
+        s, c = sincosd(start + sweep * k / n)
+        verts[2k + 1] = SDL_Vertex(SDL_FPoint(Cfloat(cx + rad * s), Cfloat(cy - rad * c)), col, z)
+        verts[2k + 2] = SDL_Vertex(SDL_FPoint(Cfloat(cx + rin * s), Cfloat(cy - rin * c)), col, z)
+    end
+    idx = Vector{Cint}(undef, 6n)
+    for k in 0:(n - 1)
+        o = Cint(2k)
+        idx[6k + 1:6k + 6] .= (o, o + Cint(1), o + Cint(2), o + Cint(1), o + Cint(3), o + Cint(2))
+    end
+    GC.@preserve verts idx begin
+        SDL_RenderGeometry(renderer, Ptr{SDL_Texture}(C_NULL),
+                           pointer(verts), Cint(length(verts)),
+                           pointer(idx), Cint(length(idx)))
+    end
+end
+
+function _render_arc!(renderer::Ptr{SDL_Renderer}, arc::GraphicsArc, ox::Int, oy::Int)
+    arc.color.alpha == 0 && return
+    sweep = Float64(arc.sweep_angle)
+    sweep > 0 || return
+    rad = Int(arc.radius)
+    rad > 0 || return
+    bw = clamp(Int(arc.width), 1, rad)
+    cx, cy = Int(arc.cx) + ox, Int(arc.cy) + oy
+    if sweep >= 360
+        # The whole ring is the ring of a circle, drawn the same way.
+        SDL_SetRenderDrawColor(renderer, _rgba8(arc.color)...)
+        _stroke_ring!(renderer, cx, cy, rad, bw)
+    else
+        _fill_arc_band!(renderer, cx, cy, rad, bw, Float64(arc.start_angle), sweep, _rgba8(arc.color)...)
+    end
+end
+
 # ── Render a GraphicsImage element ─────────────────────────────────────
 
 function _render_image!(renderer::Ptr{SDL_Renderer}, img::GraphicsImage, ox::Int, oy::Int)
@@ -1852,6 +1908,8 @@ function _dispatch_render_elem!(renderer::Ptr{SDL_Renderer}, elem, ox::Int, oy::
         _render_spline!(renderer, elem, ox, oy)
     elseif elem isa GraphicsCircle
         _render_circle!(renderer, elem, ox, oy)
+    elseif elem isa GraphicsArc
+        _render_arc!(renderer, elem, ox, oy)
     elseif elem isa GraphicsViewport
         _render_viewport!(renderer, elem, ox, oy, ratio)
     elseif elem isa GraphicsImage
@@ -1867,8 +1925,8 @@ function _dispatch_render_elem!(renderer::Ptr{SDL_Renderer}, elem, ox::Int, oy::
     # GraphicsFence and unknown types are silently skipped
 end
 
-_render_elem_x(elem) = hasproperty(elem, :x) ? Int(elem.x) : nothing
-_render_elem_y(elem) = hasproperty(elem, :y) ? Int(elem.y) : nothing
+_render_elem_x(elem) = hasfield(typeof(elem), :x) ? Int(elem.x) : nothing
+_render_elem_y(elem) = hasfield(typeof(elem), :y) ? Int(elem.y) : nothing
 
 # One element drawn, or skipped when reading it throws while an editor paints
 # with its barriers on: the editor records the fault, the rest of the canvas
@@ -1946,7 +2004,12 @@ end
 #
 # It came into view, or it left it. A graphic the walk has no record of is new
 # to the screen and is painted. A graphic that was painted and now lies past the
-# layout early-stop is not drawn, and its old place is cleared.
+# layout early-stop is not drawn, and its old place is cleared. A graphic that
+# was painted and that its canvas no longer holds is cleared too. The walk finds
+# it by the keys of what the canvas draws, compared with the keys it painted, and
+# not by a stale cell: the size of a canvas reads its elements, so a layout that
+# reads the size before the walk computes a new element list, and the walk finds
+# the list up to date.
 #
 # For each dirty unit the region gets its *new* bounds and its *previous*
 # rendered bounds (cached in `res.dirty_bounds`) so content that moved, shrank or
@@ -2378,8 +2441,8 @@ function _collect_canvas_dirty!(res::SdlWindowResources, canvas::GraphicsCanvas,
         start = _find_first_walked_index(canvas, ev, ox, oy, edges)
         if start !== nothing
             first, dirty_leaves = start
-            stale_slot, changed = _collect_elements_dirty!(res, ev, key, first, dirty_leaves,
-                                                           ox, oy, edges, layout, early, walk)
+            stale_slot, changed = _collect_elements_dirty!(res, canvas, ev, key, first, dirty_leaves,
+                                                           ox, oy, edges, walk)
             if !stale_slot
                 return changed &&
                        _defer_refresh!(walk, () -> _refresh_canvas_bounds!(res, ev, key, first, ox, oy,
@@ -2422,11 +2485,19 @@ end
 # as it is off-screen. A leaf is tested before the early-stop reads its place, as
 # a canvas is before its origin is read. Past the early-stop, each graphic that
 # was painted has left the view and its place is cleared; the first that was not
-# painted ends the list.
-function _collect_elements_dirty!(res::SdlWindowResources, ev, key::UInt, first::Int,
-                                  dirty_leaves::Vector{Int}, ox::Int, oy::Int, edges::_ClipEdges,
-                                  layout::LayoutDirection, early::Bool, walk::_DirtyWalk)
+# painted ends the list. The keys of the elements drawn are compared, in order,
+# with the keys that were painted: a list that a reader before the walk computed
+# can hold other elements while no cell of it is stale, and what it no longer
+# draws is cleared.
+function _collect_elements_dirty!(res::SdlWindowResources, canvas::GraphicsCanvas, ev, key::UInt,
+                                  first::Int, dirty_leaves::Vector{Int}, ox::Int, oy::Int,
+                                  edges::_ClipEdges, walk::_DirtyWalk)
     slots = ev isa CellVector ? getfield(ev, :elements)[] : ev
+    layout = canvas.layout
+    early = _is_early_stop_layout(canvas)
+    painted = get(res.painted.members, key, nothing)
+    drawn = 0          # how many elements the render draws
+    other = nothing    # the keys of the drawn elements, from the first one that differs from `painted`
     past = false
     changed = false
     for i in first:length(slots)
@@ -2445,19 +2516,50 @@ function _collect_elements_dirty!(res::SdlWindowResources, ev, key::UInt, first:
             _clear_left_view!(res, walk, elem_key) || break
             changed = true
         else
+            drawn += 1
+            if other === nothing && painted !== nothing &&
+               (drawn > length(painted) || painted[drawn] != elem_key)
+                other = painted[1:drawn - 1]
+            end
+            other === nothing || push!(other, elem_key)
             changed |= _collect_dirty_elem!(res, elem, elem_key, ox, oy, edges, walk, leaf_dirty)
         end
     end
+    if painted !== nothing && (other !== nothing || drawn < length(painted))
+        _clear_members_not_drawn!(res, walk, canvas.overlapping_elements, painted,
+                                  other === nothing ? painted[1:drawn] : other)
+        changed = true
+    end
     (false, changed)
+end
+
+# Clear what a canvas drew before, the keys `painted`, and does not draw now, the
+# keys `drawn`: an element that left the list, or the view. Where elements can
+# overlap, the order draws too: a kept element that has another place in the
+# order is painted again.
+function _clear_members_not_drawn!(res::SdlWindowResources, walk::_DirtyWalk, overlapping::Bool,
+                                   painted::Vector{UInt}, drawn::Vector{UInt})
+    drawn_set = Set(drawn)
+    for old in painted
+        old in drawn_set || _clear_left_view!(res, walk, old)
+    end
+    overlapping || return nothing
+    painted_set = Set(painted)
+    kept_now = [k for k in drawn if k in painted_set]
+    kept_before = [k for k in painted if k in drawn_set]
+    for (now, before) in zip(kept_now, kept_before)
+        now == before && continue
+        bounds = get(res.dirty_bounds, now, nothing)
+        bounds === nothing || _add_dirty_rect!(walk.region, bounds)
+    end
+    nothing
 end
 
 # The elements of a canvas whose element list is new and that did not move, in a
 # walk by value. Each element is taken by its placement key, as in a list that did
 # not change: a new one is painted, a moved one at its old and new place, a kept
 # one only when it draws something else. What the canvas drew before and does not
-# draw now is cleared: an element that left the list, or the view. Where elements
-# can overlap, the order draws too: a kept element that has another place in the
-# order is painted again.
+# draw now is cleared (`_clear_members_not_drawn!`).
 function _collect_new_elements_dirty!(res::SdlWindowResources, canvas::GraphicsCanvas, key::UInt,
                                       ox::Int, oy::Int, edges::_ClipEdges, walk::_DirtyWalk)
     ev = canvas.elements
@@ -2473,21 +2575,7 @@ function _collect_new_elements_dirty!(res::SdlWindowResources, canvas::GraphicsC
         push!(drawn, elem_key)
         _collect_dirty_elem!(res, elem, elem_key, ox, oy, edges, walk, false)
     end
-    old_members = res.painted.members[key]
-    drawn_set = Set(drawn)
-    for old in old_members
-        old in drawn_set || _clear_left_view!(res, walk, old)
-    end
-    if canvas.overlapping_elements
-        old_set = Set(old_members)
-        kept_now = [k for k in drawn if k in old_set]
-        kept_before = [k for k in old_members if k in drawn_set]
-        for (now, before) in zip(kept_now, kept_before)
-            now == before && continue
-            bounds = get(res.dirty_bounds, now, nothing)
-            bounds === nothing || _add_dirty_rect!(walk.region, bounds)
-        end
-    end
+    _clear_members_not_drawn!(res, walk, canvas.overlapping_elements, res.painted.members[key], drawn)
     _defer_refresh!(walk, () -> _refresh_canvas_bounds!(res, ev, key, first, ox, oy, edges, layout, early))
 end
 

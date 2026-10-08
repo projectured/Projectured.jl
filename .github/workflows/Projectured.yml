@@ -13,6 +13,7 @@ on:
     paths:
       - '.github/workflows/Projectured.yml'
       - 'Projectured/**'
+      - 'ProjecturedACP/**'
       - 'ProjecturedAll/**'
       - 'ProjecturedAnthropic/**'
       - 'ProjecturedBook/**'
@@ -33,6 +34,7 @@ on:
       - 'ProjecturedODBC/**'
       - 'ProjecturedOllama/**'
       - 'ProjecturedPDF/**'
+      - 'ProjecturedPivot/**'
       - 'ProjecturedPlatform/**'
       - 'ProjecturedProcess/**'
       - 'ProjecturedRST/**'
@@ -59,6 +61,7 @@ on:
       - 'example/ProjecturedKernelExample/**'
       - 'example/ProjecturedMarkdownExample/**'
       - 'example/ProjecturedMathExample/**'
+      - 'example/ProjecturedPivotExample/**'
       - 'example/ProjecturedPlatformExample/**'
       - 'example/ProjecturedProcessExample/**'
       - 'example/ProjecturedRSTExample/**'
@@ -67,6 +70,7 @@ on:
       - 'example/ProjecturedSequenceChartExample/**'
       - 'example/ProjecturedXMLExample/**'
       - 'example/ProjecturedYAMLExample/**'
+      - 'test/ProjecturedACPTest/**'
       - 'test/ProjecturedAnthropicTest/**'
       - 'test/ProjecturedBookTest/**'
       - 'test/ProjecturedChartTest/**'
@@ -86,6 +90,7 @@ on:
       - 'test/ProjecturedODBCTest/**'
       - 'test/ProjecturedOllamaTest/**'
       - 'test/ProjecturedPDFTest/**'
+      - 'test/ProjecturedPivotTest/**'
       - 'test/ProjecturedPlatformTest/**'
       - 'test/ProjecturedProcessTest/**'
       - 'test/ProjecturedRSTTest/**'
@@ -102,6 +107,7 @@ on:
     paths:
       - '.github/workflows/Projectured.yml'
       - 'Projectured/**'
+      - 'ProjecturedACP/**'
       - 'ProjecturedAll/**'
       - 'ProjecturedAnthropic/**'
       - 'ProjecturedBook/**'
@@ -122,6 +128,7 @@ on:
       - 'ProjecturedODBC/**'
       - 'ProjecturedOllama/**'
       - 'ProjecturedPDF/**'
+      - 'ProjecturedPivot/**'
       - 'ProjecturedPlatform/**'
       - 'ProjecturedProcess/**'
       - 'ProjecturedRST/**'
@@ -148,6 +155,7 @@ on:
       - 'example/ProjecturedKernelExample/**'
       - 'example/ProjecturedMarkdownExample/**'
       - 'example/ProjecturedMathExample/**'
+      - 'example/ProjecturedPivotExample/**'
       - 'example/ProjecturedPlatformExample/**'
       - 'example/ProjecturedProcessExample/**'
       - 'example/ProjecturedRSTExample/**'
@@ -156,6 +164,7 @@ on:
       - 'example/ProjecturedSequenceChartExample/**'
       - 'example/ProjecturedXMLExample/**'
       - 'example/ProjecturedYAMLExample/**'
+      - 'test/ProjecturedACPTest/**'
       - 'test/ProjecturedAnthropicTest/**'
       - 'test/ProjecturedBookTest/**'
       - 'test/ProjecturedChartTest/**'
@@ -175,6 +184,7 @@ on:
       - 'test/ProjecturedODBCTest/**'
       - 'test/ProjecturedOllamaTest/**'
       - 'test/ProjecturedPDFTest/**'
+      - 'test/ProjecturedPivotTest/**'
       - 'test/ProjecturedPlatformTest/**'
       - 'test/ProjecturedProcessTest/**'
       - 'test/ProjecturedRSTTest/**'
@@ -211,7 +221,7 @@ jobs:
         package:
           - Projectured
         include:
-          - {package: Projectured, develop: 'ProjecturedKernel ProjecturedPlatform Projectured ProjecturedBook ProjecturedChart ProjecturedConsole ProjecturedSQL ProjecturedDBCatalog ProjecturedDatabase ProjecturedGraph ProjecturedJulia ProjecturedFSM ProjecturedMath ProjecturedFormula ProjecturedJSON ProjecturedMarkdown ProjecturedPDF ProjecturedProcess ProjecturedRST ProjecturedSequenceChart ProjecturedXML ProjecturedYAML ProjecturedAll ProjecturedAnthropic example/ProjecturedKernelExample test/ProjecturedKernelTest test/ProjecturedAnthropicTest example/ProjecturedPlatformExample example/ProjecturedBookExample test/ProjecturedPlatformTest test/ProjecturedBookTest example/ProjecturedChartExample test/ProjecturedChartTest example/ProjecturedJSONExample test/ProjecturedConsoleTest example/ProjecturedJuliaExample example/ProjecturedMarkdownExample example/ProjecturedXMLExample example/ProjecturedYAMLExample example/ProjecturedConversationExample example/ProjecturedDBCatalogExample test/ProjecturedDBCatalogTest ProjecturedDataFrames example/ProjecturedDataFramesExample test/ProjecturedDataFramesTest example/ProjecturedDatabaseExample test/ProjecturedDatabaseTest example/ProjecturedFSMExample example/ProjecturedFormulaExample example/ProjecturedGraphExample example/ProjecturedMathExample ProjecturedOllama example/ProjecturedProcessExample example/ProjecturedRSTExample example/ProjecturedSQLExample example/ProjecturedSequenceChartExample example/ProjecturedExample test/ProjecturedFSMTest test/ProjecturedFormulaTest test/ProjecturedGraphTest ProjecturedMCP ProjecturedODBC ProjecturedSDL ProjecturedTulip ProjecturedVideo test/ProjecturedJSONTest test/ProjecturedJuliaTest test/ProjecturedMCPTest test/ProjecturedMarkdownTest test/ProjecturedMathTest test/ProjecturedODBCTest test/ProjecturedOllamaTest test/ProjecturedPDFTest test/ProjecturedProcessTest test/ProjecturedRSTTest example/ProjecturedSDLExample test/ProjecturedSDLTest test/ProjecturedSQLTest test/ProjecturedSequenceChartTest test/ProjecturedTulipTest test/ProjecturedVideoTest ProjecturedWeb test/ProjecturedWebTest test/ProjecturedXMLTest test/ProjecturedYAMLTest test/ProjecturedTest', coverage: 'Projectured/src'}
+          - {package: Projectured, develop: 'ProjecturedKernel ProjecturedPlatform Projectured ProjecturedACP example/ProjecturedKernelExample test/ProjecturedKernelTest test/ProjecturedACPTest ProjecturedBook ProjecturedChart ProjecturedConsole ProjecturedSQL ProjecturedDBCatalog ProjecturedDatabase ProjecturedGraph ProjecturedJulia ProjecturedFSM ProjecturedMath ProjecturedFormula ProjecturedJSON ProjecturedMarkdown ProjecturedPDF ProjecturedPivot ProjecturedProcess ProjecturedRST ProjecturedSequenceChart ProjecturedXML ProjecturedYAML ProjecturedAll ProjecturedAnthropic test/ProjecturedAnthropicTest example/ProjecturedPlatformExample example/ProjecturedBookExample test/ProjecturedPlatformTest test/ProjecturedBookTest example/ProjecturedChartExample test/ProjecturedChartTest example/ProjecturedJSONExample test/ProjecturedConsoleTest example/ProjecturedJuliaExample example/ProjecturedMarkdownExample example/ProjecturedXMLExample example/ProjecturedYAMLExample example/ProjecturedConversationExample example/ProjecturedDBCatalogExample test/ProjecturedDBCatalogTest ProjecturedDataFrames example/ProjecturedDataFramesExample test/ProjecturedDataFramesTest example/ProjecturedDatabaseExample test/ProjecturedDatabaseTest example/ProjecturedFSMExample example/ProjecturedFormulaExample example/ProjecturedGraphExample example/ProjecturedMathExample ProjecturedOllama example/ProjecturedPivotExample example/ProjecturedProcessExample example/ProjecturedRSTExample example/ProjecturedSQLExample example/ProjecturedSequenceChartExample example/ProjecturedExample test/ProjecturedFSMTest test/ProjecturedFormulaTest test/ProjecturedGraphTest ProjecturedMCP ProjecturedODBC ProjecturedSDL ProjecturedTulip ProjecturedVideo test/ProjecturedJSONTest test/ProjecturedJuliaTest test/ProjecturedMCPTest test/ProjecturedMarkdownTest test/ProjecturedMathTest test/ProjecturedODBCTest test/ProjecturedOllamaTest test/ProjecturedPDFTest test/ProjecturedPivotTest test/ProjecturedProcessTest test/ProjecturedRSTTest example/ProjecturedSDLExample test/ProjecturedSDLTest test/ProjecturedSQLTest test/ProjecturedSequenceChartTest test/ProjecturedTulipTest test/ProjecturedVideoTest ProjecturedWeb test/ProjecturedWebTest test/ProjecturedXMLTest test/ProjecturedYAMLTest test/ProjecturedTest', coverage: 'Projectured/src'}
     env:
       SDL_VIDEODRIVER: offscreen      # SDL draws into memory; the runner has no display
       JULIA_PKG_PRECOMPILE_AUTO: '0'  # the test compiles what it loads
@@ -228,14 +238,14 @@ jobs:
           # longer than a key may be.
           include-matrix: false
           cache-name: julia-cache;package=${{ matrix.package }};julia=${{ matrix.julia }}
-      # AutoIntegration is a package of another repository, which no job
-      # develops. ProjecturedRegistry is private and a job has no token for
-      # it, so the package comes from its public repository, and General
-      # comes by itself.
-      - name: Add AutoIntegration
+      # AutoIntegration, AgentClientProtocol and ClaudeCodeACP are packages of
+      # other repositories, which no job develops. They come from
+      # ProjecturedRegistry, which the job adds beside General.
+      - name: Add the registries
         run: >-
           julia --project="$RUNNER_TEMP/environment"
-          -e 'using Pkg; Pkg.add(url = "https://github.com/projectured/AutoIntegration.jl")'
+          -e 'using Pkg; Pkg.Registry.add("General");
+          Pkg.Registry.add(url = "https://github.com/projectured/ProjecturedRegistry")'
       - name: Develop the packages that the test needs
         run: >-
           julia --project="$RUNNER_TEMP/environment"

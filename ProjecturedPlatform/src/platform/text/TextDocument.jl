@@ -118,6 +118,9 @@ style fields stay reactive (highlighting writes `fill_color`).
 - `fill_color::Cell` — holds background fill color or `nothing`
 - `line_color::Cell` — holds border/line color or `nothing`
 - `padding::Cell`    — holds inset/padding value or `nothing`
+- `pointer_shape::Cell` — holds the shape of the pointer over the span, one of
+  `POINTER_SHAPES`, such as `:pointing_hand` over a link, or `nothing` for the
+  I-beam of the text around it
 
 When a `TextBlock` selection path descends into a span, the sub-path
 refers to the cursor within the span's `content` field:  `.content{k}`
@@ -129,6 +132,7 @@ refers to the cursor within the span's `content` field:  `.content{k}`
     fill_color::StyleColor
     line_color::StyleColor
     padding::Inset
+    pointer_shape::Any
 end
 
 """
@@ -162,15 +166,23 @@ TextString(content::Function, font::StyleFont, font_color::StyleColor) =
 TextString(content::AbstractString, style::StyleText) = TextString(content, style.font, style.color)
 TextString(content::Function,      style::StyleText) = TextString(content, style.font, style.color)
 
+# A run in a style, with the shape of the pointer over it, or `nothing`.
+TextString(content::AbstractString, style::StyleText, pointer_shape::Union{Nothing,Symbol}) =
+    TextString(Cell(content), style.font, style.color, Cell(nothing), Cell(nothing), Cell(nothing),
+               Cell(pointer_shape), Cell(nothing))
+TextString(content::Function, style::StyleText, pointer_shape::Union{Nothing,Symbol}) =
+    TextString(Cell(Computation(content)), style.font, style.color, Cell(nothing), Cell(nothing), Cell(nothing),
+               Cell(pointer_shape), Cell(nothing))
+
 # A text span that shows a muted placeholder while the value is empty. Both text
 # and colour are reactive, so the hint disappears the moment the user types.
 function make_hinted_text(content_thunk; empty_thunk, placeholder::AbstractString,
-                          style::StyleText)
+                          style::StyleText, pointer_shape::Union{Nothing,Symbol} = nothing)
     TextString(
         Cell(@computation empty_thunk() ? placeholder : content_thunk()),
         style.font,                                                        # immutable (authored font)
         Cell(@computation empty_thunk() ? color_solarized_gray : style.color),   # reactive (hint colour); @style: content of the document
-        Cell(nothing), Cell(nothing), Cell(nothing), Cell(nothing))
+        Cell(nothing), Cell(nothing), Cell(nothing), Cell(pointer_shape), Cell(nothing))
 end
 
 # ── TextGraphics ─────────────────────────────────────────────────────
@@ -247,7 +259,7 @@ TextBlock(f::Function) = TextBlock(CellVector(Computation(f)), Cell(nothing))
 # ── TextLine ───────────────────────────────────────────────────────────
 
 """
-    TextLine(spans...; indentation = 0)
+    TextLine(spans...; indentation = 0, gutter = nothing, fold = nothing)
 
 One line of a `TextBlock`: a sequence of spans that **contains no line break** and
 **implies one before itself**. A block of `n` lines therefore renders with `n-1`
@@ -266,20 +278,42 @@ A block's elements are meant to be *either* spans *or* lines, not a mix. Mixing
 degrades gracefully rather than erroring (a line still breaks before itself), but
 the flat character offsets get hard to reason about, and no projection produces
 such a block.
+
+`gutter` is what the gutter shows beside the line: any document that the
+recursion prints to graphics, such as a [`TextGutter`](@ref), or `nothing`. It is
+a property of the line too: it is not in the caret space and not in the flat
+string, and it stays with the line when lines are added above it.
+`TextBlockToScrollLayout` draws it at the height of the line.
+
+`fold` is the [`TextFold`](@ref) that starts at this line, or `nothing`: a region
+of this line and the lines after it, which `TextFolding` hides but this one when
+it is closed.
+
+`soft_breaks` are the places where the line wraps: each is a character offset in
+the text of its spans, where an image counts one, and a new row of the line
+starts before that character. `WordWrapping` computes them for the width of the
+view, and `TextToGraphics` starts a row at each, at the indentation of the line.
+A soft break is no character: it is not in the caret space and not in the flat
+string, so a wrap moves no offset.
 """
 @document struct TextLine <: TextDocument
     elements::CollectionDocument = CellVector()
     indentation::Int = 0
+    gutter::Union{Document, Nothing} = nothing
+    fold::Union{Document, Nothing} = nothing
+    soft_breaks::Vector{Int} = Int[]
 end
 
-TextLine(spans::Vector{<:TextDocument}; indentation::Integer = 0) =
-    TextLine(CellVector(Cell[Cell(s) for s in spans]), Cell(Int(indentation)), Cell(nothing))
+TextLine(spans::Vector{<:TextDocument}; indentation::Integer = 0, gutter = nothing, fold = nothing) =
+    TextLine(CellVector(Cell[Cell(s) for s in spans]), Cell(Int(indentation)), Cell(gutter),
+             Cell(fold), Cell(Int[]), Cell(nothing))
 
-TextLine(spans::TextDocument...; indentation::Integer = 0) =
-    TextLine(collect(TextDocument, spans); indentation)
+TextLine(spans::TextDocument...; indentation::Integer = 0, gutter = nothing, fold = nothing) =
+    TextLine(collect(TextDocument, spans); indentation, gutter, fold)
 
-TextLine(f::Function; indentation::Integer = 0) =
-    TextLine(CellVector(Computation(f)), Cell(Int(indentation)), Cell(nothing))
+TextLine(f::Function; indentation::Integer = 0, gutter = nothing, fold = nothing) =
+    TextLine(CellVector(Computation(f)), Cell(Int(indentation)), Cell(gutter), Cell(fold),
+             Cell(Int[]), Cell(nothing))
 
 # A lone line is not a document — it is a part of a block. Both of its fields are
 # defaulted, so unlike the span types (each has a required field, and so no
@@ -289,6 +323,49 @@ TextLine(f::Function; indentation::Integer = 0) =
 # line. It would also make `text` ambiguous — both `text block` and `text line`
 # start with it. Opt out, as `@domain` does for its own placeholder.
 DomainModule.insertable(::Type{<:TextLine}) = false
+
+# ── TextGutter ─────────────────────────────────────────────────────────
+
+"""
+    TextGutter(; marker = nothing, number = nothing, fold = nothing)
+
+The gutter of a line of code: a lane for a marker, such as a breakpoint or a
+diagnostic, a lane for the number of the line, and a lane for the triangle of a
+fold. Each field holds a mark, any document that the recursion prints to graphics,
+or `nothing`. A stage fills its field by name, and `TextGutterToGraphics` lays the
+lanes out. A view that wants other lanes brings a gutter type of its own and a
+projection for it.
+"""
+@document struct TextGutter <: TextDocument
+    marker::Union{Document, Nothing} = nothing
+    number::Union{Document, Nothing} = nothing
+    fold::Union{Document, Nothing} = nothing
+end
+
+# A gutter is a part of a line, not a document to insert on its own; like a line,
+# it has only defaulted fields and would be a candidate of the insertion.
+DomainModule.insertable(::Type{<:TextGutter}) = false
+
+# ── TextFold ───────────────────────────────────────────────────────────
+
+"""
+    TextFold(; line_count = 0, collapsed = false, placeholder = nothing)
+
+A region of lines that can fold: the line whose `fold` it is and the
+`line_count` lines after it. While it is `collapsed`, `TextFolding` hides all its
+lines but the first one, and puts `placeholder` at the end of the first one, or
+`…` when it is `nothing`. The lines stay in the text, so a number counts them.
+A projection that makes the region can give it the `collapsed` cell of the part
+it shows, so the state stays in the document. `ToggleCollapseOperation` flips it.
+"""
+@document struct TextFold <: TextDocument
+    line_count::Int = 0
+    collapsed::Bool = false
+    placeholder::Union{Document, Nothing} = nothing
+end
+
+# A fold is a part of a line, not a document to insert on its own.
+DomainModule.insertable(::Type{<:TextFold}) = false
 
 # ── Span coordinates ──────────────────────────────────────────────────────
 #
@@ -801,6 +878,65 @@ function _elements_prefix(path::SpanPath, tail)
     end
     ref
 end
+
+# ── Decorators of a block of lines ────────────────────────────────────────────
+#
+# A decorator that splits or restyles the spans of a line, and inserts no
+# character, keeps every flat offset. It records, for each line that it splits, the
+# segments of the spans of that line, whose indices count in the line; a line that
+# it does not split is the same object.
+
+# A line with every field of `line` but the spans, which are `spans`.
+_make_line_with_spans(line::TextLine, spans::Vector) =
+    TextLine(CellVector(Cell[Cell(span) for span in spans]), getfield(line, :indentation),
+             getfield(line, :gutter), getfield(line, :fold), getfield(line, :soft_breaks),
+             getfield(line, :selection), getfield(line, :mouse_target))
+
+# A path on a block of lines, mapped through the segments of its line: forward from
+# the input to the output, or backward. A caret, a range, a box and `∅` keep their
+# flat offsets, and a path into a line that is not split is the same in both.
+function _map_line_path(segs, reference, forward::Bool)
+    parsed = _parse_line_span_path(reference)
+    parsed === nothing && return reference
+    i, j, tail = parsed
+    k = findfirst(entry -> first(entry) == i, segs)
+    k === nothing && return reference
+    char = tail === nothing ? nothing : tail[1]
+    for seg in last(segs[k])
+        index, start = forward ? (seg.in_span, seg.in_char_start) : (seg.out_index, 0)
+        index == j || continue
+        if forward
+            char === nothing || start <= char <= start + seg.length || continue
+            return _make_line_span_path(i, seg.out_index, char === nothing ? nothing : char - start, tail)
+        end
+        return _make_line_span_path(i, seg.in_span, char === nothing ? nothing : char + seg.in_char_start, tail)
+    end
+    nothing
+end
+
+# `.elements[i].elements[j]` followed by nothing, or by `.content{a:b}`: `(i, j,
+# nothing)` or `(i, j, (a, b))`; `nothing` for any other path.
+function _parse_line_span_path(reference)
+    r = strip_reference_types(reference)
+    steps = r isa ConcreteReference ? collect(get_reference_steps(r)) : Any[]
+    (length(steps) in (4, 6) && steps[1] isa FieldReferenceStep && steps[1].name == "elements" &&
+     steps[2] isa RangeReferenceStep && steps[3] isa FieldReferenceStep &&
+     steps[3].name == "elements" && steps[4] isa RangeReferenceStep) || return nothing
+    i, j = steps[2].stop, steps[4].stop
+    length(steps) == 4 && return (i, j, nothing)
+    (steps[5] isa FieldReferenceStep && steps[5].name == "content" && steps[6] isa RangeReferenceStep) ||
+        return nothing
+    (i, j, (steps[6].start::Int, steps[6].stop::Int))
+end
+
+# The path of span `j` of line `i`, with the characters `a:b` of `tail` moved by
+# `char - a` when `char` is given.
+function _make_line_span_path(i::Int, j::Int, char, tail)
+    tail === nothing && return _elements_prefix(Int[i, j], EmptyReference())
+    a, b = tail
+    _text_replace_path(Int[i, j], char, char + b - a)
+end
+
 
 # ── Clipboard support ──────────────────────────────────────────────────────────
 # Public helpers used by the clipboard projection's text branch

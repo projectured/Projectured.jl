@@ -1,6 +1,6 @@
 name = "ProjecturedMathTest"
 uuid = "35efe23a-a24b-424c-93f0-086222c9adeb"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -17,14 +17,14 @@ ProjecturedPlatformTest = "38f1c7f4-274b-4c10-ad20-becff0e69ef8"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
-ProjecturedConsole = "0.1.0"
-ProjecturedKernel = "0.1.0"
-ProjecturedKernelExample = "0.1.0"
-ProjecturedKernelTest = "0.1.0"
-ProjecturedMath = "0.1.0"
-ProjecturedMathExample = "0.1.0"
-ProjecturedPDF = "0.1.0"
-ProjecturedPlatform = "0.1.0"
-ProjecturedPlatformExample = "0.1.0"
-ProjecturedPlatformTest = "0.1.0"
+ProjecturedConsole = "0.1.1"
+ProjecturedKernel = "0.1.1"
+ProjecturedKernelExample = "0.1.1"
+ProjecturedKernelTest = "0.1.1"
+ProjecturedMath = "0.1.1"
+ProjecturedMathExample = "0.1.1"
+ProjecturedPDF = "0.1.1"
+ProjecturedPlatform = "0.2.0"
+ProjecturedPlatformExample = "0.1.1"
+ProjecturedPlatformTest = "0.1.1"
 julia = "1.12"

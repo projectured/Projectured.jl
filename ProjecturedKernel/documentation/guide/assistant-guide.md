@@ -51,6 +51,30 @@ bin/projectured --assistant=anthropic notes.md
 
 `--model=NAME` names a model; without it the backend uses its default. A turn goes to the Anthropic API and is paid for by your key.
 
+## An agent that runs its own loop (ACP)
+
+An agent of the Agent Client Protocol runs its own loop, its own model and its own tools, in a process of its own. The assistant sends it what you write and draws what it reports: its text, a summary of its reasoning, each tool call, and its plan. The agent reaches the open documents through the tools of this editor, so its edits are operations of the editor.
+
+The built-in agent is Claude Code. It runs in the process of the editor and starts the `claude` program that you installed, so it needs no Node.js and no other program. Install Claude Code and sign in once, and then start:
+
+```sh
+claude auth login
+bin/projectured --assistant=acp notes.md
+```
+
+When Claude Code is not signed in, the conversation says how to sign in. The built-in agent is the package [ClaudeCodeACP.jl](https://github.com/projectured/ClaudeCodeACP.jl), which another editor can start as the program `claude-code-acp`.
+
+`--agent-command=COMMAND` names another agent of the Agent Client Protocol, as one argument, which then runs in a process of its own and signs in with its own sign-in. For example, the adapter `claude-agent-acp`, which needs Node.js 22 or newer:
+
+```sh
+npm install -g @agentclientprotocol/claude-agent-acp
+bin/projectured --assistant=acp --agent-command=claude-agent-acp
+```
+
+The settings tab keeps the command for the next start. A session in Julia loads the client by name: `using ProjecturedACP`.
+
+When the agent asks to run a tool, the conversation shows a card with its answers, and the agent waits for your click. Escape stops the turn of the agent. ProjecturEd reads no key and no token of the agent: the agent signs in with its own sign-in, and its use counts as its provider decides.
+
 ## What the assistant can do
 
 The assistant has a set of tools, and the same set is what an external client gets through MCP ([mcp-guide.md](mcp-guide.md)).
@@ -59,7 +83,7 @@ The assistant has a set of tools, and the same set is what an external client ge
 | --- | --- |
 | `search_api` | finds a module, a type or a function of the loaded packages, by name, by pattern or by description |
 | `search_guides`, `read_resource` | reads the guides of this repository |
-| `execute_julia_code` | runs Julia in the running program, with `editor` bound to the editor |
+| `execute_julia_code` | runs Julia in the running program, with `editor` bound to the editor; a verb acts on that editor, so the code does not pass it |
 | the operations | changes the data with the same edits as your key presses |
 
 So a question can be about the data in front of you, about the API, or about a change to make. Examples:

@@ -58,7 +58,7 @@ function make_widget_document_example(; width=1024, height=768)
                    content="Name and framework go here.", footer="You can change this later."),
         WidgetAlert("Heads up!"; description = "You can add components using the CLI."),
         HorizontalLayout(Any[WidgetAvatar("JD"; size=56),
-                             WidgetProgress(0.6; width=260)]; gap=16),
+                             WidgetProgressBar(0.6; width=260)]; gap=16),
         WidgetSeparator(; length=320),
         WidgetSkeleton(; width=320, height=18),
     ]; gap=16, horizontal_align=:left)
@@ -478,9 +478,25 @@ make_widget_switch_document_example() =
         WidgetSwitch(; checked = false),
     ]; gap=12)
 
-# WidgetProgress — a 60% bar.
-make_widget_progress_document_example() =
-    WidgetProgress(0.6; position = Point2D(40, 40), width=260)
+# WidgetProgressBar — a 60% bar and a bar whose value is not known, stacked by a
+# VerticalLayout.
+make_widget_progress_bar_document_example() =
+    VerticalLayout(Any[
+        WidgetProgressBar(0.6; width=260),
+        WidgetProgressBar(; width=260),
+    ]; gap=12)
+
+# WidgetProgressRing — rings at 0, 25, 60 and 100 percent and a ring whose value
+# is not known, then a table of jobs with a column of rings.
+make_widget_progress_ring_document_example() =
+    VerticalLayout(Any[
+        HorizontalLayout(Any[WidgetProgressRing(0.0), WidgetProgressRing(0.25), WidgetProgressRing(0.6),
+                             WidgetProgressRing(1.0), WidgetProgressRing()]; gap=12),
+        WidgetTable(["Job", "Done", "State"],
+                    [["Parse",    WidgetProgressRing(1.0), "Finished"],
+                     ["Simulate", WidgetProgressRing(0.4), "Running"],
+                     ["Plot",     WidgetProgressRing(),    "Waiting"]]),
+    ]; gap=16, horizontal_align=:left)
 
 # WidgetSlider — a knob at 40%.
 make_widget_slider_document_example() =
@@ -582,8 +598,8 @@ make_widget_table_frozen_document_example() =
         WidgetTable(;
                     column_headers = Any["Invoice", "Status", "Method", "Amount"],
                     row_headers = Any["1", "2", "3", "4", "5", "6"],
-                    rows = Any[Any["INV00$(i)", "Paid", "Credit Card", "\$$(i)50.00"] for i in 1:6],
-                    column_count = 4, scroll_position = Point2D(40, 60));
+                    cells = Any[Any["INV00$(i)", "Paid", "Credit Card", "\$$(i)50.00"] for i in 1:6],
+                    scroll_position = Point2D(40, 60));
         size = Point2D(320, 150),
         style = WidgetStyle(content_color = StyleColor(0.98, 0.96, 0.90, 1.0)))
 

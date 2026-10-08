@@ -1,5 +1,5 @@
 # Tests for the application window: it draws a file of every format that has a
-# registered file document, a navigator gesture opens a file beside the other
+# registered file document, a Files pane gesture opens a file beside the other
 # files, and Ctrl+S saves the file tab that has the focus. The events go
 # through the same window scene that `run_application` runs, with no window on
 # the screen.
@@ -231,19 +231,21 @@ function _app_drawn_outlines(node, ox = 0, oy = 0, found = NTuple{4,Int}[])
     found
 end
 
-# The first height at which a double click on the navigator opens a file, and
-# the operation it makes. The navigator is the leftmost part of the window.
-# The trees that the views under `iomap` draw in a scroll pane, as the navigator
-# draws the files: a view makes them, so they are in no document.
+# The first height at which a double click on the Files pane opens a file, and
+# the operation it makes. The Files pane is the leftmost part of the window.
+# The trees that the views under `iomap` draw in a scroll pane, as the Files
+# pane draws the files: a view makes them, so they are in no document.
 function _app_find_view_trees(iomap, found = Any[], seen = IdDict())
     haskey(seen, iomap) && return found
     seen[iomap] = true
     output = get_iomap_output(iomap)
     output = output isa Cell ? output[] : output
     # A wrapper of an IoMap, such as a fault barrier, shows the output of the
-    # IoMap that it wraps, so one tree is found once.
-    output isa WidgetScrollPane && output.content isa WidgetTree &&
-        !any(tree -> tree === output.content, found) && push!(found, output.content)
+    # IoMap that it wraps, so one tree is found once. A view outputs its tree, or
+    # a pane that holds it.
+    tree = output isa WidgetTree ? output :
+           output isa WidgetScrollPane && output.content isa WidgetTree ? output.content : nothing
+    tree === nothing || any(t -> t === tree, found) || push!(found, tree)
     for field in fieldnames(typeof(iomap))
         value = getfield(iomap, field)
         value = value isa Cell ? value[] : value
@@ -287,7 +289,7 @@ function test_application()
             @test :open_pane! in names          # the pane arranges the window
             @test :WidgetTable in names         # a widget shows a value
             @test :make_file_tab in names       # a path becomes a tab
-            @test :Workspace in names           # the navigator lists a tree
+            @test :Workspace in names           # the Files pane lists a tree
 
             # A declared surface is what `search_api` answers. Without it the
             # search indexes the kernel's own modules and a person asking to open
@@ -327,15 +329,24 @@ function test_application()
             # An option that the command line does not give is `nothing`, so the
             # start settings decide it.
             command = parse_application_arguments(String[])
-            @test command.files == String[]
+            @test command.paths == String[]
             @test command.backend === nothing && command.assistant === nothing
             @test command.model === nothing && command.mcp === nothing
             @test command.context === nothing && !command.strict_fault_policy
+            @test command.agent_command === nothing
+            # The command of an external agent is one argument, with its spaces.
+            command = parse_application_arguments(["--assistant=acp",
+                                                   "--agent-command=node /opt/agent/index.js"])
+            @test command.assistant === :acp
+            @test command.agent_command == "node /opt/agent/index.js"
+            start = get_settings_group!(make_application_settings(nothing; agent_command = "my-agent"),
+                                        StartSettings)
+            @test start.agent_command == "my-agent"
             command = parse_application_arguments(
                 ["a.json", "--backend=web", "--assistant=none",
                  "--model=small", "--root=/tmp", "--mcp", "--context=8192",
                  "--strict-fault-policy", "b.md"])
-            @test command.files == ["a.json", "b.md"]
+            @test command.paths == ["a.json", "b.md"]
             @test command.backend === :web
             @test command.assistant === :none && command.model == "small"
             @test command.root == "/tmp" && command.mcp
@@ -422,17 +433,17 @@ function test_application()
                 editor = Editor(scene, composed; backend = ConsoleBackend(),
                                 devices = Device[Display(), Keyboard(), Mouse()])
                 editor.iomap = iomap
-                files = find_pane_reference(editor, "Files")
+                files = find_pane_reference("Files"; editor)
                 @test evaluate_reference(scene, files) isa PaneTab
                 @test get_pane_tab_title_string(evaluate_reference(scene, files)) == "Files"
-                @test find_pane_reference(editor, "no such pane") === nothing
-                @test_throws ArgumentError focus_pane!(editor, nothing)
+                @test find_pane_reference("no such pane"; editor) === nothing
+                @test_throws ArgumentError focus_pane!(nothing; editor)
                 # The verb's operation is the one a press on the title of the tab makes.
                 (_, x, y) = only(item for item in _app_drawn_at(get_iomap_output(iomap).windows[1].content)
                                  if item[1] == "Files")
                 pressed = _app_fire(composed, iomap, MouseClick(:left, x + 4, y + 4, 1, ModifierKeys(); time = 0.0))
-                @test repr(_app_plain(make_focus_pane_operation(editor, files))) == repr(_app_plain(pressed))
-                focus_pane!(editor, files)
+                @test repr(_app_plain(make_focus_pane_operation(files; editor))) == repr(_app_plain(pressed))
+                focus_pane!(files; editor)
                 # Each level from the root down holds its suffix of one path.
                 tab = "root.elements[1].tabs[1]"
                 level(node) = repr(strip_reference_types(get_selection(node)))
@@ -456,7 +467,7 @@ function test_application()
                                                 opened_window_projections =
                                                     make_opened_window_projections()))
                 @test editor.iomap !== nothing
-                focus_pane!(editor, find_pane_reference(editor, "Files"))
+                focus_pane!(find_pane_reference("Files"; editor); editor)
                 # The screen is inside the state of the tooltip window, inside the
                 # state of the context menu window, inside the state of the drag
                 # tracker, inside the state of the gesture tracker, inside the
@@ -479,7 +490,7 @@ function test_application()
                                                 height = 1000,
                                                 opened_window_projections =
                                                     make_opened_window_projections()))
-                settings = find_editor_settings(editor)
+                settings = find_editor_settings(; editor)
                 @test settings isa Settings
                 toolbar = only(search_documents(editor.document, node -> node isa WidgetToolbar))
                 button = only(item for item in toolbar.elements
@@ -513,6 +524,11 @@ function test_application()
                 strict = make_application_settings(path; fault_policy = make_strict_fault_policy())
                 strict_fault = get_settings_group!(strict, FaultSettings)
                 @test !strict_fault.is_barrier_enabled && strict_fault.is_sound_enabled
+                # The settings make the policy that the editor starts with.
+                policy = make_fault_policy(strict_fault)
+                @test !policy.is_barrier_enabled && policy.is_console_enabled &&
+                      policy.is_sound_enabled
+                @test !make_fault_policy(fault).is_sound_enabled
                 @test make_application_settings(nothing).file == ""
                 # The start settings: the file, then the command line.
                 write(path, "[start]\nassistant = \"none\"\nmodel = \"small\"\ncontext = 4096\n")
@@ -539,11 +555,11 @@ function test_application()
                 title(pane) = get_pane_tab_title_string(evaluate_reference(scene, get_reference(pane)))
                 @test _app_is_one_path(scene) && isempty(_app_find_stray_live_selections(scene))
 
-                focus_pane!(editor, find_pane_reference(editor, "Files"))
+                focus_pane!(find_pane_reference("Files"; editor); editor)
                 @test _app_is_one_path(scene) && isempty(_app_find_stray_live_selections(scene))
 
                 steps = length(history)
-                opened = open_pane!(editor, PrimitiveString("hello"); title = "Hello")
+                opened = open_pane!(PrimitiveString("hello"); title = "Hello", editor)
                 @test startswith(repr(strip_reference_types(get_reference(opened))), ".windows[1].")
                 @test title(opened) == "Hello"
                 @test let (group, index) = get_pane_focus(tree)
@@ -552,25 +568,25 @@ function test_application()
                 @test _app_is_one_path(scene) && isempty(_app_find_stray_live_selections(scene))
                 @test length(history) == steps + 1          # an open is one undo step
 
-                second = duplicate_pane!(editor, opened)
+                second = duplicate_pane!(opened; editor)
                 @test startswith(repr(strip_reference_types(get_reference(second))), ".windows[1].")
                 name = title(second)
                 @test name != "Hello" && startswith(name, "Hello")
-                close_pane!(editor, second)
+                close_pane!(second; editor)
                 @test _app_is_one_path(scene) && isempty(_app_find_stray_live_selections(scene))
-                @test_throws ArgumentError close_pane!(editor, nothing)
+                @test_throws ArgumentError close_pane!(nothing; editor)
                 # The history holds the closed tab, and the finder does not find it.
-                @test find_pane_reference(editor, name) === nothing
+                @test find_pane_reference(name; editor) === nothing
 
                 # Ctrl+C copies what the focus names, and a copy of a tab that the
                 # clipboard holds is not a pane the finder finds.
-                focus_pane!(editor, find_pane_reference(editor, "Hello"))
+                focus_pane!(find_pane_reference("Hello"; editor); editor)
                 copy = _app_fire(composed, editor.iomap, KeyDown(:c, ModifierKeys(ctrl = true); time = 0.0))
                 _app_apply!(editor, copy)
                 @test document.slice isa PrimitiveString && document.slice.value == "hello"
                 stored = document.slice
-                document.slice = copy_document(evaluate_reference(scene, find_pane_reference(editor, "Hello")))
-                @test find_pane_reference(editor, "Hello") isa Reference
+                document.slice = copy_document(evaluate_reference(scene, find_pane_reference("Hello"; editor)))
+                @test find_pane_reference("Hello"; editor) isa Reference
                 document.slice = stored
 
                 # Ctrl+T opens a tab through the menu, which posts its edit, and a
@@ -589,7 +605,7 @@ function test_application()
                 document, scene, composed, iomap = _app_make_scene(paths[1:2], dir)
                 editor = _app_make_editor(scene, composed, iomap)
                 tree = _app_window(document)
-                layout = String(show_layout(editor).content)
+                layout = String(show_layout(; editor).content)
                 lines = split(chomp(layout), "\n")
                 @test startswith(lines[1], "(root)") && occursin("::ScreenDocument", lines[1])
                 @test any(line -> occursin("::PaneTree", line) &&
@@ -613,23 +629,23 @@ function test_application()
                 end
                 title_b = basename(paths[2])
                 @test joined_path(title_b) ==
-                      repr(strip_reference_types(find_pane_reference(editor, title_b)))
+                      repr(strip_reference_types(find_pane_reference(title_b; editor)))
 
                 # Into a group: the pane goes to its end.
                 files_group = get_pane_groups(tree)[1]
-                group_reference = concat_references(find_pane_tree_reference(editor),
+                group_reference = concat_references(find_pane_tree_reference(; editor),
                                                     @reference(tree, root.elements[1]))
-                move_pane!(editor, find_pane_reference(editor, title_b), group_reference)
+                move_pane!(find_pane_reference(title_b; editor), group_reference; editor)
                 @test get_pane_tab_title_string(last(files_group.tabs)) == title_b
                 @test _app_is_one_path(scene) && isempty(_app_find_stray_live_selections(scene))
                 # Beside a group: the pane gets a group of its own.
                 groups = length(get_pane_groups(tree))
-                move_pane!(editor, find_pane_reference(editor, title_b),
-                           find_pane_reference(editor, "Files"); side = :below)
+                move_pane!(find_pane_reference(title_b; editor),
+                           find_pane_reference("Files"; editor); side = :below, editor)
                 @test length(get_pane_groups(tree)) == groups + 1
                 @test _app_is_one_path(scene) && isempty(_app_find_stray_live_selections(scene))
-                @test_throws ArgumentError move_pane!(editor, find_pane_reference(editor, title_b),
-                                                      find_pane_reference(editor, "Files"); side = :middle)
+                @test_throws ArgumentError move_pane!(find_pane_reference(title_b; editor),
+                                                      find_pane_reference("Files"; editor); side = :middle, editor)
             end
 
             @testset "every format draws" begin
@@ -700,6 +716,40 @@ function test_application()
                 tabs = [tab for group in get_pane_groups(_app_window(document)) for tab in group.tabs]
                 @test count(tab -> tab.content === get_session_gesture_log(), tabs) == 1
                 @test any(text -> occursin("Gestures", text), drawn())
+            end
+
+            @testset "a press on the bar of an agent starts it, and a press on an option opens its menu" begin
+                connection = ScriptedAgentConnection(Any[]; options = make_scripted_agent_options())
+                chat = make_application_assistant(:acp)
+                chat.agent_session = ExternalAgentSession(connection)
+                document, scene, composed, iomap = _app_make_scene(paths[1:1], dir; assistant = chat)
+                editor = _app_make_editor(scene, composed, iomap)
+                drawn() = _app_drawn_at(print_document(composed, scene).output.windows[1].content)
+                (x, y) = only((x, y) for (text, x, y) in drawn() if text == "Start the agent")
+                _app_apply!(editor, _app_fire(composed, iomap, MouseClick(:left, x + 2, y + 2, 1,
+                                                                         ModifierKeys(); time = 0.0)))
+                @test timedwait(() -> length(chat.agent_options) == 3, 10.0; pollint = 0.01) === :ok
+                @test isempty(connection.prompts)
+                texts = [text for (text, _, _) in drawn()]
+                @test all(label -> label in texts, ("Model: Opus 5.5", "Effort: High", "Mode: Manual"))
+                @test !("Start the agent" in texts)
+                iomap = print_document(composed, scene)
+                (x, y) = only((x, y) for (text, x, y) in _app_drawn_at(iomap.output.windows[1].content)
+                              if text == "Effort: High")
+                # The menu opens as a window under the option while the press is read,
+                # through the view of the assistant in its pane, as the menu of a name does.
+                _app_fire(composed, iomap, MouseClick(:left, x + 2, y + 2, 1, ModifierKeys(); time = 0.0))
+                @test length(scene.windows) == 2
+                popup = scene.windows[2].content
+                @test popup isa WidgetMenu
+                @test [string(item.action.label) for item in popup.elements] == ["✓ High", "   Max"]
+                # The tab shows the title that the agent gives its session, and the
+                # line beside the menus the usage of its context.
+                chat.agent_title = "Reply with OK"
+                chat.agent_usage = AgentUsageUpdate(36012, 1000000, nothing, "")
+                texts = [text for (text, _, _) in drawn()]
+                @test "Reply with OK" in texts
+                @test "36k / 1M" in texts
             end
 
             @testset "a press on a menu name opens its menu as a window under the name" begin
@@ -836,7 +886,7 @@ function test_application()
                 document, scene, composed, iomap = _app_make_scene(paths[1:1], dir)
                 editor = _app_make_editor(scene, composed, iomap)
                 tree = _app_window(document)
-                focus_pane!(editor, find_pane_reference(editor, "Files"))
+                focus_pane!(find_pane_reference("Files"; editor); editor)
                 explorer = first(get_pane_focus(tree))
                 toolbar = only(search_documents(document, node -> node isa WidgetToolbar))
                 button = only(item for item in toolbar.elements
@@ -1261,7 +1311,7 @@ function test_application()
                 @test only(carets)[2] > y_of("x = 1  # why") > y_of("GraphicsCircle")
             end
 
-            @testset "a closed assistant and a closed navigator come back as they were" begin
+            @testset "a closed assistant and a closed Files pane come back as they were" begin
                 started = make_application_assistant(:ollama; model = "small", context = 4096)
                 document, scene, composed, iomap = _app_make_scene(paths[1:1], dir;
                                                                    assistant = started)
@@ -1274,9 +1324,9 @@ function test_application()
                                  for (index, tab) in enumerate(group.tabs)
                                  if get_wrapped_document(tab.content) isa type]
                 # A pane is closed as the assistant closes one, by its complete reference.
-                close!(type) = close_pane!(editor, only(search_references(scene,
+                close!(type) = close_pane!(only(search_references(scene,
                     node -> node isa PaneTab && get_wrapped_document(node.content) isa type;
-                    descend = is_pane_search_step)))
+                    descend = is_pane_search_step)); editor)
                 @test [string(item.action.label) for item in toolbar.elements][2] == "Assistant"
 
                 # While the assistant is open, the button reaches it and makes none.
@@ -1301,7 +1351,7 @@ function test_application()
                 @test greeting(again) == greeting(started)
                 @test occursin("Ollama", greeting(again))
 
-                # The navigator comes back over the folder the window lists.
+                # The Files pane comes back over the folder the window lists.
                 close!(Workspace)
                 _app_apply!(editor, InvokeActionOperation(button("Explorer").action))
                 (group, index) = only(holding(Workspace))
@@ -1422,7 +1472,7 @@ function test_application()
                     change isa Intent ? change.operation : change
                 end
 
-                # A row of the navigator lights up through the mouse target that
+                # A row of the Files pane lights up through the mouse target that
                 # a move writes at the screen, and the history does not grow.
                 pointer = ProjecturedPlatformTest.MttDriver(composed, scene)
                 hover!(x, y, time) = ProjecturedPlatformTest._mtt_play!(pointer,
@@ -1431,16 +1481,16 @@ function test_application()
                 before = steps()
                 hover!(100, y, 1.0)
                 # The file is the target, and the chain carries the hover on to
-                # the row of the tree that the navigator's view makes for it.
-                navigator = only(_app_find_view_trees(pointer.iomap))
-                @test get_mouse_target(navigator) !== nothing
+                # the row of the tree that the Files pane's view makes for it.
+                files_tree = only(_app_find_view_trees(pointer.iomap))
+                @test get_mouse_target(files_tree) !== nothing
                 hover!(100, y + 40, 1.1)
                 @test steps() == before
-                # Off the navigator, the leave of the file turns the row off.
+                # Off the Files pane, the leave of the file turns the row off.
                 hover!(900, 500, 1.2)
-                @test get_mouse_target(navigator) === nothing
+                @test get_mouse_target(files_tree) === nothing
 
-                # The divider between the navigator and the files follows the
+                # The divider between the Files pane and the files follows the
                 # pointer, and the history does not grow: a drag is view state.
                 weights() = [Float64(w) for w in tree.root.weights]
                 grab = findfirst(x -> holds(fire(MouseDown(:left, x, 500; time = 0.0)),
@@ -1460,7 +1510,7 @@ function test_application()
                 @test steps() == recorded
 
                 # The file's tab — the one the window opened on — drags into the
-                # navigator's group.
+                # Files pane's group.
                 groups = get_pane_groups(tree)
                 files = groups[end]
                 (tx, ty) = last(sort([(x, y) for (text, x, y) in
@@ -1484,7 +1534,7 @@ function test_application()
                 @test any(tab -> title(tab) == "a.json", groups[1].tabs)
             end
 
-            @testset "the navigator opens a file beside the files" begin
+            @testset "the Files pane opens a file beside the files" begin
                 document, scene, composed, iomap = _app_make_scene(paths[1:1], dir)
                 editor = _app_make_editor(scene, composed, iomap)
                 y, operation = _app_find_file_row(composed, iomap)
@@ -1494,7 +1544,7 @@ function test_application()
                 _app_apply!(editor, operation)
                 @test _app_count_tabs(_app_window(document)) == before + 1
                 groups = get_pane_groups(_app_window(document))
-                @test length(groups[1].tabs) == 1       # the navigator stays alone
+                @test length(groups[1].tabs) == 1       # the Files pane stays alone
                 @test length(groups[2].tabs) == 2       # the file joins the files
 
                 # A single click selects the row, and Enter opens it.
@@ -1506,7 +1556,7 @@ function test_application()
                 @test _app_plain(opened).path == _app_plain(operation).path
             end
 
-            @testset "the navigator scrolls a tree taller than its pane" begin
+            @testset "the Files pane scrolls a tree taller than its pane" begin
                 mktempdir() do tall
                     for folder in ("alpha", "beta", "gamma"), k in 1:12
                         mkpath(joinpath(tall, folder))
@@ -1516,7 +1566,7 @@ function test_application()
                     editor = _app_make_editor(scene, composed, iomap)
                     drawn() = _app_drawn_at(get_iomap_output(editor.iomap).windows[1].content)
                     lowest() = maximum(y for (text, x, y) in drawn() if text == "file9.jl" && x < 400)
-                    # @broken: the navigator's tree opens collapsed by default, so
+                    # @broken: the Files pane's tree opens collapsed by default, so
                     # file9.jl — three folders deep — is never drawn and lowest() has
                     # nothing to reduce over.
                     @test_broken lowest() > 1000        # the last row is below the window
@@ -1555,14 +1605,14 @@ function test_application()
                     catch e
                         # @broken: same cause as above — file9.jl is never drawn, so
                         # lowest() throws again and the rest of this scenario cannot run.
-                        @test_broken (@warn "the navigator scroll scenario threw: $e"; false)
+                        @test_broken (@warn "the Files pane scroll scenario threw: $e"; false)
                     end
                 end
             end
 
-            # The ring shows a selection that ends at the navigator. A row the
+            # The ring shows a selection that ends at the Files pane. A row the
             # person selects is inside it, so the ring is off.
-            @testset "a click selects a row inside the navigator, and Alt+click the navigator" begin
+            @testset "a click selects a row inside the Files pane, and Alt+click the Files pane" begin
                 document, scene, composed, iomap = _app_make_scene(String[], dir)
                 editor = _app_make_editor(scene, composed, iomap)
                 press!(event) = begin
@@ -1660,7 +1710,7 @@ function test_application()
                 w = window()
                 focus_draft!(w)
                 type!(w, "hello")
-                focus_pane!(w.editor, find_pane_reference(w.editor, "a.json"))
+                focus_pane!(find_pane_reference("a.json"; editor = w.editor); editor = w.editor)
                 @test holds_one_path(w)
                 @test carets(w) == 0
                 # A script or a client submits the draft. The draft keeps its new
@@ -1673,14 +1723,14 @@ function test_application()
                 @test get_selection(draft) === nothing
                 @test get_stored_selection(draft) !== nothing
                 # The focus comes back to the assistant, and the caret with it.
-                focus_pane!(w.editor, find_pane_reference(w.editor, "Assistant"))
+                focus_pane!(find_pane_reference("Assistant"; editor = w.editor); editor = w.editor)
                 @test holds_one_path(w)
                 @test get_selection(draft) !== nothing
                 @test carets(w) == 1
 
                 w = window()
                 focus_draft!(w)
-                focus_pane!(w.editor, find_pane_reference(w.editor, "a.json"))
+                focus_pane!(find_pane_reference("a.json"; editor = w.editor); editor = w.editor)
                 _app_apply!(w.editor, ComposerInsertPartOperation(w.assistant.draft))
                 @test holds_one_path(w)
                 @test carets(w) == 0
@@ -1731,7 +1781,7 @@ function test_application()
                 @test holds_one_path(w)
             end
 
-            @testset "the navigator" begin
+            @testset "the Files pane" begin
                 w = window()
                 at = [(x, y) for (text, x, y) in
                       _app_drawn_at(get_iomap_output(w.editor.iomap).windows[1].content)

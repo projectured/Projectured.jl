@@ -128,19 +128,19 @@ function _make_page_table(table::MarkdownTable)
     column_headers = CellVector(@computation Any[entry for entry in table.header.elements])
     rows = CellVector(@computation Any[CellVector(Cell[Cell(entry) for entry in row.elements])
                                        for row in table.rows])
+    # Each column sits where the delimiter row says.
+    columns = Cell(@computation Any[WidgetTableColumn(; align) for align in _make_column_align(table.alignments)])
     widget = WidgetTable(Cell(Point2D(0, 0)), column_headers, CellVector(), Cell(nothing), rows,
-                         Cell(WidgetTableColumns()),
-                         Cell(@computation length(table.alignments)),
+                         Cell(:row_major), Cell(@computation WidgetTableRows(length(rows))), columns,
                          Cell(1),                          # border_width
                          Cell(Fill), Cell(Content),        # the columns share the width
-                         Cell(Any[]), Cell(Any[]),         # and none of them differs
-                         Cell(:wrap), Cell(Symbol[]),      # an entry breaks its lines at its column
-                         Cell(@computation _make_column_align(table.alignments)),
+                         Cell(:wrap),                      # an entry breaks its lines at its column
                          Cell(true),                       # visible
                          Cell(nothing), Cell(nothing), Cell(nothing), Cell(nothing), # margin, border, padding, style
                          Cell(Point2D(0, 0)),              # scroll_position
                          Cell(1),                          # top_row
                          Cell(nothing),                    # column_drag
+                         Cell(:auto), Cell(:auto),         # vertical_scroll_bar, horizontal_scroll_bar
                          Cell(nothing),                    # open_cells
                          Cell(nothing))                    # tooltip
     set_output_path_computations!(widget, table, _map_table_path_forward)
@@ -153,7 +153,8 @@ _make_column_align(alignments) =
     Symbol[alignment === :default ? :left : alignment for alignment in alignments]
 
 # A path inside a table, as a path inside its widget table: `header.elements[j]`
-# is `column_headers[j]`, and `rows[k].elements[j]` is `rows[k][j]`. The rest of
+# is `column_headers[j]`, `rows[k]` is `rows[k]`, and `rows[k].elements[j]` is
+# `cells[k][j]`. The rest of
 # the path is inside the entry, which the two share. A path to what the widget
 # does not draw, such as `alignments`, maps to nothing.
 function _map_table_path_forward(reference)
@@ -173,7 +174,7 @@ function _map_table_path_forward(reference)
         entries isa EmptyReference && return reference
         (entries isa ConcreteReference && entries.head isa FieldReferenceStep && entries.head.name == "elements") ||
             return nothing
-        return ConcreteReference(h, ConcreteReference(t.head, entries.tail))
+        return ConcreteReference(FieldReferenceStep("cells"), ConcreteReference(t.head, entries.tail))
     end
     nothing
 end
@@ -189,10 +190,14 @@ function _map_table_path_backward(reference)
         return ConcreteReference(FieldReferenceStep("header"),
                                  ConcreteReference(FieldReferenceStep("elements"), t))
     elseif h.name == "rows"
+        (t isa ConcreteReference && t.head isa RangeReferenceStep && is_element_reference_step(t.head) &&
+         t.tail isa EmptyReference) || return nothing
+        return reference
+    elseif h.name == "cells"
         (t isa ConcreteReference && t.head isa RangeReferenceStep && is_element_reference_step(t.head)) ||
             return nothing
-        t.tail isa EmptyReference && return reference
-        return ConcreteReference(h, ConcreteReference(t.head,
+        t.tail isa EmptyReference && return nothing
+        return ConcreteReference(FieldReferenceStep("rows"), ConcreteReference(t.head,
                                      ConcreteReference(FieldReferenceStep("elements"), t.tail)))
     end
     nothing

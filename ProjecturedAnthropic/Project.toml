@@ -1,6 +1,6 @@
 name = "ProjecturedAnthropic"
 uuid = "7a22cfc9-547a-444c-98bf-c26ac0f0a0b0"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -11,7 +11,7 @@ ProjecturedKernel = "a3e3499a-684d-4df9-a0d6-de2d1797b1f3"
 [compat]
 HTTP = "1.11.0"
 JSON3 = "1.14.3"
-ProjecturedKernel = "0.1.0"
+ProjecturedKernel = "0.1.1"
 julia = "1.12"
 
 [auto-integration]

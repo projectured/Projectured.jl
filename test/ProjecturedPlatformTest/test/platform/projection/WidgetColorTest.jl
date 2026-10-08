@@ -8,7 +8,8 @@
 _color_test_measure = FixedMeasure(8, 12, 4, 0)
 
 # Every color that a canvas tree draws: the fills, the outlines, the lines and
-# the texts. A rect of no size draws nothing, so its colors do not count.
+# the texts. A rect of no size and an arc of no sweep draw nothing, so their
+# colors do not count.
 function _drawn_colors(canvas)
     out = StyleColor[]
     walk(c) = for el in c.elements
@@ -24,6 +25,8 @@ function _drawn_colors(canvas)
         elseif el isa GraphicsCircle || el isa GraphicsPolygon
             push!(out, el.color)
             Int(el.border_width) > 0 && push!(out, el.border_color)
+        elseif el isa GraphicsArc
+            Float64(el.sweep_angle) > 0 && push!(out, el.color)
         elseif el isa GraphicsText || el isa GraphicsLine || el isa GraphicsPolyline
             push!(out, el.color)
         end
@@ -126,7 +129,8 @@ const _PROBED_WIDGET_DOCUMENTS = (make_widget_document_example,
     make_widget_label_document_example, make_widget_list_document_example,
     make_widget_menu_document_example, make_widget_menu_item_document_example,
     make_widget_offered_document_example, make_widget_option_document_example,
-    make_widget_progress_document_example, make_widget_radio_group_document_example,
+    make_widget_progress_bar_document_example, make_widget_progress_ring_document_example,
+    make_widget_radio_group_document_example,
     make_widget_scroll_bar_document_example, make_widget_scroll_pane_document_example,
     make_widget_select_document_example, make_widget_separator_atom_document_example,
     make_widget_separator_document_example, make_widget_shell_document_example,

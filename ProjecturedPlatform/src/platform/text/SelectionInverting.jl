@@ -16,6 +16,12 @@
 # *restyle* (swap colors vs set a fill swatch). A `nothing`/absent selection is a
 # pass-through (identity).
 #
+# On a block of lines, a line that the selection touches gets new spans, and every
+# other line is the same object. No character is inserted, so every flat offset
+# stays: a caret, a range and a box map to themselves, and only a path into a span
+# of a line maps through the segments of its line. A block caret at the end of a
+# line inverts a space after the line, as one at the end of the text does.
+#
 # Do **not** insert this into the SDL/web graphics pipeline: those already draw a
 # cursor/selection rect in `TextToGraphics` and would double up. It is for
 # Text-domain backends (console), opt-in elsewhere.
@@ -74,19 +80,72 @@ end
     projection::Any
     input::TextBlock
     output::TextBlock
-    segs::Cell  # Cell{Vector{SelectionSegment}}
+    # Cell{Vector{SelectionSegment}} for a block of spans; for a block of lines,
+    # Cell{Vector{Pair{Int,Vector{SelectionSegment}}}}, each line that is split =>
+    # the segments of its spans, whose indices count in the line.
+    segs::Cell
 end
 
 # ── Print ───────────────────────────────────────────────────────────────────
 
 function print_document(p::SelectionInverting, recursion, text::TextBlock, ctx)
-    both = Cell(@computation _invert(p, text))   # (elements, segs)
+    both = Cell(@computation _is_block_of_lines(text) ? _invert_lines(p, text) : _invert(p, text))
     elements_cv = CellVector(@computation both[][1])
     segs_cell = Cell(@computation both[][2])
-    paths = make_output_path_cells(text, path ->
+    paths = make_output_path_cells(text, path -> _is_block_of_lines(text) ?
+        _map_line_path(segs_cell[], path, true) :
         _forward_map(segs_cell[], text, TextBlock(elements_cv, Cell(nothing)), path))
     output = TextBlock(elements_cv, paths.selection, paths.mouse_target)
     SelectionInvertingIoMap(p, text, output, segs_cell)
+end
+
+# The flat range that the selection of `text` inverts, `(start, stop)`, and whether
+# it is a caret widened to a block; `nothing` when there is no selection.
+function _get_inverted_range(p::SelectionInverting, text::TextBlock)
+    sel = get_flat_selection(text)
+    sel === nothing && return nothing
+    is_block = sel[3] && p.block_cursor
+    (start = sel[1], stop = is_block ? sel[1] + 1 : sel[2], is_block = is_block)
+end
+
+# A block of lines: the output lines and the segments of each line that is split.
+function _invert_lines(p::SelectionInverting, text::TextBlock)
+    range = _get_inverted_range(p, text)
+    hl = range === nothing ? nothing : (range.start, range.stop)
+    result = TextDocument[]
+    segs = Pair{Int,Vector{SelectionSegment}}[]
+    offsets = get_flat_offsets(text)
+    for (i, line) in enumerate(text.elements)
+        if !(line isa TextLine)
+            push!(result, line)
+            continue
+        end
+        base = offsets[i] + line.indentation
+        stop = base + sum(get_flat_length(span) for span in line.elements; init = 0)
+        at_end = range !== nothing && range.is_block && range.start == stop
+        if hl === nothing || (!at_end && (hl[2] <= base || hl[1] >= stop))
+            push!(result, line)
+            continue
+        end
+        spans = TextDocument[]
+        line_segs = SelectionSegment[]
+        for (j, span) in enumerate(line.elements)
+            if span isa TextString
+                base = _invert_string!(p, spans, line_segs, span, j, base, hl)
+            else
+                push!(spans, span)
+                span isa TextGraphics && push!(line_segs, SelectionSegment(length(spans), j, 0, 1))
+                base += get_flat_length(span)
+            end
+        end
+        if at_end
+            last_span = findlast(span -> span isa TextString, spans)
+            last_span === nothing || push!(spans, _invert_span(p, spans[last_span], " "))
+        end
+        push!(result, _make_line_with_spans(line, spans))
+        push!(segs, i => line_segs)
+    end
+    (result, segs)
 end
 
 # Returns (output_elements::Vector{TextDocument}, segs::Vector{SelectionSegment}).
@@ -179,6 +238,7 @@ function _restyle_span(original::TextString, content::AbstractString)
                getfield(original, :fill_color),
                getfield(original, :line_color),
                getfield(original, :padding),
+               getfield(original, :pointer_shape),
                Cell(nothing))
 end
 
@@ -195,6 +255,7 @@ function _invert_span(p::SelectionInverting, original::TextString, content::Abst
                Cell(new_bg),
                getfield(original, :line_color),
                getfield(original, :padding),
+               getfield(original, :pointer_shape),
                Cell(nothing))
 end
 
@@ -202,9 +263,11 @@ end
 # Identical to TextHighlighting: the seg table is a piecewise-linear offset map.
 
 map_reference_forward(p::SelectionInverting, iomap::SelectionInvertingIoMap, reference) =
+    _is_block_of_lines(iomap.input) ? _map_line_path(iomap.segs, reference, true) :
     _forward_map(iomap.segs, iomap.input, iomap.output, reference)
 
 function map_reference_backward(p::SelectionInverting, iomap::SelectionInvertingIoMap, reference)
+    _is_block_of_lines(iomap.input) && return _map_line_path(iomap.segs, reference, false)
     _is_structural_ref(reference) && return reference
     flat = _text_range_caret(reference)
     flat === nothing && return nothing
@@ -228,6 +291,10 @@ end
 # Translate a `ReplaceStringRangeOperation` from the split output domain back to
 # the un-split input domain, shifting the char range by the sub-span's start.
 function read_intent(p::SelectionInverting, iomap::SelectionInvertingIoMap, op::ReplaceStringRangeOperation)
+    if _is_block_of_lines(iomap.input)
+        reference = _map_line_path(iomap.segs, op.reference, false)
+        return reference === nothing ? nothing : ReplaceStringRangeOperation(reference, op.replacement)
+    end
     parsed = _parse_text_elem_range(op.reference)
     parsed === nothing && return nothing
     out_span, char_start, char_stop = parsed

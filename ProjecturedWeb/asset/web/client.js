@@ -388,6 +388,7 @@
       case "polyline": return drawPolyline(ctx, e);
       case "polygon": return drawPolygon(ctx, e);
       case "circle": return drawCircle(ctx, e);
+      case "arc":    return drawArc(ctx, e);
       case "group":  return drawGroup(ctx, e);
       case "clip":   return drawClip(ctx, e);
       case "image":  return drawImage(ctx, e);
@@ -585,6 +586,23 @@
     }
   }
 
+  // A stroke along a part of a circle, inside its outer radius e.r: the angles are
+  // degrees from the top, clockwise. The canvas measures from 3 o'clock, so each
+  // angle moves back by a quarter turn.
+  function drawArc(ctx, e) {
+    const w = Math.max(1, Math.min(e.w | 0, e.r));
+    const rm = e.r - w / 2;
+    if (rm <= 0 || !(e.sweep > 0) || e.c[3] <= 0) return;
+    const sweep = Math.min(e.sweep, 360);
+    const a0 = (e.start - 90) * Math.PI / 180;
+    ctx.beginPath();
+    ctx.arc(e.cx, e.cy, rm, a0, a0 + sweep * Math.PI / 180);
+    ctx.strokeStyle = col(e.c);
+    ctx.lineWidth = w;
+    ctx.lineCap = "butt";
+    ctx.stroke();
+  }
+
   function drawGroup(ctx, e) {
     ctx.save();
     ctx.translate(e.x, e.y);
@@ -629,11 +647,14 @@
   // ── Event capture ──────────────────────────────────────────────────────────
 
   function mods(ev) { return { ctrl: ev.ctrlKey, shift: ev.shiftKey, alt: ev.altKey, meta: ev.metaKey }; }
-  // The name of a button, or null for a side button, which the event layer does not
-  // name: the page sends no event for it.
+  // The name of a button, or null for one that the event layer does not name. The
+  // side buttons are back and forward.
   function buttonSym(b) {
-    return b === 0 ? "left" : b === 1 ? "middle" : b === 2 ? "right" : null;
+    return b === 0 ? "left" : b === 1 ? "middle" : b === 2 ? "right" :
+           b === 3 ? "back" : b === 4 ? "forward" : null;
   }
+  // A side button is the page's own: the browser does not go back or forward.
+  function isSideButton(b) { return b === 3 || b === 4; }
   // The place of the pointer in logical pixels.
   function pos(ev, canvas) {
     const r = canvas.getBoundingClientRect();
@@ -654,6 +675,7 @@
     canvas.addEventListener("mousedown", (ev) => {
       const button = buttonSym(ev.button);
       if (button === null) return;
+      if (isSideButton(ev.button)) ev.preventDefault();
       const { x, y } = pos(ev, canvas);
       send({ type: "mousedown", window: idFn(), button, x, y, mods: mods(ev),
              t: stamp(ev) });
@@ -667,6 +689,7 @@
     canvas.addEventListener("mouseup", (ev) => {
       const button = buttonSym(ev.button);
       if (button === null) return;
+      if (isSideButton(ev.button)) ev.preventDefault();
       const { x, y } = pos(ev, canvas);
       send({ type: "mouseup", window: idFn(), button, x, y, mods: mods(ev),
              t: stamp(ev) });

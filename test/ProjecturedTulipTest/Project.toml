@@ -1,6 +1,6 @@
 name = "ProjecturedTulipTest"
 uuid = "6e7ca9da-6789-4ac4-a4d2-74571a5e8aba"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -13,10 +13,10 @@ ProjecturedTulip = "bf3b10cf-befa-4ac9-98d3-9c1678f27146"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
-ProjecturedConsole = "0.1.0"
-ProjecturedKernel = "0.1.0"
-ProjecturedKernelTest = "0.1.0"
-ProjecturedPDF = "0.1.0"
-ProjecturedPlatform = "0.1.0"
-ProjecturedTulip = "0.1.0"
+ProjecturedConsole = "0.1.1"
+ProjecturedKernel = "0.1.1"
+ProjecturedKernelTest = "0.1.1"
+ProjecturedPDF = "0.1.1"
+ProjecturedPlatform = "0.2.0"
+ProjecturedTulip = "0.1.1"
 julia = "1.12"

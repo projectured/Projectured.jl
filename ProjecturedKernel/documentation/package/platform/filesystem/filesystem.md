@@ -21,9 +21,9 @@ The file-system slice of `ProjecturedPlatform` shows folders and files of the di
 There are two views of the tree:
 
 - **`FileSystemToSyntax()`** prints a directory as a name leaf and an indented body. A custom `marker_eligible` predicate puts the fold marker on the directory name only, not also on the body. The name of a file is text that the projection introduces, so a text edit on it returns `nothing` and a caret on it selects the file.
-- **`FileSystemToWidget()`** prints the tree as one `WidgetTree` inside a `WidgetScrollPane`, with an icon for each file extension. The root row is open, and each folder under it is closed until a person opens it. A folder row reads the listing of its folder when the row is drawn, to know if it has a chevron, and an empty folder has no chevron. The tree draws only the rows in the viewport of the pane, so a row outside the viewport reads nothing from the disk. The pane scrolls the tree when the tree is larger than the space the pane is given, because a tab puts nothing around what it holds. The tree takes the width that the pane offers, and the pane clips a longer name: there is no horizontal scroll. One pair of functions converts a path in the file system to a path in the tree and back, and the reference maps put the pane's `content` step in front of it.
+- **`FileSystemToWidget()`** prints the tree as one `WidgetTree`, with an icon for each file extension. The root row is open, and each folder under it is closed until a person opens it. A folder row reads the listing of its folder when the row is drawn, to know if it has a chevron, and an empty folder has no chevron. The tree scrolls itself in the slot that its tab gives it, because a tab puts nothing around what it holds, and it draws only the rows in its view, so a row outside the view reads nothing from the disk. The tree takes the width that it is offered, and clips a longer name: there is no horizontal scroll. One pair of functions converts a path in the file system to a path in the tree and back, and the reference maps are those functions.
 
-The Explorer chain is `WorkspaceToFileSystem`, then `FileSystemToWidget`, then `RecursiveProjection(WidgetToGraphics(…))`. The renderer is recursive because the scroll pane prints the tree through the recursion.
+The Explorer chain is `WorkspaceToFileSystem`, then `FileSystemToWidget`, then `RecursiveProjection(WidgetToGraphics(…))`. The renderer is recursive because the tree prints itself again as the content of its own pane.
 
 ### Select a row
 
@@ -33,7 +33,7 @@ The selection of the computed directory is a computed cell: the image of the fol
 
 ### Open a file
 
-Enter on a row, or a double click, makes an `OpenFileOperation(path; wrap)`. The operation names the file and nothing else. When the editor applies it, `make_file_tab_content` reads the file into the document type that its extension registers, in a scroll pane, and `open_pane!` asks the pane tree where a file goes. The `wrap` function lets an application put every opened file in an overlay, for example an undo history.
+Enter on a row, or a double click, makes an `OpenFileOperation(path)`. The operation names the file and nothing else. When the editor applies it, `make_file_tab` reads the file into the document type that its extension registers, in a scroll pane, and `open_pane!` asks the pane tree where a file goes. An opener can put a part of its own around the content that the file holds (`wrap`), or around the file document (`file_wrap`), as a link puts a navigator around a file. When the editor has settings, the evaluation gives the file a history (`make_history_wrap` of the undo slice), whatever started the open: around the part of `file_wrap`, so it records every edit of that part, and else around the content, inside the file. So a file that the Files pane, the menu Open or a link opens has an undo.
 
 ### Choose a file
 
@@ -74,10 +74,10 @@ A `.pred` file builds `Workspace` and `WorkspaceFolder` by their names, so a sav
 ```julia
 tree = make_filesystem_pathname("example/platform/filesystem/fixture/project")
 explorer = Workspace([WorkspaceFolder("project", abspath("example/platform/filesystem/fixture/project"))])
-run_example("navigator")                 # the Explorer view of the fixture project
+run_example("files")                     # the Explorer view of the fixture project
 ```
 
-- Examples: `filesystem_example` (syntax), `filesystem_widget_example` (the tree) and `navigator_example` (the workspace). They read the fixture under `example/platform/filesystem/fixture/project/`, so they do not change when the repository changes.
+- Examples: `filesystem_example` (syntax), `filesystem_widget_example` (the tree) and `files_example` (the workspace). They read the fixture under `example/platform/filesystem/fixture/project/`, so they do not change when the repository changes.
 - Test: `test_filesystem()` runs the layering guard, the two projection tests, `test_filesystem_document()`, which checks the reads of a folder, and `test_workspace_to_filesystem()`, which maps a row through the workspace and back. The SDL suite has `test_tree_render()`, which renders a folder of 1,000 entries in a small pane and checks that only the drawn rows read their entries.
 
 ## Limits

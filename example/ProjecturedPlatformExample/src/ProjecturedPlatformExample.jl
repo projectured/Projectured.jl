@@ -60,6 +60,9 @@ include("../example/platform/ObjectDocumentExample.jl")
 include("../example/platform/ObjectToWidgetDocumentExample.jl")
 include("../example/platform/ObjectFieldDocumentExample.jl")
 include("../example/platform/LineNumberingDocumentExample.jl")
+include("../example/platform/TextGutterDocumentExample.jl")
+include("../example/platform/TextFoldingDocumentExample.jl")
+include("../example/platform/SyntaxFoldingDocumentExample.jl")
 include("../example/platform/TextToStringDocumentExample.jl")
 include("../example/platform/WordWrappingDocumentExample.jl")
 include("../example/platform/TextFilteringDocumentExample.jl")
@@ -71,6 +74,7 @@ include("../example/platform/PrimitiveDocumentExample.jl")
 include("../example/platform/AppearanceDocumentExample.jl")
 include("../example/platform/LazyDocumentExample.jl")
 include("../example/platform/PaneDocumentExample.jl")
+include("../example/platform/NavigatorDocumentExample.jl")
 include("../example/platform/RotatingVectorDocumentExample.jl")
 
 include("../example/platform/SyntaxProjectionExample.jl")
@@ -80,6 +84,9 @@ include("../example/platform/ObjectProjectionExample.jl")
 include("../example/platform/ObjectToWidgetProjectionExample.jl")
 include("../example/platform/ObjectFieldProjectionExample.jl")
 include("../example/platform/LineNumberingProjectionExample.jl")
+include("../example/platform/TextGutterProjectionExample.jl")
+include("../example/platform/TextFoldingProjectionExample.jl")
+include("../example/platform/SyntaxFoldingProjectionExample.jl")
 include("../example/platform/TextToStringProjectionExample.jl")
 include("../example/platform/WordWrappingProjectionExample.jl")
 include("../example/platform/TextFilteringProjectionExample.jl")
@@ -108,7 +115,7 @@ export integers_from_bidirectional, layout_example, lazy_bidirectional_example
 export make_primes_around, is_prime_number, make_lazy_list_view, show_lazy_list!
 export show_beside!
 export lazy_bidirectional_node, lazy_example, lazy_filter, lazy_filter_bidirectional
-export lazy_node, line_numbering_example, make_anchored_layout_document_example
+export lazy_node, line_numbering_example, text_gutter_example, text_folding_example, syntax_folding_example, make_anchored_layout_document_example
 export make_clipboard_collection_document_example, make_clipboard_slice_document_example
 export make_collection_document_example, make_cell_table_document_example
 export make_list_node_document_example, make_collection_projection_example
@@ -158,7 +165,7 @@ export make_widget_insertion_document_example, make_widget_label_document_exampl
 export make_widget_list_document_example, make_widget_menu_document_example
 export make_widget_menu_item_document_example, make_widget_option_document_example
 export make_widget_popup_document_example, make_widget_popup_projection_example
-export make_widget_progress_document_example, make_widget_projection_example
+export make_widget_progress_bar_document_example, make_widget_progress_ring_document_example, make_widget_projection_example
 export make_gesture_map_document_example
 export make_table_projection_example, make_math_table_projection_example
 export make_pane_document_example, make_empty_pane_document_example, make_pane_projection_example
@@ -191,7 +198,7 @@ export widget_avatar_example, widget_badge_example, widget_button_action_example
 export widget_button_example, widget_button_image_example, widget_card_example, widget_collapsible_card_example
 export widget_checkbox_example, widget_composite_example, widget_disabled_example
 export widget_example, widget_focus_example, widget_label_example, widget_menu_example
-export widget_menu_item_example, widget_popup_example, widget_progress_example
+export widget_menu_item_example, widget_popup_example, widget_progress_bar_example, widget_progress_ring_example
 export widget_radio_group_example, widget_scroll_bar_example, widget_scroll_pane_example
 export widget_offered_example, make_widget_offered_document_example
 export widget_select_example, widget_separator_example, widget_shell_example
@@ -244,13 +251,13 @@ end
 
 include("../example/platform/filesystem/FileSystemDocumentExample.jl")
 include("../example/platform/filesystem/FileSystemProjectionExample.jl")
-include("../example/platform/filesystem/NavigatorDocumentExample.jl")
-include("../example/platform/filesystem/NavigatorProjectionExample.jl")
+include("../example/platform/filesystem/FilesDocumentExample.jl")
+include("../example/platform/filesystem/FilesProjectionExample.jl")
 
 export filesystem_example_root
 export make_filesystem_document_example, make_filesystem_file_document_example, make_filesystem_directory_document_example
 export make_filesystem_projection_example, make_filesystem_widget_projection_example
-export make_navigator_document_example, make_navigator_projection_example
+export make_files_document_example, make_files_projection_example
 export make_workspace_folder_document_example, make_workspace_document_example
 end # module FileSystemExamples
 

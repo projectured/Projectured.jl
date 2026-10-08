@@ -46,14 +46,27 @@ function collect_backend_types()
 end
 
 """
+    DEFAULT_BACKEND
+
+The backend that a caller who names none gets in the scope of
+`with(DEFAULT_BACKEND => backend) do … end`, or `nothing` outside such a scope.
+A workload sets it, so that it runs the call of a user, who names no backend,
+where no backend that draws windows is loaded.
+"""
+const DEFAULT_BACKEND = ScopedValue{Union{Nothing,Backend}}(nothing)
+
+"""
     make_default_backend(output::Symbol = :windows) -> Backend
 
-The backend of a caller that names none: the one loaded backend type that draws
-`output`, made with no arguments. With no such type, or with more than one, it
-raises an error that names the loaded backends, because an order of preference
-would change the backend of a program when one more package is loaded.
+The backend of a caller that names none: the backend of [`DEFAULT_BACKEND`](@ref)
+in its scope, else the one loaded backend type that draws `output`, made with no
+arguments. With no such type, or with more than one, it raises an error that
+names the loaded backends, because an order of preference would change the
+backend of a program when one more package is loaded.
 """
 function make_default_backend(output::Symbol = :windows)
+    scoped = DEFAULT_BACKEND[]
+    scoped === nothing || return scoped
     loaded = collect_backend_types()
     type = _choose_backend_type(loaded, output)
     type()
@@ -61,10 +74,15 @@ end
 
 # The one type of `loaded` that draws `output`, or an error that names them.
 function _choose_backend_type(loaded::Vector, output::Symbol)
-    candidates = [type for type in loaded if get_backend_output(type) === output]
+    # Through `invokelatest`: each backend package adds a method, and a call that
+    # inference resolves would be invalidated when such a package loads.
+    candidates = Type[]
+    for type in loaded
+        Base.invokelatest(get_backend_output, type) === output && push!(candidates, type)
+    end
     length(candidates) == 1 && return only(candidates)
     names = isempty(loaded) ? "none" :
-        join(("$(nameof(type)) ($(get_backend_output(type)))" for type in loaded), ", ")
+        join(("$(nameof(type)) ($(Base.invokelatest(get_backend_output, type)))" for type in loaded), ", ")
     if isempty(candidates)
         error("No loaded backend draws $(output). Load a backend package that draws ",
               "$(output), or pass `backend`. The loaded backends: $(names).")

@@ -6,8 +6,8 @@ The test suite is a DAG of **test packages** that parallels the main
 package DAG (see [plan/done/test-package-split.md](../../plan/done/test-package-split.md)):
 
 ```
-main:     ProjecturedKernel ← ProjecturedPlatform ← the 17 domains ← Projectured ← {Example, Sdl, …}
-tests:    ProjecturedKernelTest ← ProjecturedPlatformTest ← the 17 domain test packages ← ProjecturedTest
+main:     ProjecturedKernel ← ProjecturedPlatform ← the 18 domains ← Projectured ← {Example, Sdl, …}
+tests:    ProjecturedKernelTest ← ProjecturedPlatformTest ← the 18 domain test packages ← ProjecturedTest
 ```
 
 - [package/kernel/test](../../package/ProjecturedKernelTest/src/ProjecturedKernelTest.jl) —
@@ -47,6 +47,10 @@ tests:    ProjecturedKernelTest ← ProjecturedPlatformTest ← the 17 domain te
   against a stand-in server, and two live-server tests that skip themselves
   when no Ollama server answers), but gates on a reachable server rather than
   a native library.
+  [package/acp/test](../../package/ProjecturedACPTest) (`test_acp()` — the
+  translation of the updates of an agent, the connection against a fake agent
+  in the test process, the transport with a small child agent, and the start of
+  the built-in agent) needs no network, no Node.js, no `claude` and no sign-in.
 - [package/projectured/test](../../package/ProjecturedTest/src/ProjecturedTest.jl) — the umbrella:
   the genuinely **cross-package** suites. Two kinds live here: the sweeps over
   the interleaved `examples` / `catalog` aggregate (`ExampleSweeps`,
@@ -120,7 +124,8 @@ gives what each of them costs.
 | `test_kernel()` | The whole kernel suite: `test_cell()`, `test_document_contract()`, `test_reference_builder()`, `test_gesture_binding()`, …, plus the kernel layering guard. |
 | `test_platform()` | `test_collection()`, `test_syntax()`, `test_text()`, `test_graphics()`, `test_syntax_to_text()`, `test_text_to_graphics()`, the widget projection suites, the layering guard of every slice of the platform, and the package's example printer sweep (`test_platform_examples()`). |
 | `test_json()` … `test_yaml()` | One per domain package: that domain's documents, parser and projections, plus its layering guard. The bare name is the package aggregator; a single file's suite carries a more specific name (`test_json_document()`, `test_graph_projection()`). `test_database()` is the domain aggregator like the rest; the ODBC live-connection suite is the separate `test_odbc_database*` family (`test_odbc_database()`, `test_odbc_database_connection()`, `test_odbc_database_no_db()`). |
-| `test_domain_examples()` | A printer sweep over every concrete-domain example. Umbrella, because the registry it walks names all seventeen. |
+| `test_domain_examples()` | A printer sweep over every concrete-domain example. Umbrella, because the registry it walks names all eighteen. |
+| `test_text_gutter()`, `test_text_folding()` | The gutter of a block of lines and its alignment, and the text folds: a closed fold hides its lines after its first, the numbers count the hidden lines because `TextLineNumbering` stands before `TextFolding` in the chain, and a click on a triangle of a syntax node toggles the node (in `ProjecturedPlatformTest`). The example `syntax_folding` is that chain on syntax with `text_folds`, so the example sweeps walk it. |
 | `test_help()` | the help slice's suite: the layering guard, the docstring description, and the two lists and the page that the Help menu opens. |
 | `test_cell()` | The reactive cell primitive (in `ProjecturedKernelTest`; run inside `test_kernel()` or standalone). |
 | `test_cell_struct()` | The `@cell_struct` transparent-Cell struct codegen that `@document`/`@iomap`/`@projection` build on (in `ProjecturedKernelTest`; run inside `test_kernel()` or standalone). |
@@ -359,7 +364,7 @@ The two BFS drivers share one engine (`explore_selections` / `test_navigation`);
 - **Seed:** fire `Ctrl+Home`; the first selection is the resulting `ReplaceSelectionOperation.path`.
 - **Drive:** BFS over selection states. At each state: set the selection, reprint, `_walk!`; then try each `POSITION_NAVIGATION_KEYS` gesture (arrows, Home/End, Ctrl+arrows, Ctrl+Home/End) via `read_intent`, enqueuing every new target path (deduped modulo type checkpoints via `strip_reference_types`) not yet visited.
 - **Asserts:** one `@test` per reachable state (its reprint + walk don't throw), plus `@test state_count > 0`. With `check_reaches_all=true`: additionally one `@test` per selection enumerated by `collect_position_selections(document)` asserting it was reached (subset check: *enumerated ⊆ reachable*), plus `@test !isempty(enumerated)`.
-- **A failure means:** a navigation gesture throws, a reached state can't be reprinted, or, in completeness mode, navigation can't reach a caret the document actually has. The last case is a stuck or leaky navigator.
+- **A failure means:** a navigation gesture throws, a reached state can't be reprinted, or, in completeness mode, navigation can't reach a caret the document actually has. The last case is the caret motion stuck or leaking.
 
 **`test_tree_navigation`** — the same, for whole-element (∅) structural selections.
 - **Seed:** `Ctrl+Alt+Home`, which selects the root ∅.
@@ -486,6 +491,16 @@ transitively by all four examples) and the refactor in
 `@test`. `test_recursion_contracts()` is opt-in (not yet wired into `test_all`); the
 reference round-trip is exposed as the REPL walkers above rather than asserted,
 pending calibration on a running editor.
+
+## Scale: does a pane of 20,000 tasks stay a window?
+
+`test_task_group_scale(; task_count = 20_000, jobs = 16)` (`ProjecturedPlatformTest`)
+starts a group of `task_count` process tasks and checks P7 of the catalog of
+legacy documents: a print of the pane of the group builds only the rows of a
+window of 900 pixels, before and after the run, and the drains while the group
+runs cost no walk of every task. It starts 20,000 processes in about 25 s, so
+`test_platform` does not call it. Run it after a change of the task slice, of
+the walk of the part under the pointer, or of a lazy table.
 
 ## Reactivity: does the output follow the input?
 
@@ -651,7 +666,7 @@ julia --project=package/ProjecturedJSONTest \
   affected example.
 - **Selection navigation bug.** `explore_position_selections(doc, proj)` returns
   every reachable state; small `state_count` numbers are often the symptom
-  of a stuck navigator. To check *coverage*, compare against
+  of caret motion stuck in place. To check *coverage*, compare against
   `collect_position_selections(doc)` (or use `test_position_navigation(ex; check_reaches_all=true)`).
 
 See [the debugging guide](debugging-guide.md) for the matching REPL helpers

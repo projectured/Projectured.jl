@@ -24,6 +24,7 @@ using ProjecturedDBCatalogExample
 using ProjecturedFormulaExample
 using ProjecturedFSMExample
 using ProjecturedProcessExample
+using ProjecturedPivotExample
 using ProjecturedConversationExample
 import ProjecturedKernelExample: Example, AtomicDocument, write_example_image,
                                  record_example_video, make_typein_gestures
@@ -36,7 +37,7 @@ import ProjecturedPlatformExample: print_example, write_example_pdf
 for _src in (ProjecturedKernelExample, ProjecturedPlatformExample,
              ProjecturedJSONExample, ProjecturedYAMLExample, ProjecturedXMLExample, ProjecturedMarkdownExample, ProjecturedRSTExample, ProjecturedBookExample,
              ProjecturedMathExample, ProjecturedJuliaExample, ProjecturedSQLExample, ProjecturedDatabaseExample, ProjecturedPlatformExample, ProjecturedGraphExample, ProjecturedChartExample,
-             ProjecturedSequenceChartExample, ProjecturedDBCatalogExample, ProjecturedFormulaExample, ProjecturedFSMExample, ProjecturedProcessExample, ProjecturedConversationExample)
+             ProjecturedSequenceChartExample, ProjecturedDBCatalogExample, ProjecturedFormulaExample, ProjecturedFSMExample, ProjecturedProcessExample, ProjecturedPivotExample, ProjecturedConversationExample)
     _srcname = nameof(_src)
     for _n in names(_src)
         _n === _srcname && continue
@@ -122,6 +123,7 @@ export sequencechart_example, sequencechart_vertical_example,
        sequencechart_linear_example, sequencechart_large_example,
        sequencechart_inspector_example, sequencechart_pair_example
 export fsm_example, fsm_toggle_example, fsm_diagram_example
+export pivot_example
 export process_example, process_drain_example, process_diagram_example
 export make_fsm_document_example, make_fsm_projection_example,
        make_fsm_tcp_document_example, make_fsm_toggle_document_example,
@@ -235,8 +237,8 @@ export make_math_reliability_document_example, make_math_noise_document_example
 export make_math_regime_document_example
 export make_math_table_projection_example, make_mixed_document_example
 export make_mixed_projection_example, make_natural_document_example
-export make_natural_projection_example, make_navigator_document_example
-export make_navigator_projection_example
+export make_natural_projection_example, make_files_document_example
+export make_files_projection_example
 export make_pane_json_document_example, make_pane_json_projection_example
 export make_widget_tabs_document_example, make_widget_tabs_projection_example
 export make_widget_split_document_example, make_widget_split_projection_example
@@ -256,7 +258,7 @@ export make_versioning_projection_example
 export make_xml_document_example
 export make_xml_projection_example, make_yaml_document_example, make_yaml_projection_example
 export markdown_example, markdown_rendered_example, math_example, math_display_example, math_table_example
-export mixed_example, natural_example, navigator_example, pane_json_example
+export mixed_example, natural_example, files_example, pane_json_example
 export widget_tabs_example, widget_split_example, widget_split_tabs_example
 export record_assistant_conversation_video
 export run_console_example, run_example, run_file_editor, sql_insert_syntax_example
@@ -309,7 +311,7 @@ export make_widget_scroll_pane_document_example, make_widget_transform_pane_docu
 export make_widget_tabbed_pane_document_example
 export make_widget_badge_document_example, make_widget_separator_document_example
 export make_widget_card_document_example, make_widget_switch_document_example
-export make_widget_progress_document_example, make_widget_slider_document_example
+export make_widget_progress_bar_document_example, make_widget_progress_ring_document_example, make_widget_slider_document_example
 export make_widget_radio_group_document_example, make_widget_avatar_document_example
 export make_widget_alert_document_example, make_widget_skeleton_document_example,
        make_widget_swatch_document_example
@@ -324,7 +326,7 @@ export make_constraint_layout_document_example, make_constraint_layout_projectio
 export make_book_document_example, make_book_projection_example
 export make_markdown_document_example, make_markdown_projection_example, make_markdown_rendered_projection_example
 export make_filesystem_document_example, make_filesystem_projection_example, make_filesystem_widget_projection_example
-export make_navigator_document_example, make_navigator_projection_example
+export make_files_document_example, make_files_projection_example
 export make_collection_document_example, make_collection_projection_example
 export make_reversing_projection_example
 export make_filtering_projection_example
@@ -372,13 +374,13 @@ export widget_split_pane_example, widget_scroll_bar_example, widget_scroll_pane_
 export widget_transform_pane_example
 export widget_shell_example
 export widget_badge_example, widget_separator_example, widget_card_example, widget_switch_example
-export widget_progress_example, widget_slider_example, widget_radio_group_example
+export widget_progress_bar_example, widget_progress_ring_example, widget_slider_example, widget_radio_group_example
 export widget_avatar_example, widget_alert_example, widget_skeleton_example, widget_swatch_example
 export widget_toggle_example, widget_toggle_group_example, widget_select_example
 export widget_textarea_example, widget_accordion_example, widget_table_example, widget_tree_example
 export widget_table_offered_example, widget_table_frozen_example
 export widget_disabled_example, widget_focus_example
-export layout_example, constraint_layout_example, book_example, markdown_example, markdown_rendered_example, filesystem_example, navigator_example
+export layout_example, constraint_layout_example, book_example, markdown_example, markdown_rendered_example, filesystem_example, files_example
 export collection_example, reversing_example, filtering_example, searching_example, sorting_example, focusing_example, table_example, math_table_example, graph_example
 export lazy_example, lazy_bidirectional_example
 export math_example

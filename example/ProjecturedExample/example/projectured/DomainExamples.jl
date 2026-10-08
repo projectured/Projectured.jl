@@ -24,7 +24,7 @@ const rst_example            = Example("rst",            make_rst_document_examp
 const rst_rendered_example   = Example("rst_rendered",   make_rst_document_example,            make_rst_rendered_projection_example)
 const filesystem_example     = Example("filesystem",     make_filesystem_document_example,     make_filesystem_projection_example)
 const filesystem_widget_example = Example("filesystem_widget", make_filesystem_document_example, make_filesystem_widget_projection_example)
-const navigator_example      = Example("navigator",      make_navigator_document_example,      make_navigator_projection_example)
+const files_example          = Example("files",          make_files_document_example,          make_files_projection_example)
 const focusing_example       = Example("focusing",       make_focusing_document_example,       make_focusing_projection_example)
 const table_example          = Example("table",          make_table_document_example,          make_table_projection_example)
 const math_table_example     = Example("math_table",     make_math_table_document_example,     make_math_table_projection_example)
@@ -44,6 +44,7 @@ const sequencechart_pair_example = Example("sequencechart_pair", make_sequencech
 const fsm_example            = Example("fsm",            make_fsm_document_example,            make_fsm_projection_example)
 const fsm_toggle_example     = Example("fsm_toggle",     make_fsm_toggle_document_example,     make_fsm_projection_example)
 const fsm_diagram_example    = Example("fsm_diagram",    make_fsm_diagram_document_example,    make_fsm_diagram_projection_example)
+const pivot_example          = Example("pivot",          make_pivot_pane_document_example,     make_pivot_projection_example)
 const process_example        = Example("process",        make_process_document_example,        make_process_projection_example)
 const process_drain_example  = Example("process_drain",  make_process_drain_document_example,  make_process_projection_example)
 const process_diagram_example = Example("process_diagram", make_process_diagram_document_example, make_process_diagram_projection_example)
@@ -149,7 +150,7 @@ const domain_examples = Example[
     rst_rendered_example,
     filesystem_example,
     filesystem_widget_example,
-    navigator_example,
+    files_example,
     focusing_example,
     table_example,
     math_table_example,
@@ -172,6 +173,7 @@ const domain_examples = Example[
     process_diagram_example,
     fsm_toggle_example,
     fsm_diagram_example,
+    pivot_example,
     pane_json_example,
     widget_tabs_example,
     widget_split_example,
@@ -409,6 +411,9 @@ const domain_atomic_documents = AtomicDocument[
     AtomicDocument(:process, "model",      make_process_model_document_example),
     AtomicDocument(:process, "terminal",   make_process_terminal_document_example),
     AtomicDocument(:process, "edge_label", make_process_edge_label_document_example),
+    AtomicDocument(:pivot, "table",        make_pivot_document_example),
+    AtomicDocument(:pivot, "part_table",   make_pivot_part_table_document_example),
+    AtomicDocument(:pivot, "chart_cell",   make_pivot_chart_cell_document_example),
     AtomicDocument(:conversation, "conversation", make_conversation_conversation_document_example),
     AtomicDocument(:conversation, "draft",        make_conversation_draft_document_example),
     AtomicDocument(:conversation, "part",         make_conversation_part_document_example),

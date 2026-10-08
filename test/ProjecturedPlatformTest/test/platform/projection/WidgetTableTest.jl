@@ -46,14 +46,14 @@ end
     driver = MttDriver(_rec, w)
     # A move onto a body cell → its whole row lights.
     _mtt_move!(driver, _bx(g), _rowy(g, 1), 1.0)
-    row1 = WidgetModule._find_wt_lit_reference(get_mouse_target(w))
+    row1 = WidgetModule._find_wt_lit_reference(w, get_mouse_target(w))
     @test row1 == WidgetModule._wt_row_ref(1)
     # Another cell of the same row → the same light.
     _mtt_move!(driver, _bx(g), _rowy(g, 1), 1.1)
-    @test WidgetModule._find_wt_lit_reference(get_mouse_target(w)) == row1
+    @test WidgetModule._find_wt_lit_reference(w, get_mouse_target(w)) == row1
     # Another row → a different light.
     _mtt_move!(driver, _bx(g), _rowy(g, 2), 1.2)
-    row2 = WidgetModule._find_wt_lit_reference(get_mouse_target(w))
+    row2 = WidgetModule._find_wt_lit_reference(w, get_mouse_target(w))
     @test row2 !== nothing && row2 != row1
     # The table's own reader never answers a motion: the light comes only from
     # the mouse target that a move writes.
@@ -68,7 +68,7 @@ end
     chy = (g.row_y[1] + g.row_y[2]) ÷ 2    # grid row 1 = the column-header strip
     driver = MttDriver(_rec, w)
     _mtt_move!(driver, _bx(g), chy, 1.0)
-    lit = WidgetModule._find_wt_lit_reference(get_mouse_target(w))
+    lit = WidgetModule._find_wt_lit_reference(w, get_mouse_target(w))
     @test lit == WidgetModule._wt_col_ref(1)
     # Clicking the column header still selects the column (the light does not
     # shadow the click path). A body cell here holds a WidgetLabel, whose click
@@ -76,7 +76,7 @@ end
     @test _rd(io, MouseClick(:left, _bx(g), chy, _mods; time = 0.0)) isa ReplaceSelectionOperation
     # A lit column differs from a lit body row.
     _mtt_move!(driver, _bx(g), _rowy(g, 1), 1.1)
-    @test WidgetModule._find_wt_lit_reference(get_mouse_target(w)) != lit
+    @test WidgetModule._find_wt_lit_reference(w, get_mouse_target(w)) != lit
 end
 
 @testset "the light band renders (faint overlay follows the mouse target)" begin
@@ -140,7 +140,7 @@ function test_widget_table_fills_offer()
         LayoutToGraphics().dispatch,
         WidgetToGraphics(StyleFont("Ubuntu", 20); measure = det).dispatch)))
     table = WidgetTable(Any["name", "value"], Any[Any["a", "1"], Any["b", "2"]];
-                        column_policies = Any[Fill, Fixed(80)])
+                        columns = Any[WidgetTableColumn(; policy = Fill), WidgetTableColumn(; policy = Fixed(80))])
     for width in (400, 600)
         ctx = with_exact_size(PrinterContext(); width = Cell(Int32(width)),
                               height = Cell(Int32(400)))
@@ -165,7 +165,7 @@ function test_widget_table_content_floor()
     grow = SizePolicy(nothing, nothing, nothing, 1.0)
     long = "a cell that is wider than the header"
     table = WidgetTable(Any["id", "text"], Any[Any["1", long], Any["2", "b"]];
-                        column_policies = Any[grow, grow])
+                        columns = Any[WidgetTableColumn(; policy = grow), WidgetTableColumn(; policy = grow)])
     function geometry_at(width)
         ctx = with_exact_size(PrinterContext(); width = Cell(Int32(width)),
                               height = Cell(Int32(400)))
@@ -272,9 +272,9 @@ function test_scroll_pane_axis_size()
 end
 end
 
-# A cell sits at the left, in the middle or at the right of its column, by
-# `column_align`, in a table whose rows are a vector and in one whose rows are a
-# list. A header cell sits as the cells of its column do.
+# A cell sits at the left, in the middle or at the right of its column, by the
+# `align` of the column, in a table whose rows are a vector and in one whose rows
+# are a list. A header cell sits as the cells of its column do.
 function test_widget_table_column_align()
 @testset "a table cell sits where its column aligns" begin
     det = FixedMeasure(8, 12, 4, 0)
@@ -295,17 +295,16 @@ function test_widget_table_column_align()
         end
         found
     end
-    columns = Any[Fixed(120), Fixed(120), Fixed(120)]
-    vector(; kw...) = WidgetTable(Any["AA", "BB", "CC"], Any[Any["p", "q", "r"]];
-                                  column_policies = columns, kw...)
-    list(; kw...) = WidgetTable(; column_headers = Any["AA", "BB", "CC"],
-                                rows = ListNode(make_widget_table_row(Any["p", "q", "r"])),
-                                column_count = 3, column_policies = columns, kw...)
+    columns_of(aligns) = Any[WidgetTableColumn(; policy = Fixed(120), align) for align in aligns]
+    vector(aligns = fill(nothing, 3)) = WidgetTable(Any["AA", "BB", "CC"], Any[Any["p", "q", "r"]];
+                                                    columns = columns_of(aligns))
+    list(aligns = fill(nothing, 3)) = WidgetTable(; column_headers = Any["AA", "BB", "CC"],
+                                                  cells = ListNode(make_widget_table_row(Any["p", "q", "r"])),
+                                                  columns = columns_of(aligns))
     for (form, make) in (("rows in a vector", vector), ("rows in a list", list))
         @testset "$form" begin
             plain_io = print_document(rec, nothing, make(), ctx)
-            placed_io = print_document(rec, nothing,
-                                       make(; column_align = Symbol[:left, :center, :right]), ctx)
+            placed_io = print_document(rec, nothing, make(Any[:left, :center, :right]), ctx)
             plain, placed = lefts(plain_io.output), lefts(placed_io.output)
             # A list draws its rows as the viewport reaches them, so the x of a
             # body cell is read from the head row that the grid of the cells
@@ -325,7 +324,7 @@ function test_widget_table_column_align()
         end
     end
     @testset "a side that is none of the three is refused" begin
-        @test_throws ErrorException vector(; column_align = Symbol[:middle])
+        @test_throws ErrorException vector(Any[:middle, nothing, nothing])
     end
 end
 end
@@ -338,9 +337,10 @@ function test_widget_table_cell_policy()
         WidgetToGraphics(StyleFont("Ubuntu", 20); measure = det).dispatch)))
     long = "a value that is far too wide for eighty pixels"
     # The header names are chosen so that neither is a piece of the long cell.
-    make(; kw...) = WidgetTable(Any["AA", "BB"],
-                                Any[Any[long, "x"], Any["second", "y"]];
-                                column_policies = Any[Fixed(80), Fixed(80)], kw...)
+    make(cell_policies = Any[nothing, nothing]; kw...) =
+        WidgetTable(Any["AA", "BB"], Any[Any[long, "x"], Any["second", "y"]];
+                    columns = Any[WidgetTableColumn(; policy = Fixed(80), cell_policy) for cell_policy in cell_policies],
+                    kw...)
     ctx = with_exact_size(PrinterContext(); width = Cell(Int32(600)), height = Cell(Int32(400)))
     # Every text a table drew, through the viewports the grid now emits.
     function texts(node, found = String[])
@@ -367,7 +367,7 @@ function test_widget_table_cell_policy()
     end
     @testset "a column's own policy wins over the table's" begin
         mixed = print_document(rec, nothing,
-                               make(; cell_policy = :wrap, column_cell_policies = Symbol[:clip]), ctx)
+                               make(Any[:clip, nothing]; cell_policy = :wrap), ctx)
         @test mixed.geometry.total_h == clipped.geometry.total_h
     end
     @testset "a policy that is neither is refused" begin
@@ -407,8 +407,7 @@ _rec = RecursiveProjection(TypeDispatchingProjection(vcat(LayoutToGraphics().dis
 _table() = WidgetTable(;
                        column_headers = Any["ID", "Name", "Role"],
                        row_headers = Any["1", "2", "3", "4", "5", "6"],
-                       rows = Any[Any["r$(i)a", "r$(i)b", "r$(i)c"] for i in 1:6],
-                       column_count = 3)
+                       cells = Any[Any["r$(i)a", "r$(i)b", "r$(i)c"] for i in 1:6])
 
 # Every text of a printed table, as (x, y, text), through its canvases and
 # viewports.
@@ -471,8 +470,8 @@ end
     moved = texts(print_document(_rec, nothing, WidgetTable(;
                        column_headers = Any["ID", "Name", "Role"],
                        row_headers = Any["1", "2", "3", "4", "5", "6"],
-                       rows = Any[Any["r$(i)a", "r$(i)b", "r$(i)c"] for i in 1:6],
-                       column_count = 3, scroll_position = Point2D(10, 40)), _sized()))
+                       cells = Any[Any["r$(i)a", "r$(i)b", "r$(i)c"] for i in 1:6],
+                       scroll_position = Point2D(10, 40)), _sized()))
     # The header row travels to the side only, the header column down only,
     # and the cells both ways.
     @test moved["Name"] == (still["Name"][1] - 10, still["Name"][2])
@@ -485,7 +484,7 @@ end # function
 
 # A caret in a cell is edited by the readers of the cell. A key the table does not
 # take, such as a character, an arrow or Backspace, goes to the cell the selection
-# is in, and the answer comes back under `rows[r][c]`. The table whose rows are a
+# is in, and the answer comes back under `cells[r][c]`. The table whose rows are a
 # vector and the table whose rows are a list do the same.
 function test_widget_table_cell_editing()
 @testset "a key edits the cell the caret is in" begin
@@ -496,7 +495,7 @@ function test_widget_table_cell_editing()
                        TextBlock(TextString("prose", StyleFont("Ubuntu", 20), color_default))]
     get_text(cell::WidgetText) = cell.content
     get_text(cell::TextBlock) = cell.elements[1].content
-    get_cell(table, c) = table.rows isa ListNode ? table.rows.value[c] : table.rows[1][c]
+    get_cell(table, c) = table.cells isa ListNode ? table.cells.value[c] : table.cells[1][c]
     # Every text the table drew, through the viewports of its cells, and through
     # the rows a list table built, from its head on.
     function collect_drawn_texts(node, found = String[])
@@ -515,13 +514,13 @@ function test_widget_table_cell_editing()
         end
         found
     end
-    # The row and the column of the cell a selection `rows[r][c].…` is in.
+    # The row and the column of the cell a selection `cells[r][c].…` is in.
     get_selected_cell(path) = (path.tail.head.start + 1, path.tail.tail.head.start + 1)
     forms = [
         "rows are a vector" => () -> WidgetTable(Any["A", "B"], Any[make_cells()]),
         "rows are a list" => () -> WidgetTable(; column_headers = Any["A", "B"],
-                                               rows = ListNode(make_widget_table_row(make_cells())),
-                                               column_count = 2, column_policies = Any[Fixed(120), Fixed(120)]),
+                                               cells = ListNode(make_widget_table_row(make_cells())),
+                                               columns = Any[WidgetTableColumn(; policy = Fixed(120)) for _ in 1:2]),
     ]
     # A point four pixels inside the left edge of body cell (1, c).
     function get_cell_point(iomap, c)
@@ -550,7 +549,7 @@ function test_widget_table_cell_editing()
             evaluate_operation(editor, read_key(KeyDown(:right, mods; time = 0.0)))
             typed = read_key(KeyPress('Y', "Y", mods; time = 0.0))
             @test typed isa ReplaceStringRangeOperation
-            @test typed.reference.head.name == "rows"
+            @test typed.reference.head.name == "cells"
             evaluate_operation(editor, typed)
             @test get_text(get_cell(table, c)) == edited
             @test edited in collect_drawn_texts(iomap.output)

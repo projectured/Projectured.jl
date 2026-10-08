@@ -7,19 +7,18 @@ function make_table_document_example()
         position = Point2D(40, 40), column_headers = Any[JsonString("Name"), JsonString("Age"), JsonString("City")],
         row_headers = Any[],
         # each body row is a vector of document cells
-        rows = Any[
+        cells = Any[
             Any[JsonString("Jennifer"), JsonNumber(30), JsonString("New York")],
             Any[JsonString("Bob"),      JsonNumber(25), JsonString("Springfield")],
             Any[JsonString("Carol"),    JsonNumber(42), JsonString("Metropolis")],
-        ],
-        column_count = 3)
+        ])
 end
 
 function make_math_table_document_example()
     WidgetTable(;
         position = Point2D(40, 40), column_headers = Any[PrimitiveString("A"), PrimitiveString("B"), PrimitiveString("C")],
         row_headers = Any[PrimitiveString("1"), PrimitiveString("2"), PrimitiveString("3")],
-        rows = Any[
+        cells = Any[
             # row 1: plain numbers
             Any[PrimitiveNumber(10), PrimitiveNumber(20), PrimitiveNumber(30)],
             # row 2: math formulas
@@ -30,6 +29,5 @@ function make_math_table_document_example()
             Any[MathBinaryOperation(:/, MathVariable("A"), PrimitiveNumber(2)),
                 MathBinaryOperation(:/, MathParenthesized(MathBinaryOperation(:+, MathVariable("A"), MathVariable("C"))), PrimitiveNumber(2)),
                 MathBinaryOperation(:*, PrimitiveNumber(3), MathParenthesized(MathBinaryOperation(:+, MathVariable("A"), MathVariable("B"))))],
-        ],
-        column_count = 3)
+        ])
 end

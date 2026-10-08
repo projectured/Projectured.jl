@@ -34,10 +34,11 @@ using ProjecturedDBCatalogTest
 using ProjecturedFormulaTest
 using ProjecturedFSMTest
 using ProjecturedProcessTest
+using ProjecturedPivotTest
 
 # Re-export every lower tier's test functions, so `using ProjecturedTest` alone
 # gives a REPL `test_json()` and `test_platform()` as well as `test_all()`.
-for _src in (ProjecturedBookTest, ProjecturedChartTest, ProjecturedPlatformTest, ProjecturedDatabaseTest, ProjecturedDBCatalogTest, ProjecturedFormulaTest, ProjecturedFSMTest, ProjecturedGraphTest, ProjecturedJSONTest, ProjecturedJuliaTest, ProjecturedKernelTest, ProjecturedMarkdownTest, ProjecturedMathTest, ProjecturedProcessTest, ProjecturedRSTTest, ProjecturedSequenceChartTest, ProjecturedSQLTest, ProjecturedXMLTest, ProjecturedYAMLTest)
+for _src in (ProjecturedBookTest, ProjecturedChartTest, ProjecturedPlatformTest, ProjecturedDatabaseTest, ProjecturedDBCatalogTest, ProjecturedFormulaTest, ProjecturedFSMTest, ProjecturedGraphTest, ProjecturedJSONTest, ProjecturedJuliaTest, ProjecturedKernelTest, ProjecturedMarkdownTest, ProjecturedMathTest, ProjecturedProcessTest, ProjecturedPivotTest, ProjecturedRSTTest, ProjecturedSequenceChartTest, ProjecturedSQLTest, ProjecturedXMLTest, ProjecturedYAMLTest)
     for _n in names(_src)
         _n === nameof(_src) && continue
         isdefined(_src, _n) || continue
@@ -108,8 +109,14 @@ using ProjecturedODBCTest
 # one live test skips itself when none answers.
 using ProjecturedAnthropicTest
 using ProjecturedOllamaTest
+# The suite of the ACP client. It talks to a fake agent in this process and to a
+# small child process, so it needs no Node.js and no sign-in.
+using ProjecturedACPTest
 # The suite of the data frame view. It prints its views without a window.
 using ProjecturedDataFramesTest
+# A pivot of a data frame names two packages that do not depend on each other.
+import DataFrames
+import ProjecturedDataFrames
 # The suites of the console, PDF and web backends and of the MCP server.
 using ProjecturedConsoleTest
 using ProjecturedPDFTest
@@ -133,6 +140,7 @@ include("SearchCorpusTest.jl")
 include("CallSiteTest.jl")
 include("SearchRankingTest.jl")
 include("PackageGraphTest.jl")
+include("FirstWindowTest.jl")
 include("IntegrationLoadingTest.jl")
 # The tree guard, which lives at the repository root rather than in a package:
 # it reads directories and project files, and it has to run before the packages
@@ -148,6 +156,7 @@ include("../suite/style.jl")
 include("backend/AssistantConversationVideoTest.jl")
 include("backend/BackendChoiceTest.jl")
 include("document/SelectionEnumeration.jl")
+include("document/PivotDataFrameTest.jl")
 include("editor/ConstructTest.jl")
 include("editor/ConversationPanelTest.jl")
 include("editor/ConversationParsingTest.jl")
@@ -208,6 +217,7 @@ function test_documents()
     @testset "Documents" begin
         test_constraint_solver()     # Tulip-backed LP constraint layout
         test_serialization()         # round-trips the ProjecturedExample fixtures
+        test_pivot_data_frame()      # a pivot of a data frame, against DataFrames
     end
 end
 
@@ -306,10 +316,12 @@ The argument guard: the clause on optional positional arguments of
 `documentation/rule/code-quality-rules.md` §4. A public definition outside a port
 fails when it takes more than one optional positional argument, or one beside
 keyword arguments, unless a `# @optional:` marker says why. A `# @positional:`
-marker fails too, because the count of positional arguments is advice.
+marker fails too, because the count of positional arguments is advice. A call of
+`get_evaluation_editor` fails anywhere but as the default of an `editor` keyword
+(PAR-PER-EDITOR-STATE).
 
-A private helper is out of scope for now. It loads nothing and runs in about a
-second.
+A private helper is out of scope for the optional clause. It loads nothing and
+runs in about a second.
 """
 function test_arguments()
     @testset "arguments" begin
@@ -318,6 +330,22 @@ function test_arguments()
             @test violation == ""
         end
         @test isempty(argument_violations(root))
+        # A call of `get_evaluation_editor` stands only as the default of an
+        # `editor` keyword: not in a body, not at a call, not for another keyword.
+        mktempdir() do fixture
+            mkpath(joinpath(fixture, "source"))
+            write(joinpath(fixture, "source", "Verbs.jl"), """
+                good_verb(x; editor = get_evaluation_editor()) = editor
+                typed_verb(x; editor::Any = get_evaluation_editor()) = editor
+                function body_read(x)
+                    get_evaluation_editor()
+                end
+                call_site(x) = good_verb(x; editor = get_evaluation_editor())
+                other_keyword(x; target = get_evaluation_editor()) = target
+                """)
+            @test find_evaluation_editor_reads(fixture) ==
+                  ["source/Verbs.jl:4", "source/Verbs.jl:6", "source/Verbs.jl:7"]
+        end
     end
 end
 
@@ -426,8 +454,10 @@ function test_all()
     test_formula()
     test_fsm()
     test_process()
+    test_pivot()
     test_anthropic()
     test_ollama()
+    test_acp()
     test_dataframes()
     test_integration()
     end
@@ -509,6 +539,8 @@ function test_integration()
     # Every gesture that makes a recorded change is taken back, and the document
     # returns to the text it had.
     test_undo_round_trip()
+    # The first window of a data frame compiles little in a fresh process.
+    test_first_window_compiles_little()
     # Every gesture that changes no document leaves the history as it was.
     test_history_sweep()
     test_julia_typein()
@@ -563,6 +595,7 @@ export test_all, test_integration, test_repository, test_umbrella_loads_integrat
        test_package_graph, test_tree, test_naming,
        test_arguments, test_exports, test_documentation, test_style
 export test_kernel, test_platform, test_domain
+export test_first_window_compiles_little
 export test_export_collisions, test_export_collision_checker, export_collisions
 export test_search_scale, test_search_corpus, test_call_site, test_search_ranking
 export test_type_reference, test_gesture_pattern, test_gesture_binding, test_focusing,
@@ -571,6 +604,7 @@ export test_json_document, test_syntax, test_text, test_graphics, test_affine_tr
 export test_formula_to_syntax, test_projection_template_hygiene
 export test_json_to_syntax, test_json_to_syntax_reader, test_json_gesture_collection, test_gesture_map, test_gesture_help, test_syntax_to_text, test_syntax_tree_selection, test_filesystem_to_syntax, test_primitive_to_text, test_text_to_graphics, test_word_wrapping, test_text_filtering, test_text_highlighting, test_selection_inverting, test_object_to_widget, test_projection_configuring, test_widget_text_editing, test_widget_button_behavior, test_widget_gestures, test_widget_select_dropdown, test_widget_menu, test_widget_context_menu, test_widget_dialog, test_widget_action, test_widget_icon, test_widget_tree, test_widget_toolbar, test_widget_table, test_layout_closeout, test_widget_forms, test_widget_popup_example, test_copying_projection, test_clipboard, test_versioning_to_any, test_write_image, test_record_video, test_tooltip, test_reference_inspector_text, test_text_ink_inside_viewports, test_split_pane_drag, test_widget_transform_pane, test_dragging, test_anchor_point, test_write_pdf, test_dirty_rect, test_web_backend, test_backend_choice
 export test_table, test_table_selection, test_table_navigation, test_table_cell_editing, explore_table_selections
+export test_pivot_data_frame
 export test_graph_projection, test_conversation_transcript, test_assistant_conversation_video
 export test_examples, test_position_navigations, test_position_navigations_complete
 export test_printer, test_printers, test_example, test_position_navigation

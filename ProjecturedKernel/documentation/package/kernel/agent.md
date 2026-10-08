@@ -30,7 +30,8 @@ on both.
 Tool.jl           Tool (an action), Resource (a read-only datum), ApiEntry, MeaningModel,
                   RelevanceModel, ToolSet, observe_evaluations!
 ToolSet.jl        register / list / find / call — all on a ToolSet
-CodeExecution.jl  execute_julia_code! and execute_julia_expression!, and their persistent scratch namespace
+CodeExecution.jl  execute_julia_code! and execute_julia_expression!, their persistent scratch namespace,
+                  and get_evaluation_editor, the editor of the evaluation
 SearchQuery.jl    what a search query says: keywords with classes, a pattern, a description
 Documentation.jl  guide / module / type / function docs, and search over them
 MeaningSearch.jl  the rank of a description by its meaning, and the stores of vectors
@@ -105,7 +106,7 @@ required and the optional terms.
 module after it, and the first sentence of the description under it.
 
 ```
-- `replace_referenced_value!(editor, reference, value) -> Text` — function in PaneModule
+- `replace_referenced_value!(reference, value; editor = get_evaluation_editor()) -> Text` — function in PaneModule
   Put `value` where `reference` points, and answer the window's new program.
 ```
 
@@ -184,8 +185,23 @@ client, keep the default.
 `execute_julia_expression!(set, target, expression)` runs code that is already an
 `Expr`, as `make_julia_expression` gives it, and shares everything with
 `execute_julia_code!` except the parse: the scratch module, the `editor` binding,
-the answer and the notice to the observers. An object that the expression holds
-in a `QuoteNode` is used as that very object.
+the editor of the evaluation, the answer and the notice to the observers. An
+object that the expression holds in a `QuoteNode` is used as that very object.
+
+**A verb takes the editor of the evaluation.** While the code of a call runs,
+`target` is the editor of the evaluation, a `ScopedValue` that
+`get_evaluation_editor()` reads. A verb takes it as the default of its `editor`
+keyword, `focus_pane!(reference; editor = get_evaluation_editor())`, so the code
+of a person or a model writes `focus_pane!(tab)`. The scope is where
+PAR-PER-EDITOR-STATE puts state of one evaluation, so two editors that run code
+at the same time each see their own.
+
+- A task that the code starts, with `@async` or `Threads.@spawn`, gets the same
+  editor, also after the call ends.
+- Code that runs after the evaluation, such as a callback or a timer, gets none:
+  the verb throws `MissingEvaluationEditorException`, whose message says to pass
+  `editor = …`.
+- A caller that has an editor passes it, and the verb acts on that one.
 
 **A description is ranked by its meaning.** When the `ToolSet` has a
 `MeaningModel`, the vector of the description and the vector of each entry or
@@ -452,14 +468,17 @@ it buys is that a name outside the list fails in the round that used it, with an
 error the model reads and corrects, instead of the model choosing among thousands
 of names that mean nothing to its task.
 
-## `agent/`: the two directions
+## `agent/`: the three directions
 
 ```
-AgentModule.jl     (AgentModule)  the module: both halves share its namespace
-AgentInterface.jl  inbound  — make/start/stop_agent_server!, run_on_editor_task!, declared
-AgentDefaults.jl   inbound  — the fallbacks, when no server package is loaded
-Agent.jl           outbound — the Agent, and AgentToolResult
-AgentLoop.jl       outbound — run_turn!
+AgentModule.jl               (AgentModule)  the module: all three halves share its namespace
+AgentInterface.jl            inbound  — make/start/stop_agent_server!, get_agent_server_access, run_on_editor_task!, declared
+AgentDefaults.jl             inbound  — the fallbacks, when no server package is loaded
+Agent.jl                     outbound — the Agent, and AgentToolResult
+AgentLoop.jl                 outbound — run_turn!
+AgentConnectionInterface.jl  external — the seven generics of a connection, declared
+AgentConnectionDefaults.jl   external — the Symbol entry, the error for a missing package, get_agent_connection_names
+AgentConnectionEvent.jl      external — the events an agent reports
 ```
 
 **Inbound** is something outside the process driving *this* editor. The editor loop
@@ -495,11 +514,46 @@ with `:error`, and its tool calls do not run. A tool that throws gives an
 `AgentToolResult` with `is_error = true`. An exception that
 `is_passthrough_exception` names goes through the loop, and `run_turn!` throws it.
 
-### Both directions call from another task
+**External** is this editor driving an agent that runs its own loop in another process. The agent owns its model, its tools and its history. The editor sends it a prompt, shows what it reports, and answers what it asks. It is not an `Llm`: `run_turn!` would run the tool calls of the agent a second time. [acp.md](../adapter/acp/acp.md) describes the one package that implements it.
+
+### The external direction
+
+A caller names a connection by a symbol and never names its type, as it does for a server and for a backend:
+
+```julia
+connection = make_agent_connection(:acp)   # the built-in agent; `command` names another
+start_agent_connection!(connection)
+session_id = open_agent_session!(connection; directory = pwd(), mcp_servers = [access], instructions, on_event)
+set_agent_option!(connection, session_id, "effort", "max"; on_event)
+stop_reason = send_agent_prompt!(connection, session_id, prompt; on_event)
+```
+
+With a `session_id`, `open_agent_session!` resumes that session, with the history that the agent keeps, when the agent can, and else opens a new session. The id that it returns says which: a new id means a session without the old history.
+
+The eight generics are `make_agent_connection(kind; kwargs...)`, `start_agent_connection!`, `open_agent_session!`, `set_agent_option!`, `send_agent_prompt!`, `cancel_agent_prompt!`, `close_agent_session!` and `stop_agent_connection!`. A package adds the methods for its kind. The `Symbol` entry dispatches to `make_agent_connection(::Val{kind})`. When no package answers, the entry throws an error that lists the loaded kinds. `get_agent_connection_names()` reads those kinds from the method table, as `get_llm_backend_names()` does. `get_agent_server_names()` does the same for the servers of the inbound direction.
+
+`send_agent_prompt!` takes a prompt, a vector of `LlmContent`, and waits until the turn of the agent ends. It answers why the turn ended: `:end_turn`, `:max_tokens`, `:max_turn_requests`, `:refusal` or `:cancelled`. It calls `on_event` on a task that is not the editor task, so the caller posts its writes through `run_on_editor_task!`. `on_event` gets these events:
+
+- `LlmTextStart`, `LlmTextDelta` and `LlmTextStop` for the text of the answer, and the three `LlmThinking…` events for its reasoning. They are the events that `stream_turn` sends, so the code that draws a model answer draws an agent answer.
+- `AgentToolCallUpdate` for a tool call that the agent runs itself. The event reports the call. The editor does not run it. A field that is `nothing` keeps the value of the last update with the same `id`.
+- `AgentPlanUpdate` for the plan of the agent. Each one replaces the plan before it.
+- `AgentOptionsUpdate` for all the options of the session, when the agent changes one during the prompt, such as its mode.
+- `AgentUsageUpdate` for how much of its context window the session uses (`used` of `size` tokens), and its `cost` and `currency` when the agent says.
+- `AgentSessionInfoUpdate` for the `title` of the session; `nothing` keeps the title, and an empty one clears it.
+- `AgentCommandsUpdate` for the commands that the session offers, each an `AgentCommand` with its `name`, its `description` and an `input_hint` that says what it takes after its name.
+- `AgentPermissionRequest` for a question that waits for a person. Its `reply` takes the id of the chosen option, or `nothing`. The first call answers the agent and answers `true`; a later call does nothing and answers `false`. `cancel_agent_prompt!` answers each request that waits as `nothing`.
+
+**The options of a session.** An `AgentOption` is one option, such as the model, with its `category` (`:mode`, `:model`, `:thought_level`, `:model_config` or `:other`), its `current_value`, and its `values`, each an `AgentOptionValue` with a `value` for the agent and a `name` for a person. `open_agent_session!` gives the options of the new session to its `on_event` as an `AgentOptionsUpdate`. `set_agent_option!` sets one option, and gives all the options that the agent answers to its `on_event`. **A connection keeps no `on_event` after the call that took it.** A caller captures the editor in it to post its writes, and a document must not hold the editor, even through the connection that it holds. So an update of the session that comes outside a call and outside a prompt — its options, its usage, its title, its commands — waits in the connection, the latest of each kind, and the next prompt gets them first. An agent can name its session just after a prompt ends, and the name is not lost.
+
+`instructions` is text that the agent adds to its system prompt: what its host is, and how to use the tools of the host. An agent that has no way to take it ignores it.
+
+The agent reaches the tools of the editor through the inbound direction. `get_agent_server_access(server)` answers `(name, url, headers)` for a server, and the tuple has the shape that `open_agent_session!` takes for an entry of `mcp_servers`. So the caller hands the MCP server of its editor to the agent without the type of the server. The inbound direction also gives the server a free port and a secret; see [mcp.md](../adapter/mcp/mcp.md).
+
+### All directions call from another task
 
 An MCP server calls a tool on the task of the server, and a turn runs on a task
-of its own. A tool can write what the editor shows, and a frame of the editor
-reads it on the editor task. So both directions call through one door:
+of its own. The events of an external agent also arrive on a task of its own. A tool can write what the editor shows, and a frame of the editor
+reads it on the editor task. So every direction calls through one door:
 
 ```julia
 run_on_editor_task!(function_, target; wait = true) -> value
@@ -523,6 +577,8 @@ layer answers it for an `Editor` whose loop runs on another task;
 | Seam | Declared in | Implemented by |
 | --- | --- | --- |
 | `make_agent_server(:mcp, …)` | `agent/AgentInterface.jl` | `ProjecturedMCP` (`package/ProjecturedMCP`, source in `source/adapter/mcp/`) |
+| `get_agent_server_access` | `agent/AgentInterface.jl` | `ProjecturedMCP` |
+| `make_agent_connection(:acp, …)` and the six other generics of a connection | `agent/AgentConnectionInterface.jl` | `ProjecturedACP` (`package/ProjecturedACP`, source in `source/adapter/acp/`); `ScriptedAgentConnection` in `ProjecturedKernelExample` |
 | `run_on_editor_task!` | `agent/AgentInterface.jl` | the editor layer (`editor/Inbox.jl`) for an `Editor`; the default in `agent/AgentDefaults.jl` runs every other target at once |
 | `stream_turn`, `render_tool_schema`, `make_llm` | `llm/LlmInterface.jl` | `ProjecturedAnthropic`, `ProjecturedOllama`; `FakeLlm` / `ScriptedLlm` in `ProjecturedKernelExample` |
 | a `Tool`'s handler | `tool/Tool.jl` | `register_default_tools!`, and anyone else who registers one |

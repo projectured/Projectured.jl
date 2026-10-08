@@ -12,10 +12,13 @@ lower package, so each module is bound once, under its own name.
 """
 module ProjecturedDataFrames
 
-using DataFrames
-
+# The platform loads before DataFrames, as in a session that writes `using
+# Projectured, DataFrames`. So the build meets the platform code that the
+# methods of DataFrames invalidate, and the workload compiles it into this image.
 using ProjecturedKernel
 using ProjecturedPlatform
+
+using DataFrames
 
 for _src in (ProjecturedKernel, ProjecturedPlatform)
     for _n in names(_src; all = true)
@@ -42,5 +45,18 @@ export DataFrameColumnFilter, DataFrameSortKey, DataFrameQuery, DataFrameView, j
 # A person who names this package gets the names that most users call.
 using ProjecturedPlatform.EssentialsModule
 Core.eval(@__MODULE__, Expr(:export, filter(!=(:EssentialsModule), names(EssentialsModule))...))
+
+# The first window of a data frame, with the column types that a frame has most,
+# so that this image holds the code of its view.
+using PrecompileTools: @setup_workload, @compile_workload
+@setup_workload begin
+    # More rows than a window shows, so the rows come from the lazy list.
+    frame = DataFrame(n = 1:200, square = (1:200) .^ 2, ratio = (1:200) ./ 3,
+                      name = string.("row ", 1:200), even = iseven.(1:200),
+                      maybe = [isodd(i) ? i : missing for i in 1:200])
+    @compile_workload begin
+        ProjecturedPlatform.run_display_workload(frame)
+    end
+end
 
 end # module ProjecturedDataFrames

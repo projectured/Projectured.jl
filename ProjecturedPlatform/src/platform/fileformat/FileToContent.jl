@@ -8,14 +8,30 @@
 # dispatcher recursing through `print_child`, not by a projection returning an
 # unprojected document as its output.
 """
-    FileToContent()
+    FileToContent(; content = nothing, accepts = _ -> true)
 
 The projection a `FileDocument` (`JsonFile`, `XmlFile`, `JuliaFile`, …) is
 drawn through: it prints the file's `content` via the recursion argument and
 answers that child's own output, so a tab holding the file shows its content
 exactly as an ordinary document of that domain would.
+
+`content`, when given, is the projection that prints the content in place of the
+recursion, and reads its gestures: the view of a file of a domain, such as the
+code of a Julia file with its gutter, which a document of that domain inside
+another document does not have. It takes a content that `accepts` answers `true`
+for; any other content, such as one that an opener wrapped in a document of its
+own, prints through the recursion.
 """
-struct FileToContent <: Projection end
+struct FileToContent <: Projection
+    content::Any
+    accepts::Any
+end
+
+FileToContent(; content = nothing, accepts = _ -> true) = FileToContent(content, accepts)
+
+# The projection that prints and reads `document`, the content of a file.
+_get_content_recursion(p::FileToContent, recursion, document) =
+    (p.content === nothing || !p.accepts(document)) ? recursion : p.content
 
 function print_document(p::FileToContent, recursion, file::FileDocument, ctx)
     step = @reference_step(content)
@@ -26,7 +42,7 @@ function print_document(p::FileToContent, recursion, file::FileDocument, ctx)
     # printed output re-derive when `Ctrl+O` replaces the cell wholesale.
     child = make_reconciled_child_iomap_cell(
         () -> get_file_content(file),
-        v -> print_child(recursion, v, make_child_context(ctx, file, step)))
+        v -> print_child(_get_content_recursion(p, recursion, v), v, make_child_context(ctx, file, step)))
     ContentIoMap(p, file, Cell(@computation child[].output),
                  Cell(@computation child[]))
 end
@@ -40,9 +56,10 @@ end
 # with a route follows it through `content`.
 const _CONTENT_STEPS = (FieldReferenceStep("content"),)
 
-function read_intent(::FileToContent, recursion, change::Intent, iomap::ContentIoMap)
+function read_intent(p::FileToContent, recursion, change::Intent, iomap::ContentIoMap)
     child = iomap.inner_iomap
     file = iomap.input
+    recursion = _get_content_recursion(p, recursion, child.input)
     if change.gesture isa CollectIntents
         inner = reroot_operation(read_intent(get_iomap_projection(child), recursion, change, child).operation,
                                  _CONTENT_STEPS)

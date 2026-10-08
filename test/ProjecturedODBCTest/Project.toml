@@ -1,6 +1,6 @@
 name = "ProjecturedODBCTest"
 uuid = "b5c88522-b0a8-403b-b9a3-0ff1b237a7b9"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -16,13 +16,13 @@ ProjecturedSQL = "d8115f9e-353f-406e-8661-6168b14bd6fd"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
-ProjecturedConsole = "0.1.0"
-ProjecturedDBCatalog = "0.1.0"
+ProjecturedConsole = "0.1.1"
+ProjecturedDBCatalog = "0.1.1"
 ProjecturedDatabase = "0.1.0"
-ProjecturedKernel = "0.1.0"
-ProjecturedKernelTest = "0.1.0"
-ProjecturedODBC = "0.1.0"
-ProjecturedPDF = "0.1.0"
-ProjecturedPlatform = "0.1.0"
-ProjecturedSQL = "0.1.0"
+ProjecturedKernel = "0.1.1"
+ProjecturedKernelTest = "0.1.1"
+ProjecturedODBC = "0.1.1"
+ProjecturedPDF = "0.1.1"
+ProjecturedPlatform = "0.2.0"
+ProjecturedSQL = "0.1.1"
 julia = "1.12"

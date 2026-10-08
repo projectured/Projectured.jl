@@ -61,6 +61,80 @@ make_conversation_thinking_part(text = ""; collapsed::Bool = true, kwargs...) =
 # Accessor mirroring ConversationModule.make_evaluator_result_text / _eval_*.
 _thinking_text(t::ConversationThinking) = t.text
 
+# ── ConversationPermissionRequest ─────────────────────────────────────────────
+
+"""
+    ConversationPermissionRequest(title, options; reply = nothing)
+
+An external agent asks a person whether it can run a tool, and waits for the
+answer. `title` says what the tool does. `options` are the answers that the
+agent offers, each an `AgentPermissionOption`. `answer` is the name of the
+option that the person chose, `"Cancelled"` when the turn ended first, and empty
+while the agent waits.
+
+`reply` sends the chosen option to the agent. It is a live function and no data:
+the duplicate of a request has none, and a request with none can not be
+answered. [`answer_permission_request!`](@ref) answers a request.
+
+A `.pred` file keeps the title, the options and the answer, and no `reply`. A
+request that waits when it is saved reads back as `"Cancelled"`, because nobody
+can answer it after the load.
+"""
+@document struct ConversationPermissionRequest <: ConversationDocument
+    title::String
+    options::Vector{AgentPermissionOption}
+    answer::String
+    reply::Any
+end
+
+ConversationPermissionRequest(title::AbstractString, options::AbstractVector; reply = nothing) =
+    ConversationPermissionRequest(Cell(String(title)), Cell(collect(AgentPermissionOption, options)),
+                                  Cell(""), Cell(reply), Cell(nothing))
+
+# An option is a group of named values in a file, so the kernel type of an
+# option needs no place among the types that a file may build.
+pred_arguments(request::ConversationPermissionRequest) = (), Pair{Symbol,Any}[
+    :title   => request.title,
+    :options => [(id = option.id, name = option.name, kind = option.kind) for option in request.options],
+    :answer  => isempty(request.answer) ? "Cancelled" : request.answer,
+]
+
+function make_pred_document(::Type{<:ConversationPermissionRequest}, positional, keywords)
+    values = Dict{Symbol,Any}(keywords)
+    options = AgentPermissionOption[AgentPermissionOption(String(option.id), String(option.name), option.kind)
+                                    for option in values[:options]]
+    request = ConversationPermissionRequest(values[:title], options)
+    request.answer = String(get(values, :answer, "Cancelled"))
+    request
+end
+
+"""
+    is_permission_request_open(request) -> Bool
+
+Whether the agent still waits for the answer of a person to `request`.
+"""
+is_permission_request_open(request::ConversationPermissionRequest) =
+    isempty(request.answer) && request.reply !== nothing
+
+"""
+    answer_permission_request!(request, option_id)
+
+Answer `request` with the option whose id is `option_id`, or as cancelled with
+`nothing`. The first answer goes to the agent, and a later one does nothing. A
+`reply` that answers `false` says that the agent had its answer already, from a
+cancel of the turn, and the request then shows `"Cancelled"`.
+"""
+function answer_permission_request!(request::ConversationPermissionRequest,
+                                     option_id::Union{Nothing,AbstractString})
+    is_permission_request_open(request) || return nothing
+    index = option_id === nothing ? nothing : findfirst(option -> option.id == option_id, request.options)
+    reply = request.reply
+    request.reply = nothing
+    is_delivered = reply(index === nothing ? nothing : String(option_id)) !== false
+    request.answer = index === nothing || !is_delivered ? "Cancelled" : request.options[index].name
+    nothing
+end
+
 # ── ConversationTurn ──────────────────────────────────────────────────────────
 
 """
@@ -133,6 +207,10 @@ has_dormant_selection(::ConversationDraft) = true
 
 # A conversation is what a person said and read, so its duplicate is a copy of it.
 has_document_duplicate(::ConversationDocument) = true
+
+# The reply of a request goes to the agent that asked, and a copy did not ask.
+copy_document(policy::DuplicatePolicy, request::ConversationPermissionRequest) =
+    copy_document_fields(policy, request; reply = nothing)
 
 # The assistant a draft links back to is not the draft's own, so the duplicate of
 # a draft keeps the link. The duplicate of an assistant puts its own link there.

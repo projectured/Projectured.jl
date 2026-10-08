@@ -12,18 +12,24 @@ const _MAIN_WEIGHT = 1.0
 
 """
     AssistantToWidgetSplitPane(theme)
-    AssistantToWidgetSplitPane(; composer_min_height)
+    AssistantToWidgetSplitPane(; composer_min_height, option_bar_height)
 
 The assistant as a split pane: the transcript over the composer. The composer
 keeps the least height that the `ConversationTheme` gives, and the transcript
-takes the rest. With no theme it takes the value of the default theme.
+takes the rest. A row under the composer, of the height that the theme gives,
+holds the button that stops the turn that runs, and for an external agent the
+menus of its options. With no theme it takes the values of the default theme.
 """
 @projection UntrackedCell struct AssistantToWidgetSplitPane
     composer_min_height::Int = get_conversation_style(nothing, :composer_min_height)
+    option_bar_height::Int = get_conversation_style(nothing, :option_bar_height)
+    option_gap::Int = get_conversation_style(nothing, :option_gap)
 end
 
 AssistantToWidgetSplitPane(theme::Union{ConversationTheme,ScaledConversationTheme}) =
-    AssistantToWidgetSplitPane(; composer_min_height = get_conversation_style(theme, :composer_min_height))
+    AssistantToWidgetSplitPane(; composer_min_height = get_conversation_style(theme, :composer_min_height),
+                                 option_bar_height = get_conversation_style(theme, :option_bar_height),
+                                 option_gap = get_conversation_style(theme, :option_gap))
 
 """
     AssistantToWidgetCard(; title, transcript_height, cell_height, gap)
@@ -74,13 +80,31 @@ function print_document(projection::AssistantToWidgetSplitPane,
     input_pane = WidgetScrollPane(a.draft)
     # Conversation takes the main weight; the input box stays at its minimum
     # (≈3 monospace rows) and does not grow with the window.
-    column = WidgetSplitPane(:vertical, Any[
+    panes = Any[
         LayoutConstraint(conv_pane;
                          min_height=0, preferred_height=0, weight_height=_MAIN_WEIGHT),
         LayoutConstraint(input_pane;
                          min_height=projection.composer_min_height,
                          preferred_height=projection.composer_min_height),
-    ])
+    ]
+    # A row under the composer holds the button that stops the turn that runs.
+    # An external agent has options of its own, and a row of menus beside the
+    # button shows them, and a line says how much of its context the session
+    # uses. The row is the last child, so the maps below, which name the first
+    # two, stay as they are, and a click on it is a click on a part that the view
+    # drew. A split pane prints a child at the height of its slot, so the row
+    # declares its height.
+    items = Any[make_assistant_stop_button(a)]
+    if a.backend === :acp
+        usage = WidgetLabel("")
+        set_cell_computation!(getfield(usage, :content), () -> format_agent_usage(a.agent_usage))
+        set_cell_computation!(getfield(usage, :tooltip), () -> describe_agent_usage(a.agent_usage))
+        append!(items, Any[make_agent_option_bar(a), usage])
+    end
+    row = HorizontalLayout(items; gap = projection.option_gap)
+    push!(panes, LayoutConstraint(row; min_height = projection.option_bar_height,
+                                  preferred_height = projection.option_bar_height))
+    column = WidgetSplitPane(:vertical, panes)
     iomap = SimpleIoMap(projection, a, column)
     # A key is routed by selection: the split pane sends it to the pane that the
     # assistant's selection names. The part under the pointer follows the same map.
@@ -169,8 +193,9 @@ end
 # And back. A click in a pane is a click in the document that pane holds, so the
 # caret lands where it was aimed rather than on the card as a whole — which is
 # the difference between a card a reader can click into and one they can only
-# click at.
-function map_reference_backward(::AssistantToWidgetCard, iomap::SimpleIoMap, reference)
+# click at. Any other part of the card is a part that the view drew, as the
+# default map names it, so the drag of a bar of a pane comes back to the pane.
+function map_reference_backward(p::AssistantToWidgetCard, iomap::SimpleIoMap, reference)
     reference isa Reference || return nothing
     steps = get_reference_steps(reference)
     for (pane, name) in ((1, "conversation"), (2, "draft"))
@@ -181,7 +206,7 @@ function map_reference_backward(::AssistantToWidgetCard, iomap::SimpleIoMap, ref
         return _steps_to_reference(vcat(Any[FieldReferenceStep(name)],
                                         steps[(length(prefix) + 1):end]))
     end
-    nothing
+    invoke(map_reference_backward, Tuple{Projection,Any,Any}, p, iomap, reference)
 end
 
 # A click that named no pane is still a click on the card, and the card takes it
@@ -200,7 +225,7 @@ function map_reference_forward(::AssistantToWidgetSplitPane, iomap, reference)
     end
 end
 
-function map_reference_backward(::AssistantToWidgetSplitPane,
+function map_reference_backward(p::AssistantToWidgetSplitPane,
                                  iomap,
                                  reference)
     # The assistant projects to a vertical WidgetSplitPane with the
@@ -220,7 +245,9 @@ function map_reference_backward(::AssistantToWidgetSplitPane,
     # spliced path must be typed all the way down or the strict check refuses it.
     assistant = iomap === nothing ? nothing : iomap.input
     typed(document, tail) = document === nothing ? tail : annotate_reference_types(document, tail)
-    @reference_case reference begin
+    # Any other part, such as the divider or a pane with its bar, is a part that
+    # the view drew, as the default map names it, so a drag there comes back.
+    answer = @reference_case reference begin
         ::WidgetSplitPane.elements{s:e}.child.content.rest... => begin
             i = s + 1
             if i == 1
@@ -232,6 +259,8 @@ function map_reference_backward(::AssistantToWidgetSplitPane,
             end
         end
     end
+    answer === nothing || return answer
+    invoke(map_reference_backward, Tuple{Projection,Any,Any}, p, iomap, reference)
 end
 
 function read_intent(p::AssistantToWidgetSplitPane,
@@ -300,3 +329,128 @@ function __init__()
         (; measure, appearance) -> Pair{Type,Any}[Assistant =>
             AssistantToWidgetSplitPane(get_scaled_theme!(appearance, ConversationTheme))])
 end
+
+# ── The options of an external agent ───────────────────────────────────────
+
+"""
+    make_assistant_stop_button(assistant) -> WidgetButton
+
+The button that stops the turn of `assistant` that runs, with
+`CancelAssistantTurnOperation`. It is enabled only while a turn runs. It shows
+the stop icon and no word, so the row of the options of an agent keeps its
+room; its tooltip says what it does.
+"""
+function make_assistant_stop_button(a::Assistant)
+    button = WidgetButton(""; icon = :stop, tooltip = "Stop the turn",
+                          action = editor -> evaluate_operation(editor, CancelAssistantTurnOperation(a)))
+    set_cell_computation!(getfield(button, :enabled), () -> is_assistant_turn_running(a))
+    button
+end
+
+# The options of an external agent that the bar shows, in this order, with the
+# word that names each one.
+const _AGENT_OPTION_BAR = ((:model, "Model"), (:thought_level, "Effort"), (:mode, "Mode"))
+
+"""
+    make_agent_option_bar(assistant) -> WidgetMenu
+
+A row of menus for the options of the external agent of `assistant`: its model,
+how much it reasons (its effort), and its mode. Each menu says the value that
+holds, and a pick sets the option with `SetAgentOptionOperation`. Before a
+session is open there are no options, and the row is one item, "Start the
+agent", which starts the agent with `StartExternalAgentOperation`. A menu whose
+option the agent does not have is hidden.
+
+A last menu, "Commands", lists the commands that the agent offers, each with
+its description as the tooltip. A pick writes `/name ` into the draft with
+`ComposerInputOperation`, and the person completes and sends it. The agent
+gives its commands with the first prompt, so the menu shows from then on.
+"""
+function make_agent_option_bar(a::Assistant)
+    items = Any[]
+    for (index, (category, word)) in enumerate(_AGENT_OPTION_BAR)
+        item = WidgetMenuItem(word; action = editor -> evaluate_operation(editor, StartExternalAgentOperation(a)))
+        set_cell_computation!(item, () -> _get_agent_option_label(a, category, word, index))
+        set_cell_computation!(getfield(item, :visible),
+                              () -> isempty(a.agent_options) ? index == 1 :
+                                    _find_agent_option(a, category) !== nothing)
+        set_cell_computation!(getfield(item, :submenu), () -> _make_agent_option_menu(a, category))
+        push!(items, item)
+    end
+    commands = WidgetMenuItem("Commands")
+    set_cell_computation!(getfield(commands, :visible), () -> !isempty(a.agent_commands))
+    set_cell_computation!(getfield(commands, :submenu), () -> _make_agent_command_menu(a))
+    push!(items, commands)
+    WidgetMenu(items; orientation = :horizontal)
+end
+
+# The commands of the agent, each written into the draft when it is picked.
+function _make_agent_command_menu(a::Assistant)
+    commands = a.agent_commands
+    isempty(commands) && return nothing
+    WidgetMenu(Any[WidgetMenuItem("/" * command.name;
+                                  tooltip = isempty(command.description) ? nothing : command.description,
+                                  action = editor -> evaluate_operation(editor,
+                                      ComposerInputOperation(a.draft, "/" * command.name * " ")))
+                   for command in commands])
+end
+
+function _find_agent_option(a::Assistant, category::Symbol)
+    options = a.agent_options
+    index = findfirst(option -> option.category === category, options)
+    index === nothing ? nothing : options[index]
+end
+
+function _get_agent_option_label(a::Assistant, category::Symbol, word::String, index::Int)
+    option = _find_agent_option(a, category)
+    option === nothing && return index == 1 && isempty(a.agent_options) ? "Start the agent" : word
+    value = findfirst(value -> value.value == option.current_value, option.values)
+    word * ": " * (value === nothing ? option.current_value : option.values[value].name)
+end
+
+# The values of one option, with a mark before the one that holds.
+function _make_agent_option_menu(a::Assistant, category::Symbol)
+    option = _find_agent_option(a, category)
+    option === nothing && return nothing
+    WidgetMenu(Any[WidgetMenuItem((value.value == option.current_value ? "✓ " : "   ") * value.name;
+                                  action = editor -> evaluate_operation(editor,
+                                      SetAgentOptionOperation(a, option.id, value.value)))
+                   for value in option.values])
+end
+
+"""
+    format_agent_usage(usage) -> String
+
+The short line that says how much of its context window a session of an external
+agent uses, as `"36k / 1M"`, with what the session has cost when the agent says,
+as `"2k / 200k · 0.46 USD"`. Empty for `nothing`. The tooltip of the line says
+it in words; see [`describe_agent_usage`](@ref).
+"""
+function format_agent_usage(usage)
+    usage === nothing && return ""
+    text = _format_token_count(usage.used) * " / " * _format_token_count(usage.size)
+    usage.cost === nothing ? text : text * " · " * _format_agent_cost(usage)
+end
+
+"""
+    describe_agent_usage(usage) -> Union{Nothing,String}
+
+What the short line of [`format_agent_usage`](@ref) means, for its tooltip: as
+`"The session uses 36k of the 1M tokens of its context."`, with what it has
+cost when the agent says. `nothing` for `nothing`.
+"""
+function describe_agent_usage(usage)
+    usage === nothing && return nothing
+    text = "The session uses " * _format_token_count(usage.used) * " of the " *
+           _format_token_count(usage.size) * " tokens of its context."
+    usage.cost === nothing ? text : text * " It has cost " * _format_agent_cost(usage) * "."
+end
+
+_format_agent_cost(usage) = string(round(usage.cost; digits = 2)) * " " * usage.currency
+
+_format_token_count(count::Integer) =
+    count >= 1_000_000 ? _format_one_decimal(count / 1_000_000) * "M" :
+    count >= 1_000 ? string(round(Int, count / 1_000)) * "k" : string(count)
+
+_format_one_decimal(value::Real) = (rounded = round(value; digits = 1);
+                                    isinteger(rounded) ? string(Int(rounded)) : string(rounded))

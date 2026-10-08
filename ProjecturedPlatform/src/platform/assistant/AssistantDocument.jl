@@ -11,8 +11,10 @@ caller names another. `McpServer` has its own, domain-free instructions
 (`DEFAULT_MCP_INSTRUCTIONS` in `source/adapter/mcp/Mcp.jl`), so the MCP module keeps
 no dependency on the assistant.
 """
-const DEFAULT_ASSISTANT_SYSTEM = "You are Claude working inside the ProjecturEd editor — a projectional editor built in Julia.\n\n" *
-                                  "Use `execute_julia_code` to inspect and modify the editor's document and projection; " *
+# The guide to the tools of the editor that the native assistant and an external
+# agent share: how to inspect and change the running editor through
+# `execute_julia_code`, and how to find an API or a guide.
+const EDITOR_TOOL_GUIDE = "Use `execute_julia_code` to inspect and modify the editor's document and projection; " *
                                   "the variable `editor` is bound to the running editor.\n\n" *
                                   "MANDATORY — read this BEFORE writing any code:\n" *
                                   "- resource://guide/guide/orientation  (the concept index — your starting point)\n" *
@@ -51,8 +53,33 @@ const DEFAULT_ASSISTANT_SYSTEM = "You are Claude working inside the ProjecturEd 
                                   "- Read full text with `read_resource(uri)`; read a function's full docs with " *
                                   "`read_function_documentation(\"Module\", \"name\")`.\n" *
                                   "- `list_resources` enumerates documentation/module/class resources if you need to browse.\n\n" *
-                                  "NEVER guess names or signatures — search for them.\n" *
+                                  "NEVER guess names or signatures — search for them.\n"
+
+const DEFAULT_ASSISTANT_SYSTEM = "You are Claude working inside the ProjecturEd editor — a projectional editor built in Julia.\n\n" *
+                                  EDITOR_TOOL_GUIDE *
                                   "NEVER search in files, read files, or run shell commands — use the editor's search tools and resources."
+
+"""
+    DEFAULT_AGENT_INSTRUCTIONS
+
+The instructions of the MCP server that an external agent of the assistant
+gets, and the text that the editor adds to the system prompt of the agent: the
+agent runs inside the editor of the person, the MCP server controls that
+editor, and a request about what the editor shows goes through its tools.
+They hold the guide to the tools that the native assistant gets, but not its
+rule against files and shell commands, because a person can ask an agent for
+work on files.
+"""
+const DEFAULT_AGENT_INSTRUCTIONS =
+    "You run inside ProjecturEd, the projectional editor built in Julia that the person uses now, " *
+    "as the agent of its assistant pane. The MCP server `projectured` controls this running editor: " *
+    "its windows, panes, tabs, open documents and widgets.\n\n" *
+    "When the person asks you to show, open, change, arrange or build something in the editor — " *
+    "a tab, a pane, a table, a form, a widget, or a value in an open document — do it in the running " *
+    "editor with the tools of this server. Do not write source files, change the code of ProjecturEd, " *
+    "or start a git worktree for such a request. Use your own file and shell tools only when the " *
+    "person asks for work on files or on the code of a project.\n\n" *
+    EDITOR_TOOL_GUIDE
 
 """
     Assistant(; conversation, input, backend, model, system, api_key, context, status, llm)
@@ -79,6 +106,35 @@ the size to the backend. It is one of the three keywords every backend accepts, 
 a backend it does not apply to ignores it: a hosted provider's window comes with the
 model and cannot be set per request.
 
+**An external agent is a backend too.** With `backend = :acp` a turn goes to an
+agent that runs its own loop, and the agent runs its own tools. `agent_command`
+is the command line that starts the agent in another process. Empty, the
+default, starts the built-in agent of `ProjecturedACP` in this process, which
+runs Claude Code, the `claude` program that the person installed.
+`agent_session_meta` is the JSON `_meta` that a new session of the agent gets;
+its default asks the agent `claude-agent-acp` for the summary of its reasoning,
+and an agent that does not read it, as the built-in one, ignores it. The package `ProjecturedACP` must be
+loaded. `agent_session` is the live link to
+the agent, an `ExternalAgentSession`: `nothing` until the first turn starts it,
+or one that a test gives. It is no data, like `llm`. `agent_session_id` is the
+id of the session of the agent that the assistant keeps, `agent_session_directory`
+its folder, and `agent_session_turn_count` how many turns of the conversation
+that session saw. They are written when the agent answers a prompt, and empty
+until then. A stop of the agent keeps them, so the next turn resumes that
+session with its history, as after the undo of the close of the tab; a new
+conversation and a duplicate clear them. `agent_options` are the options of
+the session of the agent, such as its model and how much it reasons, as the agent
+last listed them: empty until a session opens. `agent_title` is the title that
+the agent gave its session, empty until it gives one, and the tab of the
+assistant shows it. `agent_usage` is how much of its context window the
+session uses, an `AgentUsageUpdate`, or `nothing`. `agent_commands` are the
+commands that the agent offers, as `/name` at the start of a prompt. They are no
+data either.
+
+`turn_control` is the live control of the turn that runs, an
+`AssistantTurnControl`, and `nothing` between turns. A stop sets its flag. It is
+no data, like `llm`.
+
 `llm` defaults to `nothing` and `api_key` to empty: the backend and key are
 resolved **at submit time**, not here. This keeps the choice out of the
 precompiled image — documents are built eagerly into `const`s during
@@ -100,7 +156,39 @@ behaviour pass an explicit `llm` (a `FakeLlm`/`ScriptedLlm` from
     status::Symbol
     collapse_thinking::Bool
     llm::Union{Nothing,Llm}
+    turn_control::Any
+    agent_command::String
+    agent_session_meta::String
+    agent_session::Any
+    agent_session_id::String
+    agent_session_directory::String
+    agent_session_turn_count::Int
+    agent_options::Vector{AgentOption}
+    agent_title::String
+    agent_usage::Union{Nothing,AgentUsageUpdate}
+    agent_commands::Vector{AgentCommand}
 end
+
+# The command of the external agent that an assistant starts when nobody names
+# another: empty, which starts the built-in agent of `ProjecturedACP`.
+const DEFAULT_AGENT_COMMAND = ""
+
+# The `_meta` of a new session of the external agent when nobody names another.
+# `claude-agent-acp` reads SDK options from `claudeCode.options`, and a recent
+# model streams no text of its reasoning unless `thinking.display` says
+# `"summarized"`.
+const DEFAULT_AGENT_SESSION_META =
+    raw"""{"claudeCode": {"options": {"thinking": {"type": "adaptive", "display": "summarized"}}}}"""
+
+# What the fork of an assistant with an external agent says under the history it
+# copied.
+const FORK_AGENT_NOTE =
+    "This copy talks to the agent in a new session. The agent does not have the history above."
+
+# What the transcript says when the agent opened a new session in place of the
+# session that the assistant kept.
+const NEW_SESSION_AGENT_NOTE =
+    "The agent could not resume its session, so the next answer comes from a new session, which does not have the history above."
 
 # A fresh user draft (one active text typein) for the composer input pane.
 _default_draft() = ConversationDraft([ConversationPart(PrimitiveString(""))])
@@ -115,12 +203,29 @@ function Assistant(; conversation::ConversationConversation = ConversationConver
                               context::Integer = 0,
                               status::Symbol = :idle,
                               collapse_thinking::Bool = true,
-                              llm::Union{Nothing,Llm} = nothing)
+                              llm::Union{Nothing,Llm} = nothing,
+                              turn_control = nothing,
+                              agent_command::AbstractString = DEFAULT_AGENT_COMMAND,
+                              agent_session_meta::AbstractString = DEFAULT_AGENT_SESSION_META,
+                              agent_session = nothing,
+                              agent_session_id::AbstractString = "",
+                              agent_session_directory::AbstractString = "",
+                              agent_session_turn_count::Integer = 0,
+                              agent_options::AbstractVector = AgentOption[],
+                              agent_title::AbstractString = "",
+                              agent_usage::Union{Nothing,AgentUsageUpdate} = nothing,
+                              agent_commands::AbstractVector = AgentCommand[])
     a = Assistant(Cell(conversation), Cell(input), Cell(draft),
                            Cell(backend), Cell(String(model)), Cell(String(system)),
                            Cell(String(api_key)), Cell(Int(context)), Cell(status),
                            Cell(collapse_thinking),
-                           Cell(llm),
+                           Cell(llm), Cell(turn_control),
+                           Cell(String(agent_command)), Cell(String(agent_session_meta)),
+                           Cell(agent_session), Cell(String(agent_session_id)),
+                           Cell(String(agent_session_directory)), Cell(Int(agent_session_turn_count)),
+                           Cell(collect(AgentOption, agent_options)),
+                           Cell(String(agent_title)), Cell(agent_usage),
+                           Cell(collect(AgentCommand, agent_commands)),
                            Cell(nothing))
     # Back-link the draft to its owning assistant so the composer's ENTER can be
     # turned into a submit (push into the conversation + stream a reply).
@@ -131,22 +236,47 @@ end
 set_cell_computation!(a::Assistant, f::Function) = (set_cell_computation!(getfield(a, :conversation), f); a)
 
 # A key must never be written to a file, so `api_key` is not one of the
-# arguments a `.pred` file writes. A live connection is not data either: `llm`
-# is a fake or a running client, `status` is what a turn is doing right now,
+# arguments a `.pred` file writes. A command is not one either: a file that named
+# the program of an external agent, or the options of its sessions, would start
+# it at the next message, and a `.pred` file runs no code. So `agent_command` and
+# `agent_session_meta` come from the settings of the application, never from a
+# file. A live connection is not data either: `llm`
+# is a fake or a running client, `agent_session` is a running agent, `status` is what a turn is doing right now,
 # and `conversation`/`input`/`draft` are this session's exchange, not the
 # next one's — so a save keeps only the settings that describe an assistant
 # rather than a moment of one, and a load starts a fresh, empty conversation.
-pred_arguments(a::Assistant) = (), Pair{Symbol,Any}[
-    :backend           => a.backend,
-    :model             => a.model,
-    :system            => a.system,
-    :context           => a.context,
-    :collapse_thinking => a.collapse_thinking,
-]
+#
+# An assistant that keeps a session of an external agent is the exception: the
+# agent holds the history of that conversation. So its file also keeps the
+# conversation, and the id, the folder, the count of turns and the title of the
+# session, and the next turn after a load resumes the session. An id is no
+# command and no credential: the agent still comes from the settings.
+function pred_arguments(a::Assistant)
+    keywords = Pair{Symbol,Any}[
+        :backend           => a.backend,
+        :model             => a.model,
+        :system            => a.system,
+        :context           => a.context,
+        :collapse_thinking => a.collapse_thinking,
+    ]
+    if a.backend === :acp && !isempty(a.agent_session_id)
+        append!(keywords, Pair{Symbol,Any}[
+            :conversation             => a.conversation,
+            :agent_session_id         => a.agent_session_id,
+            :agent_session_directory  => a.agent_session_directory,
+            :agent_session_turn_count => a.agent_session_turn_count,
+            :agent_title              => a.agent_title,
+        ])
+    end
+    (), keywords
+end
 
-# The name the tab calls itself. No alias: `get_insertion_names` already derives
-# one from the type name, so a person types "assistant" without a hand-written method.
-get_document_title(::Assistant) = ASSISTANT_TITLE
+# The name the tab calls itself: the title that an external agent gave its
+# session, else the name of the assistant. A tab with an empty name asks at each
+# draw, so the tab follows the title. No alias: `get_insertion_names` already
+# derives one from the type name, so a person types "assistant" without a
+# hand-written method.
+get_document_title(a::Assistant) = isempty(a.agent_title) ? ASSISTANT_TITLE : a.agent_title
 
 # ── The duplicate ─────────────────────────────────────────────────────────────
 #
@@ -156,17 +286,29 @@ get_document_title(::Assistant) = ASSISTANT_TITLE
 # fork starts idle. A reply that streams stays with the assistant that started
 # it: its task writes there, and it is the last turn, pushed when the stream
 # began, so the fork leaves it out.
+#
+# The session of an external agent stays with the assistant that opened it, also
+# when the agent stopped and the assistant keeps the id of the session. The fork
+# starts a new session at its first turn, and a note in its transcript says that
+# the agent of the fork does not have the history above it.
 has_document_duplicate(::Assistant) = true
 
 function copy_document(policy::DuplicatePolicy, assistant::Assistant)
     draft = copy_document_fields(policy, assistant.draft; assistant = nothing)
-    fork = copy_document_fields(policy, assistant; draft = draft, status = :idle)
+    fork = copy_document_fields(policy, assistant; draft = draft, status = :idle, turn_control = nothing,
+                                agent_session = nothing, agent_session_id = "",
+                                agent_session_directory = "", agent_session_turn_count = 0,
+                                agent_options = AgentOption[],
+                                agent_title = "", agent_usage = nothing,
+                                agent_commands = AgentCommand[])
     draft.assistant = fork
     turns = fork.conversation.turns
     if assistant.status === :streaming && !isempty(turns) &&
        turns[length(turns)].role === :assistant
         deleteat!(turns, length(turns))
     end
+    (assistant.agent_session === nothing && isempty(assistant.agent_session_id)) ||
+        push!(turns, ConversationTurn(:assistant, [ConversationPart(FORK_AGENT_NOTE)]))
     fork
 end
 

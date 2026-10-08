@@ -2,7 +2,7 @@
     ProjecturedPlatformTest
 
 The test package of the platform: the thirty-eight slices between the
-kernel and the seventeen domains. It is the second tier of the test-package
+kernel and the eighteen domains. It is the second tier of the test-package
 DAG (kernel ← platform ← domain ← umbrella). It hosts:
 
 - the unit tests of every slice of the platform, from the reactive containers
@@ -95,6 +95,7 @@ end
 
 # ── the tests of the packages that came out of base ─────────────────────────
 include("../test/platform/document/CollectionDocumentTest.jl")
+include("../test/platform/document/TableInterfaceTest.jl")
 include("../test/platform/document/MouseTargetFieldTest.jl")
 include("../test/platform/document/DocumentWalkTest.jl")
 include("../test/platform/document/BoundedSyncTest.jl")
@@ -111,6 +112,7 @@ include("../test/platform/projection/IdentityTest.jl")
 include("../test/platform/projection/VersioningToAnyTest.jl")
 include("../test/platform/serialization/TextFileTest.jl")
 include("../test/platform/serialization/MarkerLanguageTest.jl")
+include("../test/platform/serialization/PredFileTest.jl")
 # ── visual documents ─────────────────────────────────────────────────────────
 include("../test/platform/document/PointReferenceTest.jl")
 include("../test/platform/document/SyntaxDocumentTest.jl")
@@ -161,6 +163,7 @@ include("../test/platform/projection/WidgetButtonTest.jl")
 include("../test/platform/projection/WidgetSliderTest.jl")
 include("../test/platform/projection/WidgetScrollBarTest.jl")
 include("../test/platform/projection/WidgetLiveValueTest.jl")
+include("../test/platform/projection/WidgetProgressTest.jl")
 include("../test/platform/projection/SizeRangeChildRuleTest.jl")
 include("../test/platform/projection/SizeRangeStackTest.jl")
 include("../test/platform/projection/SizeRangeMainAxisTest.jl")
@@ -189,15 +192,32 @@ include("../test/platform/appearance/AppearanceFileTest.jl")
 include("../test/platform/settings/SettingsTest.jl")
 include("../test/platform/settings/SettingsWrapperTest.jl")
 include("../test/platform/settings/SettingsTabTest.jl")
+include("../test/platform/navigator/NavigatorVisitsTest.jl")
+include("../test/platform/navigator/NavigatorChoicesTest.jl")
+include("../test/platform/navigator/NavigatorToWidgetTest.jl")
+include("../test/platform/navigator/OpenPageOperationTest.jl")
+include("../test/platform/navigator/NavigatorGesturesTest.jl")
+include("../test/platform/navigator/NavigatorDocumentTest.jl")
+include("../test/platform/navigator/NavigatorAddressTest.jl")
 include("../test/platform/projection/WidgetTreeTest.jl")
 include("../test/platform/projection/WidgetToolbarTest.jl")
 include("../test/platform/projection/WidgetTableTest.jl")
 include("../test/platform/projection/WidgetTextWrapTest.jl")
 include("../test/platform/projection/WidgetTablePartsTest.jl")
+include("../test/platform/projection/WidgetTableHeaderLevelsTest.jl")
+include("../test/platform/projection/WidgetTableCellOrderTest.jl")
+include("../test/platform/projection/WidgetTablePartSelectionTest.jl")
 include("../test/platform/projection/LayoutListTest.jl")
 include("../test/platform/projection/WidgetTabStripTest.jl")
 include("../test/platform/projection/WidgetTabLabelTest.jl")
 include("../test/platform/mcplog/McpLogTest.jl")
+include("../test/platform/task/TaskResultTest.jl")
+include("../test/platform/task/TaskExecutionTest.jl")
+include("../test/platform/task/TaskGroupTest.jl")
+include("../test/platform/task/BuildStepTest.jl")
+include("../test/platform/task/TaskDocumentTest.jl")
+include("../test/platform/task/TaskGroupToWidgetTest.jl")
+include("../test/platform/task/TaskVerbsTest.jl")
 include("../test/platform/projection/WidgetSplitPaneTest.jl")
 include("../test/platform/projection/PaneToWidgetTest.jl")
 include("../test/platform/projection/PaneReaderTest.jl")
@@ -211,6 +231,10 @@ include("../test/platform/projection/GridSpanTest.jl")
 include("../test/platform/projection/WidgetFormsTest.jl")
 include("../test/platform/projection/AnchorPointTest.jl")
 include("../test/platform/projection/AnchoredLayoutTest.jl")
+include("../test/platform/projection/ScrollLayoutTest.jl")
+include("../test/platform/projection/ScrollPanePartsTest.jl")
+include("../test/platform/projection/TextGutterTest.jl")
+include("../test/platform/projection/TextFoldingTest.jl")
 # ── interaction decorators (clipboard / tooltip) ─────────────────────────────
 # The clipboard copy/cut/paste projection and the tooltip decorator's
 # open/close state machine — both live in visual now and use only base/visual
@@ -234,6 +258,9 @@ include("../test/platform/projection/BaselineAlignmentTest.jl")
 include("../test/platform/projection/WidgetForwardTest.jl")
 include("../test/platform/projection/WidgetRoundTripTest.jl")
 include("../test/platform/projection/ScrollPaneHoverTest.jl")
+include("../test/platform/projection/ScrollPaneBarTest.jl")
+include("../test/platform/projection/WidgetTableBarTest.jl")
+include("../test/platform/projection/WidgetRowsScrollTest.jl")
 include("../test/platform/projection/WidgetPopupExampleTest.jl")
 # ── visual-level generic drivers ─────────────────────────────────────────────
 include("../test/platform/editor/NavigationPresets.jl")
@@ -370,6 +397,7 @@ end
 
 include("../test/platform/conversation/AssistantApiTest.jl")
 include("../test/platform/conversation/ConversationThemeTest.jl")
+include("../test/platform/conversation/ExternalAgentTurnTest.jl")
 
 include("../test/platform/conversation/ConversationSuite.jl")
 end # module ConversationTests
