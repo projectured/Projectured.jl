@@ -98,6 +98,25 @@ A schema whose bare name is the mutable native struct.
     a::Int
 end
 
+# A field that names another schema: the native layout holds the native child, and
+# the cell layout holds any layout of the family of the child.
+@document [M, C] struct DmNativeOwner
+    child::DmNative
+end
+
+# The same with a schema that has a parameter: the bare name is a `UnionAll`.
+@document [M, C] struct DmParametricNative{A}
+    a::A
+end
+
+@document struct DmParametricOwner
+    child::DmParametricNative
+end
+
+# A value that can not show itself, for the text of a refused write.
+struct DmUnshowable end
+Base.show(io::IO, ::DmUnshowable) = error("DmUnshowable can not show itself")
+
 # `I` first binds it to the immutable native struct — a value a hot path copies
 # rather than mutates. `selection::Nothing` is written out for the same reason it
 # is on a value document: the injected union is over heap types, and one of them
@@ -393,6 +412,24 @@ end
     @test DmNative(4) isa ADmNative
     @test ACDmNative(1, nothing) isa ADmNative
     @test copy_document(ReactiveCell, DmNative(4)) isa ACDmNative
+end
+
+@testset "a cell layout declares the family where a field names a native layout" begin
+    @test fieldtype(MDmNativeOwner, :child) === MDmNative
+    @test find_declared_field_type(ACDmNativeOwner, :child) === ADmNative
+    # A kinded copy holds the cell layout of the child, which the check admits.
+    for kind in (ReactiveCell, MutableCell, ImmutableCell)
+        copied = copy_document(kind, DmNativeOwner(DmNative(4)))
+        @test copied.child isa ACDmNative
+        @test copied.child.a == 4
+    end
+    @test find_declared_field_type(DmParametricOwner, :child) === ADmParametricNative
+    shadow = copy_document(ReactiveCell, DmParametricNative{Int}(5, nothing))
+    @test DmParametricOwner(shadow).child === shadow
+    # The text of a refused write names a value that can not show itself by its type.
+    text = sprint(showerror, DeclaredTypeMismatchException(DmNativeOwner, :child, DmNative,
+                                                          DmUnshowable()))
+    @test endswith(text, ": a $(DmUnshowable)")
 end
 
 @testset "a docstring reaches the struct that the bare name names" begin

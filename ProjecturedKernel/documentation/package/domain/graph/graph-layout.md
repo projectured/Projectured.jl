@@ -61,7 +61,34 @@ added for the boxes that this package draws:
 
 With an extent and no pin, the centres are scaled into it, as every engine
 here does. With a pin, the pin is a place in the extent, so the drawing keeps
-its scale and every other body is moved just far enough to lie inside it.
+its scale and every other body is moved just far enough to lie inside it. A
+start is a place in the extent too.
+
+A body with a start stays at its start: it pushes and pulls the others, and the
+forces do not move it. A body without a start begins on the spiral, so a new
+vertex finds its place among the others. When two boxes still overlap, the body
+that holds its place less moves: a pinned body never moves, a body with a start
+yields only to a pin, and a free body yields first.
+
+## Start positions
+
+A drop of a dragged vertex writes a `:pin` for it and a `:start` for every other
+vertex, at the place where it is drawn, into `GraphGraph.constraints`. The next
+layout begins from what the person saw.
+
+| engine | what a `:start` does |
+| --- | --- |
+| `FruchtermanReingoldLayout` | the vertex stays there; only the pass that removes overlaps and the rule of the extent move it |
+| `GridEmbedding` | the vertex is placed there, as a pin: a grid has nothing to refine |
+| `AdaptagramsLayout` | the vertex is placed there on the way out, as a pin: the shim takes no constraint |
+| `SpringEmbedderLayout`, `ForceDirectedLayout` (a package that builds on the editor) | a fixed node, as a pin: the originals have no start positions |
+
+The forces do not move a start, because an FR result is not a balanced state.
+Forces that refine one move every vertex at each drop, the vertices that the
+drop does not touch as much as its neighbours, and the moves add up over drops:
+on a chain of 12, five such layouts moved a vertex by 1.24 `k`. So after a drop,
+only the dropped vertex moves, as in a diagram editor. The plan of the drag
+holds the measurement.
 
 ## Which engine runs
 
@@ -69,6 +96,8 @@ its scale and every other body is moved just far enough to lie inside it.
 engine, and it determines **when the layout runs** rather than when the projection
 is built. A projection is usually constructed at module load, long before an
 optional engine package can be loaded.
+It is the default engine of `GraphGraphToGraphLayout`, `GraphToGraphics` and
+`make_graph_projection_example`, so a graph in a tab gets it.
 
 With nothing registered it is `FruchtermanReingoldLayout`, for a graph of any
 size. A registered engine takes over; `resolve_layout_engine(engine,
@@ -87,6 +116,7 @@ A `GraphConstraint` wraps a vertex with a `kind` and a `payload`.
 | kind | payload | what the layout must do |
 | --- | --- | --- |
 | `:pin` | `(x, y)` | place this vertex at this corner and never move it |
+| `:start` | `(x, y)` | begin to place this vertex at this corner; an engine can move it from there. A pin of the same vertex wins |
 | `:fixed_size` | `(w, h)` or `nothing` | use this size, and do not resize it |
 | `:cluster` | `group` or `(group, offx, offy)` | this vertex belongs to a family that moves as one body, with its centre at this offset from the family |
 | `:align` | — | not implemented by anything |

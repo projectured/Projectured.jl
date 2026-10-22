@@ -65,7 +65,7 @@ a typing mistake; a kind inside it that an engine does not implement is a
 refusal, never a silent drop. See [`check_constraints`](@ref).
 """
 const GRAPH_CONSTRAINT_KINDS =
-    (:pin, :fixed_size, :cluster, :align, :same_rank, :min_separation)
+    (:pin, :start, :fixed_size, :cluster, :align, :same_rank, :min_separation)
 
 """
     get_supported_constraint_kinds(engine) -> Tuple{Vararg{Symbol}}
@@ -112,16 +112,37 @@ The `:pin` constraints as `objectid(vertex) => (x, y)`, where `(x, y)` is the
 **top-left** corner the vertex is pinned to — the same corner `positions`
 reports. Two pins on one vertex: the last one wins.
 """
-function get_constraint_pins(constraints)
-    pins = Dict{UInt,Tuple{Float64,Float64}}()
+get_constraint_pins(constraints) = _collect_constraint_corners(constraints, :pin)
+
+"""
+    get_constraint_starts(constraints) -> Dict{UInt,Tuple{Float64,Float64}}
+
+The `:start` constraints as `objectid(vertex) => (x, y)`, where `(x, y)` is the
+**top-left** corner where the layout begins to place the vertex. An engine that
+refines a placement moves the vertex from there; an engine that can not refine
+one places the vertex there, as it places a pin. A vertex with a pin has no
+start here, because its pin wins. Two starts on one vertex: the last one wins.
+"""
+function get_constraint_starts(constraints)
+    starts = _collect_constraint_corners(constraints, :start)
+    for id in keys(get_constraint_pins(constraints))
+        delete!(starts, id)
+    end
+    starts
+end
+
+# The constraints of `kind` as `objectid(vertex) => (x, y)`, for a kind whose
+# payload is a corner.
+function _collect_constraint_corners(constraints, kind::Symbol)
+    corners = Dict{UInt,Tuple{Float64,Float64}}()
     for constraint in constraints
-        constraint.kind === :pin || continue
+        constraint.kind === kind || continue
         payload = constraint.payload
         (payload isa Tuple && length(payload) == 2) || throw(ArgumentError(
-            "a :pin constraint's payload must be (x, y), got $(repr(payload))."))
-        pins[objectid(constraint.target)] = (Float64(payload[1]), Float64(payload[2]))
+            "a $(repr(kind)) constraint's payload must be (x, y), got $(repr(payload))."))
+        corners[objectid(constraint.target)] = (Float64(payload[1]), Float64(payload[2]))
     end
-    pins
+    corners
 end
 
 """
@@ -249,12 +270,17 @@ function get_straight_routes(graph::GraphGraph, positions::Dict)
         source_box = get(positions, objectid(source), nothing)
         target_box = get(positions, objectid(target), nothing)
         (source_box === nothing || target_box === nothing) && continue
-        scx = source_box[1] + source_box[3]/2; scy = source_box[2] + source_box[4]/2
-        tcx = target_box[1] + target_box[3]/2; tcy = target_box[2] + target_box[4]/2
-        routes[objectid(edge)] = Tuple{Int,Int}[_border_point(source_box, tcx, tcy),
-                                                _border_point(target_box, scx, scy)]
+        routes[objectid(edge)] = _make_straight_route(source_box, target_box)
     end
     routes
+end
+
+# The straight route between two boxes `(x, y, w, h)`: from the border of the
+# source box to the border of the target box, on the side that faces the other.
+function _make_straight_route(source_box, target_box)
+    scx = source_box[1] + source_box[3]/2; scy = source_box[2] + source_box[4]/2
+    tcx = target_box[1] + target_box[3]/2; tcy = target_box[2] + target_box[4]/2
+    Tuple{Int,Int}[_border_point(source_box, tcx, tcy), _border_point(target_box, scx, scy)]
 end
 
 """
@@ -331,7 +357,8 @@ fill the extent. Without an `extent` the grid is unbounded, which is what the
 caller asked for by naming no box.
 
 It implements `:pin` — a pinned vertex is placed at its coordinate and takes no
-grid cell — and `:fixed_size`. It refuses every other kind, because a grid has
+grid cell — `:start`, which it places as a pin because a grid has nothing to
+refine, and `:fixed_size`. It refuses every other kind, because a grid has
 nothing to say about them.
 """
 struct GridEmbedding <: GraphLayoutEngine
@@ -349,7 +376,7 @@ GridEmbedding(; node_sep::Integer=40, rank_sep::Integer=60,
                   columns === nothing ? nothing : Int(columns), direction,
                   Int(circle_max))
 
-get_supported_constraint_kinds(::GridEmbedding) = (:pin, :fixed_size)
+get_supported_constraint_kinds(::GridEmbedding) = (:pin, :start, :fixed_size)
 layout_engine_name(::GridEmbedding) = :grid
 
 # How many columns the grid gets. Without an extent it is the caller's `columns`
@@ -437,7 +464,8 @@ function layout_graph(engine::GridEmbedding, graph::GraphGraph, sizes::Dict,
     n == 0 && return (positions, Dict{UInt,Vector{Tuple{Int,Int}}}())
 
     widths, heights = get_vertex_sizes(vertices, sizes, constraints)
-    pins = get_constraint_pins(constraints)
+    # A grid has nothing to refine, so a start is placed as a pin is.
+    pins = merge(get_constraint_starts(constraints), get_constraint_pins(constraints))
     cx = zeros(Float64, n); cy = zeros(Float64, n)
     free = [i for i in 1:n if !haskey(pins, objectid(vertices[i]))]
 

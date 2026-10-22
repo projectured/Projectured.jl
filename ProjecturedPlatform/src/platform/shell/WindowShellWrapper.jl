@@ -2,7 +2,7 @@
 # `build_editor`.
 
 """
-    shell = true | (; assistant, explorer, about, status_bar, measure, appearance)
+    shell = true | (; assistant, explorer, files, about, status_bar, measure, appearance)
 
 The wrapper of `build_editor` that puts the root document in the chrome of a
 window: a `WidgetShell` whose bands are the menu bar of
@@ -20,13 +20,15 @@ The bands offer a tool that shows what the window records only when the wrapper
 that fills it is on: `message_log`, `gesture_log`, `fault_log` and
 `frame_statistics` ([`RECORDED_TOOLS`](@ref)). In the same way, the Help menu
 offers the gesture help and the command palette only when `gesture_help` and
-`command_palette` are on. The argument holds the choices of
-the host:
+`command_palette` are on, and the toolbar offers the Assistants pane only when
+`assistant_list` is on. The argument holds the choices of the host:
 
 - `assistant` makes the assistant of the window from the editor; with
   `nothing`, the default, the toolbar has no assistant, which needs a model.
-- `explorer` makes the file explorer of the window from the editor; with
-  `nothing` it lists the working directory.
+- `explorer` makes the explorer of the window from the editor; with `nothing` it
+  shows the content of the explorer of the editor.
+- `files` makes the file explorer of the window from the editor; with `nothing`
+  it lists the working directory.
 - `about` makes the About page of the Help menu; the default is the page of
   ProjecturEd.
 - `status_bar = false` leaves out the status bar.
@@ -54,13 +56,23 @@ function wrap_editor!(::Val{:shell}, layer::Symbol, argument, parts::EditorParts
             make_window_menu_bar(; recorded, gesture_help, command_palette) :
             make_window_menu_bar(; recorded, about, gesture_help, command_palette),
         toolbar = make_window_toolbar(; assistant = get(options, :assistant, nothing),
-                                        explorer = get(options, :explorer, nothing), recorded,
+                                        explorer = get(options, :explorer, nothing),
+                                        files = get(options, :files, nothing), recorded,
+                                        assistant_list = haskey(parts.arguments, :assistant_list),
                                         extra = collect(Any, get(options, :tools, ()))),
-        status_bar = get(options, :status_bar, true) ? make_window_status_bar(document) : nothing)
+        status_bar = get(options, :status_bar, true) ?
+            make_window_status_bar(document; extra = _make_thread_notice(parts.backend)) : nothing)
     parts.projection = make_window_shell_projection(parts.projection; measure, appearance)
     append!(parts.opened_window_projections,
             make_opened_window_projections(; gesture_help = false, measure, appearance))
     parts
+end
+
+# The notice that a code unit of the window has no thread of its own, as a
+# segment of the status bar. The wrapper runs on the task of the loop.
+function _make_thread_notice(backend)
+    notice = find_code_unit_thread_notice(backend)
+    notice === nothing ? String[] : String[notice]
 end
 
 get_wrapper_layers(::Val{:shell}) = (:container => 10,)

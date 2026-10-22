@@ -28,9 +28,9 @@ opening. Enter on the selected file and a double click on a file row call it
 and return that operation. The view does not open anything itself: the editor
 evaluates the operation, so the view stays free of side effects.
 
-The default is `OpenFileOperation`, the intent this slice declares — it names
-the file and nothing about where it goes. A caller that knows the destination
-(the pane tree, a specific pane) passes its own operation instead.
+The default is `OpenFileOperation`, which names the file and nothing about
+where it goes. A caller that knows the destination (the pane tree, a specific
+pane) passes its own operation instead.
 """
 struct FileSystemToWidgetTree <: Projection
     position::Point2D
@@ -47,29 +47,31 @@ FileSystemToWidgetTree(position::Point2D = Point2D(0, 0); open_file = OpenFileOp
 # an icon name of the widget layer, so the tree draws it as the glyph of the icon
 # font that the rest of the window uses.
 _fs_icon(::FileSystemDirectory) = :folder
-function _fs_icon(f::FileSystemFile)
-    ext = lowercase(splitext(f.pathname)[2])
-    ext == ".jl"            ? :lambda       :
-    ext == ".json"          ? :braces       :
-    ext in (".md", ".txt")  ? :pilcrow      :
-    ext == ".pred"          ? :diamond      :   # a document written as its constructor
-    ext == ".ned"           ? :hexagon      :   # a network: nodes and the links between them
-    ext == ".ini"           ? :file_sliders :   # a configuration: lines of keys and values
-    ext == ".math"          ? :sigma        :
-    :file
+_fs_icon(f::FileSystemFile) = get_file_icon(f.pathname)
+
+# The node of an entry: a file, or a folder with its rows. A folder answers from
+# what it holds whether it has rows, so a closed row reads nothing of it; a folder
+# that reads shows its chevron too. The rows of an open folder ask for its entries.
+_fs_node(f::FileSystemFile, open_file; label = basename(f.pathname)) =
+    WidgetTreeNode(_fs_icon(f), label; gestures = _make_open_file_bindings(f.pathname, open_file))
+function _fs_node(d::FileSystemDirectory, open_file; label = _dir_name(d.pathname))
+    rows = CellVector(@computation((demand_tree_children(d); 1:_count_folder_rows(d)));
+                      element = i -> _make_folder_row(d, i, open_file))
+    WidgetTreeNode(_fs_icon(d), label, rows; has_children = () -> has_folder_entries(d) === true || d.reading)
 end
 
-_fs_node(f::FileSystemFile, open_file) =
-    WidgetTreeNode(_fs_icon(f), basename(f.pathname);
-                   gestures = _make_open_file_bindings(f.pathname, open_file))
-# The children of a folder are read one at a time: the length reads the listing,
-# and a child reads its own entry, so a row that the tree does not draw reads
-# nothing from the disk.
-function _fs_node(d::FileSystemDirectory, open_file)
-    children = CellVector(@computation(1:length(d.elements));
-                          element = i -> _fs_node(d.elements[i], open_file))
-    WidgetTreeNode(_fs_icon(d), _dir_name(d.pathname), children)
+# The rows under a folder: its entries, or one row that says that it reads, or
+# that it can not be read.
+_count_folder_rows(d::FileSystemDirectory) =
+    (n = length(d.elements); n > 0 || d.state === :read ? n : 1)
+
+function _make_folder_row(d::FileSystemDirectory, i, open_file)
+    i <= length(d.elements) && return _fs_node(d.elements[i], open_file)
+    d.state === :failed && return WidgetTreeNode(:warning, "can not read: " * _format_read_failure(d.failure))
+    WidgetTreeNode(:loader, "reading")
 end
+
+_format_read_failure(failure) = first(split(sprint(showerror, failure), '\n'))
 
 # The two gestures that open a file: Enter while its row is selected, and a
 # double click on its row. A first click still selects the row, because only a
@@ -79,7 +81,7 @@ function _make_open_file_bindings(pathname, open_file)
     make_operation = (node, event) -> open_file(pathname)
     is_applicable = (node, selection) -> true
     GestureBinding[
-        GestureBinding(KeyDownPattern(:return), make_operation;
+        GestureBinding(KeyPressPattern('\n'), make_operation;
                        applicable = is_applicable, description = "Open the file",
                        domain = "file system"),
         GestureBinding(MouseClickPattern(:left; guard = event -> event.count == 2, label = "double click"),
@@ -101,15 +103,157 @@ function print_document(p::FileSystemToWidgetTree, recursion, doc::FileSystemDoc
     # Positional, so every declared field is named here in order and the paths
     # come last: position, roots, visible, margin, border, padding, style,
     # expanded, gestures, scroll_position, vertical_scroll_bar,
-    # horizontal_scroll_bar, tooltip, selection, mouse target. The root row is
-    # open, and each folder under it is closed until a person opens it. The tree
-    # scrolls itself in the slot that its parent offers.
+    # horizontal_scroll_bar, tooltip, anchor, shown, current, selection, mouse
+    # target. The root row is open, and each folder under it is closed until a
+    # person opens it. The tree scrolls itself in the slot that its parent offers.
     tree = WidgetTree(Cell(p.position), roots, Cell(true),
                       Cell(nothing), Cell(nothing), Cell(nothing), Cell(nothing),
                       Cell(Set([[1]])),
                       Cell(GestureBinding[]), Cell(Point2D(0, 0)), Cell(:auto), Cell(:auto),
-                      Cell(nothing), paths.selection, paths.mouse_target)
+                      Cell(nothing), Cell(nothing), Cell(Set{Vector{Int}}()), Cell(nothing),
+                      paths.selection, paths.mouse_target)
     SimpleIoMap(p, doc, tree)
+end
+
+# ── The tree of an explorer ───────────────────────────────────────────────────
+
+# A workspace explorer is a tree with a root for each folder of its workspace,
+# named as the folder; its open folders are the folders that the explorer holds
+# open, by their documents, so a new entry above an open folder keeps that folder
+# open. A chevron writes the open folders of the explorer and changes what it
+# holds, so a folder that opens reads and watches itself.
+function print_document(p::FileSystemToWidgetTree, recursion, explorer::WorkspaceExplorer, ctx)
+    paths = make_output_path_cells(explorer, path -> _map_explorer_path_forward(p, path))
+    roots = CellVector(@computation Any[_fs_node(folder.directory, p.open_file; label = folder.name)
+                                        for folder in explorer.workspace.folders])
+    expanded = Cell(@computation _compute_open_folder_paths(_get_explorer_folders(explorer), explorer.open))
+    tree = WidgetTree(Cell(p.position), roots, Cell(true),
+                      Cell(nothing), Cell(nothing), Cell(nothing), Cell(nothing),
+                      expanded,
+                      Cell(GestureBinding[]), Cell(Point2D(0, 0)), Cell(:auto), Cell(:auto),
+                      Cell(nothing), Cell(nothing), Cell(Set{Vector{Int}}()), Cell(nothing),
+                      paths.selection, paths.mouse_target)
+    SimpleIoMap(p, explorer, tree)
+end
+
+_get_explorer_folders(explorer::WorkspaceExplorer) = Any[folder.directory for folder in explorer.workspace.folders]
+
+# The open folders as paths of the widget: a root at its place, and an open
+# folder under an open folder at its place among the rows. A folder under a closed
+# folder is not open.
+function _compute_open_folder_paths(folders::Vector, open)
+    paths = Set{Vector{Int}}()
+    for (k, folder) in enumerate(folders)
+        _collect_open_folder_paths!(paths, folder, [k], open)
+    end
+    paths
+end
+
+function _collect_open_folder_paths!(paths, folder, path, open)
+    (folder isa FileSystemDirectory && haskey(open, folder)) || return nothing
+    push!(paths, path)
+    for (i, entry) in enumerate(folder.elements)
+        _collect_open_folder_paths!(paths, entry, vcat(path, i), open)
+    end
+    nothing
+end
+
+# The document at a path of the widget: a root, then an entry of each folder on
+# the way; `nothing` for a row that names no entry, such as the reading row.
+function _find_folder_entry(folders::Vector, path::Vector{Int})
+    1 <= path[1] <= length(folders) || return nothing
+    entry = folders[path[1]]
+    for i in path[2:end]
+        (entry isa FileSystemDirectory && 1 <= i <= length(entry.elements)) || return nothing
+        entry = entry.elements[i]
+    end
+    entry
+end
+
+# The answer to a write of the open nodes of the widget: the write of the open
+# folders of `holder` and the change of what it holds, together as view state, so
+# undo records neither, beside the other parts of the operation, such as the rows
+# of the view of a tree that scrolls itself, which the reader maps as any answer.
+# `widget` is the tree whose write it takes, or `nothing` for the one tree of a
+# view that draws only one. `nothing` for an operation with no write of the open
+# nodes.
+function _read_open_folder_write(holder, folders::Vector, widget, operation)
+    parts = operation isa CompoundOperation ? operation.operations : Any[operation]
+    index = findfirst(part -> _is_open_rows_write(part, widget), parts)
+    index === nothing && return nothing
+    write = get_wrapped_operation(parts[index])
+    open = IdDict{Any,Nothing}()
+    for path in write.value
+        entry = _find_folder_entry(folders, path)
+        entry isa FileSystemDirectory && (open[entry] = nothing)
+    end
+    before = holder.open
+    opened = Any[folder for folder in keys(open) if !haskey(before, folder)]
+    closed = Any[folder for folder in keys(before) if !haskey(open, folder)]
+    open_write = ReplaceReferencedValueOperation(holder, "open", open)
+    hold = ChangeHeldDocumentsOperation(holder, closed, opened)
+    held = isempty(opened) && isempty(closed) ? ReplaceViewStateOperation(open_write) :
+           ReplaceViewStateOperation(CompoundOperation(Any[open_write, hold]))
+    (held, Any[part for (k, part) in enumerate(parts) if k != index])
+end
+
+# Whether `operation` is a write of the open nodes of `widget`, as view state.
+function _is_open_rows_write(operation, widget)
+    operation isa ReplaceViewStateOperation || return false
+    write = get_wrapped_operation(operation)
+    write isa ReplaceReferencedValueOperation || return false
+    document = write.document
+    (widget === nothing ? document isa WidgetTree : document === widget) || return false
+    steps = get_reference_steps(strip_reference_types(write.reference))
+    length(steps) == 1 && steps[1] == FieldReferenceStep("expanded")
+end
+
+# The answer of a view of folders to `payload`: what `read` made of a write of the
+# open nodes, with the other parts mapped as through any projection, or else the
+# payload mapped so.
+function _map_open_folder_answer(p, iomap, payload, read)
+    map_answer(answer) = invoke(read_intent, Tuple{Projection,Any,Any}, p, iomap, answer)
+    read === nothing && return map_answer(payload)
+    (held, others) = read
+    mapped = isempty(others) ? nothing :
+             map_answer(length(others) == 1 ? only(others) : CompoundOperation(others))
+    mapped === nothing ? held : CompoundOperation(Any[held, mapped])
+end
+
+function read_intent(p::FileSystemToWidgetTree, recursion, change::Intent, iomap::SimpleIoMap)
+    (change.route === nothing && iomap.input isa WorkspaceExplorer) ||
+        return invoke(read_intent, Tuple{Projection,Any,Intent,Any}, p, recursion, change, iomap)
+    payload = change.operation === nothing ? change.gesture : change.operation
+    explorer = iomap.input
+    folders = _get_explorer_folders(explorer)
+    read = _read_open_folder_write(explorer, folders, iomap.output, payload)
+    answer = _map_open_folder_answer(p, iomap, payload, read)
+    Intent(change.gesture, answer, change.description, change.domain)
+end
+
+# The path of the explorer `workspace.folders[k].directory.elements[a]…` is the
+# node `roots[k].children[a]…`; `workspace.folders[k]` is its root too.
+function _map_explorer_path_forward(p::FileSystemToWidgetTree, reference)
+    introduced = find_introduced_path(p, reference)
+    introduced === nothing || return something(introduced)
+    reference isa ConcreteReference || return nothing
+    steps = get_reference_steps(strip_reference_types(reference))
+    (length(steps) >= 3 && steps[1] == FieldReferenceStep("workspace") && steps[2] == FieldReferenceStep("folders") &&
+     steps[3] isa RangeReferenceStep && is_element_reference_step(steps[3])) || return nothing
+    length(steps) == 3 && return _tree_build([steps[3].start + 1], 1)
+    steps[4] == FieldReferenceStep("directory") || return nothing
+    indices = _fs_ref_indices(extend_reference(EmptyReference(), steps[5:end]...))
+    indices === nothing ? nothing : _tree_build(vcat(steps[3].start + 1, indices), 1)
+end
+
+# A node `roots[k].children[a]…` of the widget is the path
+# `workspace.folders[k].directory.elements[a]…` of the explorer.
+function _map_explorer_path_backward(p::FileSystemToWidgetTree, iomap, reference)
+    indices = _tree_ref_path_indices(reference)
+    indices === nothing && return make_introduced_reference(p, iomap, strip_reference_types(reference))
+    concat_references(extend_reference(EmptyReference(), FieldReferenceStep("workspace"), FieldReferenceStep("folders"),
+                                       RangeReferenceStep(indices[1] - 1, indices[1]), FieldReferenceStep("directory")),
+                      _fs_ref_from_indices(indices[2:end]))
 end
 
 # ── Reference mapping (file-system ⇄ WidgetTree node-path) ─────────────────────
@@ -119,6 +263,7 @@ end
 # tree itself or its bar, is the path in the tree that its introduced reference
 # holds.
 map_reference_forward(p::FileSystemToWidgetTree, iomap, reference) =
+    iomap isa SimpleIoMap && iomap.input isa WorkspaceExplorer ? _map_explorer_path_forward(p, reference) :
     something(find_introduced_path(p, reference), Some(_map_tree_reference_forward(reference)))
 
 # Backward: a node path of the tree (`roots[1].children[a].children[b]…`) → the
@@ -129,6 +274,7 @@ map_reference_forward(p::FileSystemToWidgetTree, iomap, reference) =
 # part of the view.
 function map_reference_backward(p::FileSystemToWidgetTree, iomap::SimpleIoMap, reference)
     reference isa Reference || return nothing
+    iomap.input isa WorkspaceExplorer && return _map_explorer_path_backward(p, iomap, reference)
     idxs = _tree_ref_indices(reference)
     idxs === nothing && return make_introduced_reference(p, iomap, strip_reference_types(reference))
     _fs_ref_from_indices(idxs)
@@ -199,6 +345,21 @@ function _tree_ref_indices(reference)
         cur = t.tail
     end
     idxs
+end
+
+# Decode `roots[k].children[a].children[b]…` into the indices [k, a, b, …], or
+# nothing on an unexpected shape.
+function _tree_ref_path_indices(reference)
+    reference isa ConcreteReference || return nothing
+    steps = get_reference_steps(strip_reference_types(reference))
+    (length(steps) >= 2 && iseven(length(steps)) && steps[1] == FieldReferenceStep("roots")) || return nothing
+    indices = Int[]
+    for k in 1:2:length(steps)
+        steps[k] == FieldReferenceStep(k == 1 ? "roots" : "children") || return nothing
+        (steps[k + 1] isa RangeReferenceStep && is_element_reference_step(steps[k + 1])) || return nothing
+        push!(indices, steps[k + 1].start + 1)
+    end
+    indices
 end
 
 # ── Factory ───────────────────────────────────────────────────────────────────

@@ -27,6 +27,7 @@ using ..PlatformModule
 
 # Imported to extend: this module adds a method to each of these.
 import ..FileFormatModule: make_document_seed
+import ..PrimitiveModule: make_incomplete_number_document
 import ..SerializationModule: emit_text, get_file_domain, make_reference_leaf,
                               find_reference_marker, parse_file_content
 
@@ -43,7 +44,8 @@ include("JsonFile.jl")
 
 
 # What this slice registers when it loads: the file extensions it owns, the
-# natural notation it reads and writes, and the names a model may use.
+# natural notation it reads and writes, which is also how a model reads and writes
+# a JSON document, and the sentence that tells a model so.
 function __init__()
     register_natural_domain!(JsonDocument;
                              rung      = :syntax,
@@ -56,11 +58,12 @@ function __init__()
 
     register_file_document_type!(".json", JsonFile)
 
-    # The shape of a JSON file, which a model reads to find the fields of a
-    # record.
-    register_assistant_api!(JsonModule => (:JsonArray, :JsonObject, :JsonObjectEntry,
-                                           :JsonString, :JsonNumber, :JsonBool,
-                                           :JsonNull))
+    # A JSON document is written as its text, so the domain offers no name to a
+    # model, and tells it how to write a value.
+    register_assistant_api!(Any[];
+        description = "A JSON value is written as its text: " *
+                      "`parse_natural_text(:json, \"[1, 2]\")` makes one, for a verb such " *
+                      "as `replace_referenced_value!`.")
 end
 
 end # module

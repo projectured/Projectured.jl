@@ -1,12 +1,11 @@
 # Fragment of `PaneModule`.
 #
-# Where a newly opened file goes. `OpenFileOperation` is the file-system slice's
-# intent — it names a path and nothing about a destination, because that slice
-# draws a file tree and does not know what holds it. The pane tree is one
-# destination, so this is the pane's half of the seam: the group a file belongs
-# in. `evaluate_operation(editor, ::OpenFileOperation)`, which pairs the intent
-# with this answer, lives beside the operation in `FileSystemDocument.jl` — a
-# pane cannot name a type its own package does not depend on.
+# Where a newly opened file goes. `OpenFileOperation` names a path and nothing
+# about a destination. The pane tree is one destination, so this is the pane's
+# half of the seam: the group a file belongs in. `evaluate_operation(editor,
+# ::OpenFileOperation)`, which pairs the intent with this answer, lives in the
+# file-system slice, in `FileSystemDocument.jl`, which reads a file into the
+# document of its type.
 
 """
     get_pane_file_group(; editor = get_evaluation_editor()) -> PaneGroup or nothing
@@ -20,17 +19,19 @@ leaves the choice to [`open_pane!`](@ref). A file must not cover the explorer it
 was opened from, nor a running conversation.
 """
 function get_pane_file_group(; editor = get_evaluation_editor())
-    found = _find_focused_tree_route(editor)
-    found === nothing && return nothing
-    tree = last(found)
-    groups = get_pane_groups(tree)
-    for group in groups
-        any(tab -> _find_tab_file(tab.content) !== nothing, group.tabs) && return group
+    run_on_editor_task!(editor; description = "get_pane_file_group") do
+        found = _find_focused_tree_route(editor)
+        found === nothing && return nothing
+        tree = last(found)
+        groups = get_pane_groups(tree)
+        for group in groups
+            any(tab -> _find_tab_file(tab.content) !== nothing, group.tabs) && return group
+        end
+        free = [group for group in groups if _is_free_group(group)]
+        isempty(free) && return nothing
+        focused = get_pane_focused_group(tree)
+        focused in free ? focused : first(free)
     end
-    free = [group for group in groups if _is_free_group(group)]
-    isempty(free) && return nothing
-    focused = get_pane_focused_group(tree)
-    focused in free ? focused : first(free)
 end
 
 # The file a tab shows, through the layers it keeps it in, such as a scroll pane;

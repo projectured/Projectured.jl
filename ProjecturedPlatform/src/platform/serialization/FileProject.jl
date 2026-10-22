@@ -91,10 +91,20 @@ layer that shows a file, such as the scroll pane of a file tab, it answers the
 content of that file.
 
 Default reads through the `content` field: the save copies it, and the load
-fills it. A file whose whole node is its content — a `NedFile`, whose children
-and version are the file — answers with the node itself and says so with
-[`is_own_content`](@ref).
+fills it. A file whose whole node is its content answers with the node itself and
+says so with [`is_own_content`](@ref).
+
+Use it to read what an open file holds.
+
+# Example
+
+    file_1 = make_file_tab("notes.json")
+    content_1 = get_file_content(file_1)
+
+See also `get_edited_document` and `make_file_tab`.
 """
+function get_file_content end
+
 function get_file_content(f)
     is_file_document(f) && return unwrap_cell(getfield(f, :content))
     # A layer a person sees through, such as the scroll pane of a file tab, answers
@@ -108,7 +118,7 @@ get_file_content(file::ReferencedDocument) = get_file_content(get_document(file)
     is_own_content(file) -> Bool
 
 Whether the file node is itself the root of its content. A `JsonFile` holds its
-tree in a `content` field and answers `false`; a `NedFile` IS the tree and
+tree in a `content` field and answers `false`; a file whose node is the tree
 answers `true`, so the save rebuilds that node instead of cutting it, and the
 load takes what the parser built rather than wrapping it.
 
@@ -167,6 +177,24 @@ function get_file_document_type(path::AbstractString)
     haskey(_FILE_DOCUMENT_TYPES, ext) && return _FILE_DOCUMENT_TYPES[ext]
     error("get_file_document_type: no file document registered for extension ",
           repr(ext), " — call register_file_document_type!(", repr(ext), ", …)")
+end
+
+"""
+    find_file_extension(document) -> Union{String, Nothing}
+
+The extension of the registered file type whose domain holds `document`, such as
+`".json"` for a JSON object, or `nothing` when no format but `.pred` writes it.
+Of two extensions of one type, such as `".md"` and `".markdown"`, it answers the
+shorter one.
+
+Use it to name a file for a node that a file of its own format must write.
+"""
+function find_file_extension(document)
+    for extension in sort!(collect(keys(_FILE_DOCUMENT_TYPES)); by = e -> (length(e), e))
+        domain = get_file_domain(_FILE_DOCUMENT_TYPES[extension])
+        domain !== Document && document isa domain && return extension
+    end
+    nothing
 end
 
 """

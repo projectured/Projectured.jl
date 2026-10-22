@@ -142,6 +142,10 @@ end
 
 TaskGroupRuntime() = TaskGroupRuntime(ReentrantLock(), nothing, nothing, nothing, nothing, nothing)
 
+# The runtime is no document: a walk of the documents, such as the search of a
+# roster, stops here and does not reach what its scheduler and its functions hold.
+is_walk_opaque(::TaskGroupRuntime) = true
+
 """
     TaskGroup(tasks; name = "task", action = "", jobs = get_default_job_count(),
               codes = nothing, preparation = nothing)
@@ -259,6 +263,35 @@ function _add_task_result!(tally::TaskGroupTally, index::Int, task, result::Task
     tally
 end
 
+# The driver of a group runs on a task of the default pool, and the loop and any
+# other task read the group at the same time. So `runs`, `stopping`, the times
+# and the execution of the preparation are read and written under the lock of
+# the runtime of the group, as the tally is.
+
+# The executions of the group now, a copy taken under its lock.
+_get_task_group_runs(group::TaskGroup) = lock(() -> copy(group.runs), group.runtime.lock)
+
+_set_task_group_run!(group::TaskGroup, index::Int, run) =
+    lock(() -> (group.runs[index] = run; nothing), group.runtime.lock)
+
+# Keep the execution of a task that the driver just started, and stop it when a
+# stop of the group came during its start: that stop did not see it.
+function _keep_started_task_run!(group::TaskGroup, index::Int, run)
+    stopping = lock(group.runtime.lock) do
+        group.runs[index] = run
+        group.stopping
+    end
+    stopping && _stop_task_run!(group.tasks[index], run)
+    nothing
+end
+
+# Stop one task of a group: an inner group stops its own tasks.
+_stop_task_run!(task, run) =
+    task isa TaskGroup ? stop_task_group!(task) : run === nothing || stop_task_execution!(run)
+
+# Whether a stop of the group asks that no more of its tasks start.
+_is_task_group_stopping(group::TaskGroup) = lock(() -> group.stopping, group.runtime.lock)
+
 # Build the tally of the group again from its executions.
 _rebuild_task_group_tally!(group::TaskGroup) =
     lock(() -> (group.tally = _make_task_group_tally(group)), group.runtime.lock)
@@ -274,7 +307,7 @@ end
 function _record_task_end!(group::TaskGroup, index::Int)
     task = group.tasks[index]
     task isa TaskGroup && return nothing
-    run = group.runs[index]
+    run = lock(() -> group.runs[index], group.runtime.lock)
     (result, started, ended) = lock(() -> (run.result, run.start_time, run.end_time),
                                     run.runtime.lock)
     lock(group.runtime.lock) do
@@ -290,7 +323,7 @@ format_task_parameters(group::TaskGroup) = group.name
 # pending.
 function _collect_task_group_leaves(group::TaskGroup,
                                     leaves = Tuple{AbstractTask,Union{TaskExecution,Nothing}}[])
-    for (task, run) in zip(group.tasks, group.runs)
+    for (task, run) in zip(group.tasks, _get_task_group_runs(group))
         task isa TaskGroup ? _collect_task_group_leaves(task, leaves) : push!(leaves, (task, run))
     end
     leaves
@@ -338,9 +371,10 @@ one; `:failed` is every task whose result is neither `SKIP` nor of the role
 function compute_task_group_indices(group::TaskGroup, which)
     which isa AbstractVector && return Int[i for i in which if 1 <= i <= length(group.tasks)]
     which === :all && return collect(eachindex(group.tasks))
-    which === :unfinished && return Int[i for (i, run) in enumerate(group.runs)
+    runs = _get_task_group_runs(group)
+    which === :unfinished && return Int[i for (i, run) in enumerate(runs)
                                         if run === nothing || run.result === nothing]
-    finished = [(i, run.result) for (i, run) in enumerate(group.runs)
+    finished = [(i, run.result) for (i, run) in enumerate(runs)
                 if run !== nothing && run.result !== nothing]
     which === :failed && return Int[i for (i, result) in finished if _is_failure(result)]
     which === :unexpected && return Int[i for (i, result) in finished if !is_expected(result)]
@@ -361,7 +395,9 @@ The group runs on its own task; [`wait_task_group`](@ref) waits for it.
 when the task starts, which is when a reader can begin to watch the record.
 `on_finish` is called with the position and the `TaskResult` when it ends.
 `on_change` is called with the group whenever a task starts or ends, which is
-when a summary changes. Every callback is called on the task of the group.
+when a summary changes. Every callback is called on the task of the group, a task
+of the default pool, so a callback that reads or edits a document goes through
+the door of its editor.
 """
 function start_task_group!(group::TaskGroup; kwargs...)
     start_task_group!(group, collect(eachindex(group.tasks)); kwargs...)
@@ -369,14 +405,17 @@ end
 
 function start_task_group!(group::TaskGroup, indices::Vector{Int};
                            on_start = nothing, on_finish = nothing, on_change = nothing)
-    group.stopping = false
-    for index in indices
-        group.runs[index] = nothing
+    lock(group.runtime.lock) do
+        group.stopping = false
+        for index in indices
+            group.runs[index] = nothing
+        end
+        group.start_time = time()
+        group.end_time = nothing
     end
     _rebuild_task_group_tally!(group)
-    group.start_time = time()
-    group.end_time = nothing
-    group.runtime.scheduler = @async _drive!(group, indices, on_start, on_finish, on_change)
+    group.runtime.scheduler = errormonitor(Threads.@spawn :default _drive!(group, indices, on_start,
+                                                                           on_finish, on_change))
     group
 end
 
@@ -389,7 +428,7 @@ end
 function _drive!(group::TaskGroup, indices::Vector{Int}, on_start, on_finish, on_change)
     if group.preparation !== nothing
         reason = _run_preparation!(group)
-        group.stopping && return _finish_drive!(group)
+        _is_task_group_stopping(group) && return _finish_drive!(group)
         if reason !== nothing
             for index in indices
                 _end_unstarted_task!(group, index, reason, on_start, on_finish, on_change)
@@ -401,7 +440,7 @@ function _drive!(group::TaskGroup, indices::Vector{Int}, on_start, on_finish, on
     next = 1
     active = 0
     while next <= length(indices) || active > 0
-        while !group.stopping && next <= length(indices) && active < group.jobs
+        while !_is_task_group_stopping(group) && next <= length(indices) && active < group.jobs
             index = indices[next]
             next += 1
             active += 1
@@ -409,7 +448,7 @@ function _drive!(group::TaskGroup, indices::Vector{Int}, on_start, on_finish, on
                 on_finish === nothing || on_finish(index, result)
                 put!(finished, index)
             end
-            group.runs[index] = try
+            run = try
                 start_task(group.tasks[index]; on_finish = finish_one)
             catch exception
                 # A start that throws ends its task as an error, and the group
@@ -420,9 +459,10 @@ function _drive!(group::TaskGroup, indices::Vector{Int}, on_start, on_finish, on
                                      "The start failed: " * sprint(showerror, exception), nothing);
                     finish = finish_one)
             end
+            _keep_started_task_run!(group, index, run)
             _record_task_start!(group, index)
-            on_start === nothing || on_start(index, group.runs[index])
-            group.runtime.on_start === nothing || group.runtime.on_start(index, group.runs[index])
+            on_start === nothing || on_start(index, run)
+            group.runtime.on_start === nothing || group.runtime.on_start(index, run)
             on_change === nothing || on_change(group)
         end
         active == 0 && break
@@ -443,7 +483,7 @@ function _finish_drive!(group::TaskGroup)
             @error "the group $(repr(group.name)) failed to finish" exception = (exception, catch_backtrace())
         end
     end
-    group.end_time = time()
+    lock(() -> (group.end_time = time()), group.runtime.lock)
     group
 end
 
@@ -462,7 +502,12 @@ function _run_preparation!(group::TaskGroup)
                              "The start failed: " * sprint(showerror, exception), nothing))
         failed
     end
-    group.runtime.preparation_run = execution
+    stopping = lock(group.runtime.lock) do
+        group.runtime.preparation_run = execution
+        group.stopping
+    end
+    # A stop that came during the start of the preparation did not see it.
+    stopping && _stop_task_run!(preparation, execution)
     group.runtime.on_preparation === nothing || group.runtime.on_preparation(execution)
     wait_task_execution(execution)
     result = lock(() -> execution.result, execution.runtime.lock)
@@ -480,11 +525,11 @@ _describe_preparation(preparation::AbstractTask) = format_task_parameters(prepar
 function _end_unstarted_task!(group::TaskGroup, index::Int, reason::String, on_start, on_finish, on_change)
     task = group.tasks[index]
     execution = TaskExecution(task)
-    group.runs[index] = execution
+    _set_task_group_run!(group, index, execution)
     on_start === nothing || on_start(index, execution)
     group.runtime.on_start === nothing || group.runtime.on_start(index, execution)
     if task isa TaskGroup
-        fill!(task.runs, nothing)
+        lock(() -> fill!(task.runs, nothing), task.runtime.lock)
         _rebuild_task_group_tally!(task)
         for inner in eachindex(task.tasks)
             _end_unstarted_task!(task, inner, reason, nothing, nothing, nothing)
@@ -509,13 +554,13 @@ that catches the interrupt can still finish its work, and the task ends as
 `CANCEL`.
 """
 function stop_task_group!(group::TaskGroup)
-    group.stopping = true
-    run = group.runtime.preparation_run
-    if run !== nothing && is_task_running(run)
-        group.preparation isa TaskGroup ? stop_task_group!(group.preparation) : stop_task_execution!(run)
+    (run, runs) = lock(group.runtime.lock) do
+        group.stopping = true
+        (group.runtime.preparation_run, copy(group.runs))
     end
-    for (task, run) in zip(group.tasks, group.runs)
-        task isa TaskGroup ? stop_task_group!(task) : run === nothing || stop_task_execution!(run)
+    run !== nothing && is_task_running(run) && _stop_task_run!(group.preparation, run)
+    for (task, run) in zip(group.tasks, runs)
+        _stop_task_run!(task, run)
     end
     group
 end
@@ -526,6 +571,7 @@ function wait_task_group(group::TaskGroup)
     group
 end
 
+# @optional: which follows the group, as what a rerun command names next.
 """
     rerun_task_group!(group, which = :failed; callbacks…)
 
@@ -533,7 +579,6 @@ Run part of the group again, in place. `which` is what
 [`compute_task_group_indices`](@ref) understands. The entries it names go back to
 pending and run; every other entry keeps the result it has.
 """
-# @optional: which follows the group, as what a rerun command names next.
 function rerun_task_group!(group::TaskGroup, which = :failed; kwargs...)
     indices = compute_task_group_indices(group, which)
     isempty(indices) && return group
@@ -576,11 +621,11 @@ function start_task(group::TaskGroup; on_finish = nothing)
     end
     follow(group)
     start_task_group!(group; on_change = follow)
-    execution.runtime.reader = @async begin
+    execution.runtime.reader = errormonitor(Threads.@spawn :default begin
         wait_task_group(group)
         follow(group)
         finish_task_execution!(execution, compute_task_group_result(group); finish = on_finish)
-    end
+    end)
     execution
 end
 
@@ -590,7 +635,7 @@ _format_task_group_position(group::TaskGroup) =
 """The results of the group, in the order of its tasks. A task that has not
 finished answers `nothing`."""
 collect_task_group_results(group::TaskGroup) =
-    Union{TaskResult,Nothing}[run === nothing ? nothing : run.result for run in group.runs]
+    Union{TaskResult,Nothing}[run === nothing ? nothing : run.result for run in _get_task_group_runs(group)]
 
 """
     measure_task_group_elapsed_time(group) -> Float64 or nothing
@@ -599,7 +644,14 @@ How long the group ran, in seconds: from its last start to its end, or to now
 while it runs. `nothing` before it starts.
 """
 measure_task_group_elapsed_time(group::TaskGroup) =
-    group.start_time === nothing ? nothing : something(group.end_time, time()) - group.start_time
+    _measure_task_group_elapsed_time(group, time())
+
+# The time from the last start of the group to its end, or to `now`, read under
+# its lock.
+function _measure_task_group_elapsed_time(group::TaskGroup, now::Real)
+    (started, ended) = lock(() -> (group.start_time, group.end_time), group.runtime.lock)
+    started === nothing ? nothing : something(ended, now) - started
+end
 
 """
     build_task_group_summary(group) -> NamedTuple
@@ -930,7 +982,7 @@ function compute_task_group_summary(group::TaskGroup; now::Real = time())
     running = length(tallied.running)
     total = tallied.total
     pending = total - finished - running
-    elapsed = group.start_time === nothing ? nothing : something(group.end_time, now) - group.start_time
+    elapsed = _measure_task_group_elapsed_time(group, now)
     counts = Tuple{String,Int,Int}[(code, num_expected[code], num_unexpected[code])
                                    for code in codes.codes
                                    if num_expected[code] + num_unexpected[code] > 0]
@@ -981,14 +1033,15 @@ end
     make_task_group_shadow(group) -> shadow
 
 The shadow of `group` in the cell layout, which a view reads: its fields and its
-summary as they are now. Make it on the editor task.
+summary as they are now. Its list of runs is empty, because the slot of a task
+reads the run of that task. Make it on the editor task.
 """
 function make_task_group_shadow(group::TaskGroup)
     _refresh_task_group_summary!(group)
     lock(group.runtime.lock) do
         ACTaskGroup(group.tasks, group.name, group.action, group.jobs, group.codes,
                     group.preparation, group.stopping, group.start_time, group.end_time,
-                    nothing, nothing, group.summary, group.counts, nothing)
+                    Union{TaskExecution,Nothing}[], nothing, group.summary, group.counts, nothing)
     end
 end
 

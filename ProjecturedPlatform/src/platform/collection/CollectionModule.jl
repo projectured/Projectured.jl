@@ -30,12 +30,16 @@ using ..ReferenceModule
 # Imported to extend: this module adds a method to each of these.
 import ..DocumentModule: copy_document, sync_document!, has_document_duplicate,
                          is_element_collection, is_collection_field_type,
-                         get_cell_layout_field_type
+                         get_cell_layout_field_type, find_declared_element_type
 import ..OperationModule: child_reference_steps, get_slot_at
 import ..ProjectionModule: make_children_container, get_children_container_type
 
-export CollectionDocument, CellVector, CellMatrix, CellTable, ListNode,
-       get_left_tail, get_right_tail, find_list_node, find_list_index, make_index_list, get_cell_at, take_first,
+export CollectionDocument, ListDocument, CellVector, CellMatrix, CellTable, ListNode,
+       get_left_tail, get_right_tail, find_list_node, find_list_index, make_index_list,
+       make_mapped_list, set_lazy_link!, get_cell_at, take_first,
+       KeptListPrints, KeptListPrint, make_kept_list_prints, start_kept_list_head!,
+       note_kept_list_link!, make_kept_list_count, take_kept_list_print!,
+       record_kept_list_print!,
        count_computed_nodes, insert_row!, insert_column!, delete_row!, delete_column!
 export is_table, get_table_row_count, get_table_column_names, get_table_column_type,
        get_table_value, find_table_column, make_table_part, TablePart, make_table_document
@@ -45,6 +49,7 @@ include("CellVector.jl")
 include("CellMatrix.jl")
 include("CellTable.jl")
 include("ListNode.jl")
+include("KeptListPrints.jl")
 include("TableInterface.jl")
 include("CollectionDocument.jl")
 

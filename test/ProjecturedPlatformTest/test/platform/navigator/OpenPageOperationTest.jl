@@ -40,12 +40,37 @@ function ProjecturedPlatform.NavigatorModule.find_navigator_target(site::Navigat
         Reference(FieldReferenceStep("shelf"), FieldReferenceStep("books"), RangeReferenceStep(index - 1, index))
 end
 
+# The site knows where its books are, so a link that names a book opens it on the
+# shelf of the site, with the shelf as its parent.
+function ProjecturedPlatform.NavigatorModule.find_navigator_address(site::NavigatorTestSite, document)
+    index = findfirst(book -> book === document, collect(site.shelf.books))
+    index === nothing ? nothing :
+        Reference(FieldReferenceStep("shelf"), FieldReferenceStep("books"), RangeReferenceStep(index - 1, index))
+end
+
 _nav_make_site(shelf; folder = "") = NavigatorTestSite(_nav_make_linked_page(_nav_make_shelf()), shelf, folder, nothing)
+
+# The glyph of the icon of Open in a tab.
+const _NAV_OPEN_TAB = string(Char(0xe0b9))
+
+# Whether the strip of tabs, the texts above the bar of the first navigator, draws
+# `text`.
+function _nav_strip_has_text(backend, text)
+    drawn = _nav_texts(backend)
+    bar = minimum(entry -> entry[3], filter(entry -> entry[1] == _NAV_BACK, drawn))
+    any(entry -> entry[1] == text && entry[3] < bar, drawn)
+end
 
 # A file of the test domain around a document, as a file tab holds one.
 @document struct NavigatorTestFile <: FileDocument
     filename::String
     content::Any
+end
+
+# A content of a tab that holds a navigator in a field, as an explorer holds the
+# navigator beside its tree.
+@document struct NavigatorTestFrame
+    navigator::Any
 end
 
 _nav_link(target; place = :here) = OpenPageOperation(nothing, EmptyReference(), place; target)
@@ -210,6 +235,42 @@ function test_open_page_operation()
         @test get_navigator_page(tabs[2].content) === shelf.books[2]
     end
 
+    @testset "a new tab of a document opens over the content of the navigator that holds it" begin
+        shelf = _nav_make_shelf()
+        site = _nav_make_site(shelf)
+        navigator = Navigator(site, @reference(site, home))
+        editor, backend = _nav_editor(navigator; tabs = true)
+        book = shelf.books[2]
+        evaluate_operation(editor, OpenPageOperation(book, @reference(book, chapters[1]), :new_tab))
+        drain_operations!(editor)
+        run_frame!(editor)
+        tabs = _nav_tabs(editor)
+        @test length(tabs) == 2
+        # The content of the new tab is the site, so the page has its parent there.
+        @test tabs[2].content.content === site
+        @test get_navigator_page(tabs[2].content) === book.chapters[1]
+        @test evaluate_reference(site, find_navigator_parent_address(tabs[2].content)) === book
+        @test get_navigator_page(navigator) === site.home
+        # A navigator that the content of a tab holds in a field holds the document
+        # too, as the navigator of an explorer beside its tree does.
+        shelf = _nav_make_shelf()
+        site = _nav_make_site(shelf)
+        frame = NavigatorTestFrame(Navigator(site, @reference(site, home)))
+        editor, backend = _nav_editor(frame; tabs = true)
+        evaluate_operation(editor, OpenPageOperation(shelf.books[1], EmptyReference(), :new_tab))
+        drain_operations!(editor)
+        run_frame!(editor)
+        tabs = _nav_tabs(editor)
+        @test length(tabs) == 2 && tabs[2].content.content === site
+        @test get_navigator_page(tabs[2].content) === shelf.books[1]
+        # A document that no navigator of the window holds is the content of its tab.
+        other = NavigatorTestChapter("Elsewhere", nothing)
+        evaluate_operation(editor, OpenPageOperation(other, EmptyReference(), :new_tab))
+        drain_operations!(editor)
+        run_frame!(editor)
+        @test _nav_tabs(editor)[3].content.content === other
+    end
+
     @testset "a target that names a file opens it with a navigator, in a history with settings" begin
         folder = mktempdir()
         path = joinpath(folder, "notes.txt")
@@ -248,6 +309,58 @@ function test_open_page_operation()
         opened = _nav_tabs(editor)[2].content
         @test opened.content === file
         @test get_navigator_page(opened) === shelf.books[2]
+    end
+
+    @testset "Open in a tab opens the page in a new tab, whose name follows its page" begin
+        shelf = _nav_make_shelf()
+        navigator = Navigator(shelf, @reference(shelf, books[2]))
+        editor, backend = _nav_editor(navigator; tabs = true)
+        @test _nav_count(backend, _NAV_OPEN_TAB) == 1
+        click = _nav_click(backend, _NAV_OPEN_TAB)
+        @test click !== nothing
+        _nav_press!(editor, backend, click)
+        drain_operations!(editor)
+        run_frame!(editor)
+        tabs = _nav_tabs(editor)
+        @test length(tabs) == 2
+        opened = tabs[2].content
+        @test opened isa Navigator && opened !== navigator
+        @test opened.content === shelf
+        @test get_navigator_page(opened) === shelf.books[2]
+        @test isempty(opened.back)
+        @test get_navigator_page(navigator) === shelf.books[2]
+        # The new tab is called by its page, and its name follows a visit.
+        @test get_pane_tab_title_string(tabs[2]) == "B"
+        @test _nav_strip_has_text(backend, "B")
+        _nav_apply!(_NavHolder(opened), make_navigator_open_operation(opened, @reference(shelf, books[1])))
+        run_frame!(editor)
+        @test get_pane_tab_title_string(tabs[2]) == "A"
+        @test _nav_strip_has_text(backend, "A")
+    end
+
+    @testset "a link to a document that the content holds opens at its place" begin
+        shelf = _nav_make_shelf()
+        site = _nav_make_site(shelf)
+        navigator = Navigator(site, @reference(site, home))
+        _nav_apply!(_NavHolder(navigator), make_navigator_open_operation(navigator, shelf.books[2], EmptyReference()))
+        @test navigator.content === site
+        @test get_navigator_page(navigator) === shelf.books[2]
+        @test evaluate_reference(site, find_navigator_parent_address(navigator)) === shelf
+        @test find_navigator_address(shelf, shelf.books[1]) === nothing
+    end
+
+    @testset "Ctrl+Return opens a part where the content holds it" begin
+        # The home page shows the shelf of the site, so the site holds a book of the
+        # home page on its shelf.
+        shelf = _nav_make_shelf()
+        site = NavigatorTestSite(_nav_make_linked_page(shelf), shelf, "", nothing)
+        navigator = Navigator(site, @reference(site, home))
+        holder = _NavHolder(navigator)
+        _nav_apply!(holder, ReplaceSelectionOperation(@reference(navigator, content.home.children[2].books[2])))
+        @test _nav_is(find_navigator_selected_address(navigator), @reference(site, home.children[2].books[2]))
+        _nav_apply!(holder, ProjecturedPlatform.NavigatorModule._open_selected_page(navigator))
+        @test get_navigator_page(navigator) === shelf.books[2]
+        @test evaluate_reference(site, find_navigator_parent_address(navigator)) === shelf
     end
 end
 end

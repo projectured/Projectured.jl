@@ -8,8 +8,27 @@ SDL = ProjecturedSDL.SdlModule   # the SDL backend slice (provides SdlWindowReso
 # renderer.
 make_res() = SDL.SdlWindowResources(
     C_NULL, C_NULL, :test, UInt32(0), "t", 800, 600, 0, 0, :default,
-    (0x00, 0x00, 0x00, 0xff), 1, 1.0, C_NULL, 0, 0, false,
-    Dict{UInt,NTuple{4,Int}}(), SDL._PaintedGeometry(), Vector{NTuple{4,Int}}[])
+    (0x00, 0x00, 0x00, 0xff), 1, 1.0, 1.0, C_NULL, 0, 0, false,
+    Dict{UInt,NTuple{4,Int}}(), SDL._PaintedGeometry(), Vector{NTuple{4,Int}}[], C_NULL)
+
+@testset "a guard lets the walk skip a canvas where nothing changed" begin
+    # 50 groups of 100 rectangles beside a dot; one rectangle of group 7 moves.
+    x = Cell(0)
+    row(g) = Any[GraphicsRect(8 * j, 10 * g, 6, 6) for j in 1:100]
+    moving = GraphicsRect(() -> x[], 70, 6, 6)
+    groups = Any[GraphicsCanvas(g == 7 ? Any[row(g)[1:99]; moving] : row(g)) for g in 1:50]
+    window = GraphicsCanvas(Any[GraphicsCanvas(groups), GraphicsCircle(700, 500, 5)]; w = 800, h = 600)
+    res = make_res()
+    SDL._compute_dirty_region(res, window)                 # the first walk records everything
+    @test isempty(SDL._compute_dirty_region(res, window))
+    @test res.painted.visits == 0                          # no element is tested
+    x[] = 5
+    @test !isempty(SDL._compute_dirty_region(res, window))
+    # The 2 elements of the window, the 50 groups, and the 100 rectangles of group 7.
+    @test res.painted.visits == 2 + 50 + 100
+    @test isempty(SDL._compute_dirty_region(res, window))
+    @test res.painted.visits == 0
+end
 
 @testset "detects an invalidated element and pads its bounds" begin
     # A canvas whose elements are produced by a computed thunk over `src`,
@@ -23,7 +42,7 @@ make_res() = SDL.SdlWindowResources(
     # New bounds (10,20)-(40,60), padded by 2px.
     @test SDL._compute_dirty_rect(res, canvas) == (8, 18, 42, 62)
 
-    # Frame 2: nothing changed → every cell is up to date → nothing to repaint.
+    # Frame 2: nothing changed → every cell is valid → nothing to repaint.
     @test SDL._compute_dirty_rect(res, canvas) === nothing
 
     # Frame 3: move the rect. The write invalidates the computed elements cell;
@@ -119,8 +138,8 @@ end
 
 # Two paragraphs in a vertical stack, as a text or a page draws them: the first
 # lays out from `layout`, and the second sits below it at a `y` computed from the
-# height of the first. An edit of the first makes that `y` stale, because
-# propagation is write-driven, whether or not the height changed.
+# height of the first. An edit of the first writes `layout`, and `y` reads it
+# directly, so `y` is stale whether or not the height changed.
 function make_two_paragraphs(layout::Cell)
     first = GraphicsCanvas(CellVector(@computation [GraphicsRect(0, 0, layout[].w, layout[].h)]))
     second = GraphicsCanvas(CellVector(Cell[Cell(GraphicsRect(0, 0, 100, 18))]);
@@ -197,7 +216,7 @@ end
     top = GraphicsCanvas(CellVector(Cell[Cell(stack)]), layout_none)
     res = make_res()
     @test SDL._compute_dirty_rect(res, top) == (0, 0, 102, 20)
-    @test !is_cell_up_to_date(getfield(getfield(below, :elements)[], :elements))
+    @test !is_cell_valid(getfield(getfield(below, :elements)[], :elements))
     @test SDL._compute_dirty_rect(res, top) === nothing
 end
 
@@ -406,8 +425,8 @@ end
     SDL._compute_dirty_rect(res, top)
     @test SDL._compute_dirty_rect(res, top) === nothing
 
-    # The same width again: the box is computed again to the same place.
-    window[] = 400
+    # The box is computed again, to the same place.
+    invalidate_cell!(window)
     @test SDL._compute_dirty_rect(res, top) === nothing
 
     # A wider window moves the pane from x=100 to x=150: the old box and the new.

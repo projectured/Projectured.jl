@@ -25,10 +25,12 @@ and the editor prints the whole view again.
 """
 module AppearanceModule
 
+using ..AgentModule
 using ..BackendModule
 using ..CellModule
 using ..DeviceModule
 using ..DocumentModule
+using ..DomainModule
 using ..EditorModule
 using ..EventModule
 using ..GestureBindingModule
@@ -59,11 +61,13 @@ import ..OperationModule: evaluate_operation, describe_operation, make_inverse_o
 import ..ProjectionModule: print_document, read_intent, map_reference_forward,
                            map_reference_backward, get_child_iomaps
 
+import ..DomainModule: get_document_decoration
+import ..SerializationModule: pred_arguments, make_pred_document
 export AppearanceDocument, make_appearance_document, find_editor_appearance
 export APPEARANCE_SCALES, AdjustZoomOperation, AdjustScaleOperation, copy_zoom_to_display!,
        ReplaceThemeValueOperation, SaveAppearanceOperation, LoadAppearanceOperation
 export AppearanceManagingProjection, AppearanceManagingIoMap, is_appearance_change
-export follow_window_backgrounds!, copy_system_colors!
+export copy_system_colors!, follow_window_backgrounds!
 export AppearanceToWidget, AppearanceToWidgetIoMap
 
 include("AppearanceDocument.jl")

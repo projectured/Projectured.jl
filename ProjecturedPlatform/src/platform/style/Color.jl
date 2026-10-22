@@ -55,8 +55,8 @@
 
 A colour, as four parts from zero to one.
 
-Use it wherever something is painted: the fill of a box, the ink of a word, the
-line of a chart. A colour with a name is a constant, `color_black`,
+Use it to give a color to what is painted: the fill of a box, the ink of a word,
+the line of a chart. A colour with a name is a constant, `color_black`,
 `color_red`, `color_slate_500`, and the themes carry curated ramps; a colour
 with an alpha below one lets what is behind it show through.
 
@@ -71,9 +71,13 @@ See also `StyleText`, which pairs a colour with a font, and `GraphicsRect`.
     red::Float64
     green::Float64
     blue::Float64
-    alpha::Float64
+    alpha::Float64 = 1.0
     selection::Nothing
 end
+
+# The docstring above lands on the cell struct that the layout `[DC]` names, and
+# the public name carries the same text, so a search of the name reads it.
+@doc (@doc ACStyleColor) StyleColor
 
 # ── Construction ──────────────────────────────────────────────────────────────
 
@@ -110,7 +114,16 @@ end
 
 # ── Default ───────────────────────────────────────────────────────────────────
 
-const color_default = _color(0, 0, 0)
+"""
+    color_default
+
+The colour of a text that names no colour. A `TextToGraphics` draws it with the
+colour of the plain text of its theme, so the text follows the colour mode, and
+the console backend draws it with the foreground of the terminal. A drawer that
+knows no theme draws its own value, a black that is one step from `color_black`,
+so a text that names `color_black` stays black.
+"""
+const color_default = _color(1, 1, 1)
 
 # ── Pure ──────────────────────────────────────────────────────────────────────
 

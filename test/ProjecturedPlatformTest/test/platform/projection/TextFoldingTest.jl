@@ -30,7 +30,7 @@ _ft_renderer() = RecursiveProjection(TypeDispatchingProjection(Pair{Type, Any}[
 _ft_unwrap(x) = x isa AbstractCell ? x[] : x
 
 # The text of the mark in the lane `lane` of the gutter of `line`.
-_ft_mark_text(line, lane) = getproperty(line.gutter, lane).elements[1].content
+_ft_mark_text(line, lane) = get_flat_string(getproperty(line.gutter, lane))
 
 # The text of the spans of `line`.
 _ft_line_text(line) = join(span.content for span in line.elements)
@@ -100,7 +100,7 @@ function test_text_folding()
     end
     @testset "a click on the triangle of a syntax node toggles the node" begin
         body = SyntaxNode(SyntaxDocument[SyntaxLeaf("a"), SyntaxLeaf("b")];
-                          open = "(", close = ")", sep = " ", indentation = 1)
+                          open = "(\n", close = "\n)", sep = "\n", indentation = 1)
         syntax_chain = ChainingProjection(RecursiveProjection(SyntaxToText(text_folds = true)),
                                           TextLineNumbering(), TextFolding(),
                                           TextBlockToScrollLayout(; measure = _ft_measure()))

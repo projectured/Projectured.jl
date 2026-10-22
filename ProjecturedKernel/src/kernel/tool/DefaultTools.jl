@@ -25,7 +25,24 @@ _make_editing_description(ways::AbstractString) =
     "Change the editor's document through " * ways * ", and not by a direct write " *
     "such as `part.value = new_value`. A direct write works, but the editor does not " *
     "handle it as an edit: Ctrl+Z can not undo it, and the editor does not check its " *
-    "permissions or transform it, as it does for an operation.\n\n"
+    "permissions or transform it, as it does for an operation. A task that your code " *
+    "starts reads and changes documents only through the verbs, never through the " *
+    "fields of a document.\n\n"
+
+# How the model keeps the editor usable while long code runs, as both
+# descriptions say it. `start_background_work` is named only where the model can
+# call it.
+function _make_background_description(set::ToolSet)
+    declared = isempty(set.api) ||
+               any(:start_background_work in get_api_entry_names(entry) for entry in set.api)
+    "Code that does not need the documents of the editor, such as a long computation " *
+    "or a wait for a process, runs with `background` set to true, so the person can " *
+    "use the editor while it runs. " *
+    (declared ? "Code can also start its long part with `start_background_work(f)`, " *
+                "which answers at once, and read its value with `fetch(work)` in a later " *
+                "call. " : "") *
+    "Code in the background reaches a document only through the verbs.\n\n"
+end
 
 # The verbs that edit, as the description names them.
 const _EDITING_VERBS = (:replace_referenced_value! => "`replace_referenced_value!(part, new_value)`",
@@ -57,6 +74,7 @@ const _WHOLE_SURFACE_DESCRIPTION =
     _VARIABLES_DESCRIPTION *
     _make_editing_description("a verb, such as " * _join_verbs([last(verb) for verb in _EDITING_VERBS]) *
                               ", or an operation that `evaluate_operation(editor, operation)` runs") *
+    _make_background_description(ToolSet()) *
     "MANDATORY — read these resources BEFORE writing any code:\n" *
     "1. resource://guides\n" *
     "2. resource://modules\n" *
@@ -87,6 +105,21 @@ function _declared_sentence(set::ToolSet)
         (chosen == 0 ? " are " : ", and " * string(chosen) * " more names, are ")
 end
 
+# What the verbs of a window of the editor do, as the description says it when
+# the declaration holds them.
+const _WINDOW_VERBS_DESCRIPTION =
+    "The verbs READ what the person does and what the window shows " *
+    "(`find_selected_part`), TELL the person with a document in a tab, a drawing " *
+    "or a chart (`open_pane!`), CONTROL the window, and CHANGE a document " *
+    "(`run_command!`). No verb but `select_part!` moves the selection of the " *
+    "person. The guide resource://guide/guide/orientation shows each in code.\n\n"
+
+function _describe_window_verbs(set::ToolSet)
+    declared = Set(name for entry in set.api for name in get_api_entry_names(entry))
+    all(name -> name in declared, (:find_selected_part, :open_pane!, :run_command!, :select_part!)) ?
+        _WINDOW_VERBS_DESCRIPTION : ""
+end
+
 function _execute_julia_code_description(set::ToolSet)
     isempty(set.api) && return _WHOLE_SURFACE_DESCRIPTION
     "Execute Julia code in the editor process. " *
@@ -94,6 +127,7 @@ function _execute_julia_code_description(set::ToolSet)
     "editor, so the code does not pass it to the verb.\n\n" *
     _declared_sentence(set) * "in scope, and they are the whole of what " *
     "you may call. Anything else is an UndefVarError.\n\n" *
+    _describe_window_verbs(set) *
     "FIND THEM BEFORE YOU WRITE ANY CODE, with the two tools that answer that:\n" *
     "- `search_api` lists them, with one line of description each. When you know " *
     "what you want to do but not its name, call it with mode \"description\" and " *
@@ -103,6 +137,7 @@ function _execute_julia_code_description(set::ToolSet)
     _ANSWER_DESCRIPTION *
     _VARIABLES_DESCRIPTION *
     _make_editing_description(set) *
+    _make_background_description(set) *
     "NEVER guess a name — search for it. NEVER write comments."
 end
 
@@ -139,7 +174,10 @@ const _DOCUMENTATION_MIME_TYPE = "text/markdown"
 # ── The tools ───────────────────────────────────────────────────────────────
 
 # The tool that runs Julia code in the scratch module of `set`. A call with no
-# `code` argument gets the answer of `execute_julia_code!` for no code.
+# `code` argument gets the answer of `execute_julia_code!` for no code. With
+# `background`, the handler starts the evaluation as background work and answers
+# the work, whose value is the `EvaluationResult`; the caller waits for it off the
+# editor.
 function _register_code_tool!(set::ToolSet)
     register_tool!(set, Tool(
         "execute_julia_code";
@@ -147,9 +185,24 @@ function _register_code_tool!(set::ToolSet)
         parameters = NamedTuple[
             (name = "code", type = "string",
              description = "Julia source code to evaluate", required = true),
+            (name = "background", type = "boolean",
+             description = "true runs the code in the background: the editor stays usable " *
+                           "while it runs, and the call answers when the code ends. Use it for " *
+                           "code that does not need the documents of the editor, such as a long " *
+                           "computation or a wait for a process. Such code reaches a document " *
+                           "only through the verbs.",
+             required = false),
         ],
-        handler = (target, args) ->
-            execute_julia_code!(set, target, get(args, "code", nothing)),
+        handler = (target, args) -> begin
+            code = get(args, "code", nothing)
+            get(args, "background", false) === true ||
+                return execute_julia_code!(set, target, code)
+            part = code isa AbstractString ? _describe_code_part(code) : "Run the code"
+            # The unit that runs this handler does not wait for the work, so the
+            # work keeps no link to it, and its calls of verbs wait for the editor.
+            start_background_work(() -> run_julia_code!(set, target, code);
+                                  description = part, editor = target, parent = nothing)
+        end,
     ))
 end
 
@@ -157,6 +210,7 @@ end
 function _register_search_tools!(set::ToolSet)
     register_tool!(set, Tool(
         "search_guides";
+        reads_documents = false,
         description =
             "Learn how the parts fit together: search the guides, prose with worked " *
             "examples. A hit is one section, with the URI `read_resource` reads it by. " *
@@ -176,6 +230,7 @@ function _register_search_tools!(set::ToolSet)
 
     register_tool!(set, Tool(
         "search_api";
+        reads_documents = false,
         description =
             "Find the name to call: search the modules, types and functions you may " *
             "write, by name and docstring. A hit shows the signature and one sentence; " *
@@ -208,6 +263,7 @@ function _register_function_documentation_tool!(set::ToolSet)
     # hit `search_api` returns is one tool call away from its full text.
     register_tool!(set, Tool(
         "read_function_documentation";
+        reads_documents = false,
         description =
             "Read the full documentation of a function. `search_api` names the module " *
             "and the function of every hit; this reads the whole docstring of one, " *
@@ -240,6 +296,7 @@ function _register_resource_tools!(set::ToolSet)
     # resource list is just this rendered onto the wire.
     register_tool!(set, Tool(
         "list_resources";
+        reads_documents = false,
         description =
             "The kinds of documentation resource, each with its count and how it is " *
             "addressed: the catalogues, the guides and their sections, the modules, " *
@@ -251,6 +308,7 @@ function _register_resource_tools!(set::ToolSet)
 
     register_tool!(set, Tool(
         "read_resource";
+        reads_documents = false,
         description =
             "Read a documentation resource in full by its URI: a guide, one section of " *
             "a guide (resource://guide/<name>#<heading>), a module, a type, or a " *

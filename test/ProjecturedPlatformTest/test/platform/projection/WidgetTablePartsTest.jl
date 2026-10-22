@@ -13,6 +13,14 @@ using ProjecturedPlatform.CollectionModule: ListNode
 # column is its header and an equal share of what is left; narrow, each keeps
 # its header, and the cells are wider than their viewport, which the table
 # scrolls.
+# The event that a key gives its meaning by: the KeyPress of the character it
+# types, or its KeyDown.
+function _wtp_key_event(key, modifiers)
+    character = find_typed_character(key)
+    character === nothing ? KeyDown(key, modifiers; time = 0.0) :
+                            KeyPress(character, modifiers; time = 0.0)
+end
+
 function test_widget_table_list_header_floor()
 @testset "a weighted column is at least as wide as its header" begin
     det = FixedMeasure(8, 12, 4, 0)
@@ -130,7 +138,11 @@ function place(io, k, c)
     box = find_reference_box(io.output, image)
     (box.x, box.y)
 end
-wheel(io, dy) = read(io, MouseScroll(0, dy, 100, 150; time = 0.0))
+# Each turn of the wheel comes a second after the last, so no two turns make a
+# fast run, which scrolls more at each notch.
+wheel_time = Ref(0.0)
+take_wheel_time!() = (wheel_time[] += 1.0)
+wheel(io, dy) = read(io, MouseScroll(0, dy, 100, 150; time = take_wheel_time!()))
 # A scroll is view state that names the table, so it applies with no editor. A
 # selection that a scroll moves is set on the table here, as an editor would.
 function apply!(table, op)
@@ -393,7 +405,7 @@ end
                        cells = make_indexed_list(10, texts_of),
                        columns = columns_of(Any[Fixed(400), Fixed(400)]))
     io = print_document(rec, nothing, wide, context())
-    side(dx) = read(io, MouseScroll(dx, 0, 100, 150; time = 0.0))
+    side(dx) = read(io, MouseScroll(dx, 0, 100, 150; time = take_wheel_time!()))
     grid_w = Int(grid_of(io).output.w)
     view_w = Int(cells_viewport(io).w)
     @test grid_w > view_w
@@ -420,15 +432,22 @@ end
     @test wheel(io, 1) === nothing
 end
 
-@testset "the table writes the row at the top as it scrolls" begin
+@testset "the table writes the row at the top and the rows in view as it scrolls" begin
     table, io = print_table(make_indexed_list(1000, texts_of))
     step = Int(head_of(io).value.h) + gap_of(io)
-    @test table.top_row == 1
-    getfield(table, :scroll_position)[] = Point2D(0, 5 * step)
+    @test table.top_row == 1 && table.shown === nothing
+    # A notch is three lines of 16 pixels, the ascent and the descent of the
+    # measure. The turn ends one line past five rows.
+    getfield(table, :scroll_position)[] = Point2D(0, 5 * step + 16 - 3 * 16)
     apply!(table, wheel(io, -1))
     @test table.top_row == 6
     # The top row is the row under the top edge of the cells.
     @test label_y(io, "row 6") <= body_top(io) < label_y(io, "row 7")
+    # The rows in view go from the row at the top to the last row that starts in
+    # the view, counted from the head.
+    view_h = Int(cells_viewport(io).h)
+    @test first(table.shown) == 6 && fld(view_h, step) <= length(table.shown) <= fld(view_h, step) + 2
+    @test label_y(io, "row $(last(table.shown) + 1)") >= body_bottom(io)
 end
 
 @testset "far from the head, the table moves the head to the row at the top" begin
@@ -442,8 +461,9 @@ end
     @test turn > 0
     # Three hundred rows down, a turn moves the head to the row at the top and
     # the offset by the place of that row: every row moves by one turn, as it
-    # would with no move of the head.
-    getfield(table, :scroll_position)[] = Point2D(0, 300 * step)
+    # would with no move of the head. The turn ends one line, 16 pixels, past
+    # three hundred rows.
+    getfield(table, :scroll_position)[] = Point2D(0, 300 * step + 16 - turn)
     selection = cell_reference(305, 1)
     getfield(table, :selection)[] = selection
     before = label_y(io, "row 305"; limit = 400)    # 304 rows from the head
@@ -457,11 +477,13 @@ end
     apply!(table, op)
     @test table.cells.value[1].content == "row 301"
     @test table.top_row == 1
+    # The rows in view count from the new head.
+    @test first(table.shown) == 1 && length(table.shown) > 1
     @test 0 <= Int(table.scroll_position.y[]) < step
     @test label_y(io, "row 305") == before - turn
     @test built[] < 1000
     # Up past the head as far, the head moves back.
-    getfield(table, :scroll_position)[] = Point2D(0, -250 * step)
+    getfield(table, :scroll_position)[] = Point2D(0, -250 * step - 16 + turn)
     apply!(table, wheel(io, 1))
     @test table.cells.value[1].content == "row 50"
     @test table.top_row == 1
@@ -512,7 +534,7 @@ end
 @testset "keys move a selected column, and go between a column and its cells" begin
     table = make_table(make_list(5, texts_of))
     io = print_document(rec, nothing, table, context())
-    key(name; kw...) = read(io, KeyDown(name, ModifierKeys(; kw...); time = 0.0))
+    key(name; kw...) = read(io, _wtp_key_event(name, ModifierKeys(; kw...)))
     column(c) = ConcreteReference(FieldReferenceStep("columns"),
                     ConcreteReference(RangeReferenceStep(c - 1, c), EmptyReference()))
     getfield(table, :selection)[] = column(1)
@@ -601,7 +623,7 @@ end
     columns = 1_000
     table = make_wide_table(20, columns; at_column = columns)
     io = print_document(rec, nothing, table, context())
-    side(dx) = read(io, MouseScroll(dx, 0, 100, 150; time = 0.0))
+    side(dx) = read(io, MouseScroll(dx, 0, 100, 150; time = take_wheel_time!()))
     # The head column is the last: the table shows it at the right edge, and
     # the header of the last column over it.
     @test side(-1) === nothing
@@ -620,7 +642,7 @@ end
     table = make_wide_table(5, 100_000)
     io = print_document(rec, nothing, table, context())
     step = 60 + 2 * io.state.pad_x + io.state.bw
-    side(dx) = read(io, MouseScroll(dx, 0, 100, 150; time = 0.0))
+    side(dx) = read(io, MouseScroll(dx, 0, 100, 150; time = take_wheel_time!()))
     # A turn near the head column moves the columns by one step of the wheel.
     near = text_x(io, "h2")
     apply!(table, side(-1))
@@ -752,7 +774,9 @@ end
     table = make_headed_table(10_000_000)
     io = print_document(rec, nothing, table, context())
     step = Int(head_of(io).value.h) + gap_of(io)
-    getfield(table, :scroll_position)[] = Point2D(0, 300 * step)
+    # A notch is three lines of 16 pixels, the ascent and the descent of the
+    # measure. The turn ends one line past three hundred rows.
+    getfield(table, :scroll_position)[] = Point2D(0, 300 * step + 16 - 3 * 16)
     op = wheel(io, -1)
     moved = [get_wrapped_operation(o) for o in op.operations if o isa ReplaceViewStateOperation]
     @test any(o -> o.reference.head.name == "row_headers", moved)
@@ -894,7 +918,7 @@ end
     tooltip = read(io, MouseDwell(edge, y1 + 2; time = 0.0))
     @test get_wrapped_operation(tooltip) isa OpenTooltipOperation
     layers = get_wrapped_operation(tooltip).layers
-    @test any(layer -> last(layer) isa PrimitiveString && last(layer).value == "Drag to set the width", layers)
+    @test any(layer -> last(layer) isa TooltipNote && last(layer).text == "Drag to set the width.", layers)
 end
 
 @testset "a table whose columns are a list takes the width of a column from its owner" begin
@@ -945,7 +969,7 @@ end
            Any[Any[texts_of(i, 1), texts_of(i, 2)] for i in 1:5]
     table = make_table(rows; open_cells = Any[(row = 2, column = 1, reason = nothing)])
     io = print_document(rec, nothing, table, context())
-    key(name; kw...) = read(io, KeyDown(name, ModifierKeys(; kw...); time = 0.0))
+    key(name; kw...) = read(io, _wtp_key_event(name, ModifierKeys(; kw...)))
     getfield(table, :selection)[] = cell_reference(2, 1)
     commit = key(:return)
     @test commit isa CommitTableCellOperation && commit.table === table
@@ -987,7 +1011,8 @@ end
     tooltip = read(io, MouseDwell(x + 2, y + 2; time = 0.0))
     @test get_wrapped_operation(tooltip) isa OpenTooltipOperation
     layers = get_wrapped_operation(tooltip).layers
-    @test any(layer -> last(layer) isa PrimitiveString && last(layer).value == "not a number", layers)
+    @test any(layer -> last(layer) isa TooltipNote && last(layer).text == "not a number" &&
+                           last(layer).tone === :error, layers)
     getfield(table, :open_cells)[] = Any[]
     @test rects_in(io.output, get_theme_defaults(WidgetTheme).destructive) == marks
 end

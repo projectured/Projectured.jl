@@ -10,7 +10,7 @@ s1 = TextString("hello", StyleFont("Ubuntu Mono", 20; weight = 700), color_red)
 s1.content = "hi"
 @test s1.content == "hi"
 
-st = TextBlock(
+st = TextLine(
     TextString("aaa", StyleFont("Ubuntu Mono", 20; weight = 700), color_red),
     TextString("bbb", StyleFont("Ubuntu Mono", 20), color_blue),
 )
@@ -41,8 +41,8 @@ g = TextGraphics(img, 64, 48)
 @test g.width == 64
 @test g.height == 48
 
-# Mixes cleanly with TextStrings inside a TextBlock; length / getindex hold.
-st = TextBlock(
+# Mixes cleanly with TextStrings inside a TextLine; length / getindex hold.
+st = TextLine(
     TextString("ab", StyleFont("Ubuntu Mono", 20), color_red),
     TextGraphics(ImageMemory(nothing), 24, 24),
     TextString("cd", StyleFont("Ubuntu Mono", 20), color_blue),
@@ -125,31 +125,147 @@ evaluate_operation((document = b,), op)
 @test b.elements[2].elements[1].content == "second!"
 @test get_flat_selection(b) == (21, 21, true)
 
-# Backspace at the start of a line now produces a flat op targeting the position
-# before it (the indentation gap); the standalone evaluate still declines a gap /
-# cross-span delete (v1), leaving the line unchanged.
+# Backspace at the start of the text of a line removes the break and the
+# indentation before it, so the two lines join, and the caret stands at the seam.
 bb  = caret(fb(Int[2, 1], 0))
 bop = read_bound_gesture(bb, KeyDown(:backspace, ModifierKeys(); time = 0.0))
 @test bop isa ReplaceTextRangeOperation
+@test strip_reference_types(bop.reference).head == TextRangeReferenceStep(11, 14)
 evaluate_operation((document = bb,), bop)
-@test bb.elements[2].elements[1].content == "second"
+@test length(bb.elements) == 1
+@test get_flat_string(bb) == "hello worldsecond"
+@test get_flat_selection(bb) == (11, 11, true)
 
-# A flat block: single-index spans, the newline counted as one flat char.
-flat = set_selection!(TextBlock(TextString("ab"),
-                                TextNewline(font = StyleFont("Ubuntu Mono", 20)),
-                                TextString("cd")),
+# Enter splits the line at the caret; the new line takes the indentation of the
+# line, and the text after the caret.
+be  = caret(fb(Int[1, 1], 3))
+eop = read_bound_gesture(be, KeyPress('\n'; time = 0.0))
+@test eop isa ReplaceTextRangeOperation && eop.replacement == "\n"
+evaluate_operation((document = be,), eop)
+@test [get_flat_length(line) for line in be.elements] == [3, 8, 8]
+@test get_flat_string(be) == "hel\nlo world\n  second"
+@test get_flat_selection(be) == (4, 4, true)
+
+# A block of two lines: the break before the second counts one flat char.
+flat = set_selection!(TextBlock(TextLine(TextString("ab")), TextLine(TextString("cd"))),
                       TextModule.make_flat_caret_reference(4))   # char 1 of "cd" → flat 4
-@test get_flat_offsets(flat) == [0, 2, 3]
+@test get_flat_offsets(flat) == [0, 3]
 @test get_flat_selection(flat) == (4, 4, true)
-@test TextModule.get_flat_cursor_coordinate(flat) == (span = [3], char = 1)
+@test TextModule.get_flat_cursor_coordinate(flat) == (span = [2, 1], char = 1)
 @test cflat(read_bound_gesture(flat, KeyDown(:left, ModifierKeys(); time = 0.0))) == 3
 
 end # @testset "TextLine: line-structured blocks"
 
+@testset "make_text_block gives a line for each line of a string" begin
+
+style = StyleText(StyleFont("Ubuntu Mono", 20), color_red)
+runs(block) = [[span.content for span in line.elements] for line in block.elements]
+objects(block) = [line for line in block.elements]
+
+# Each line holds one run in the style, an empty line an empty run, and the flat
+# string is the string.
+for content in ("ab\n\ncd", "", "a\n", "\nb", "one")
+    block = make_text_block(content, style)
+    @test all(line -> line isa TextLine, block.elements)
+    @test runs(block) == [[String(text)] for text in split(content, '\n')]
+    @test get_flat_string(block) == content
+    @test get_flat_length(block) == length(content)
+end
+block = make_text_block("ab\ncd", style)
+@test block.elements[2].elements[1].font == style.font
+@test block.elements[2].elements[1].font_color == style.color
+
+# From a function, a line whose text did not change keeps its object: the head and
+# the tail; the lines between are new.
+source = Cell("one\ntwo\nthree")
+block = make_text_block(() -> source[], style)
+before = objects(block)
+source[] = "one\nTWO\nthree"
+after = objects(block)
+@test runs(block) == [["one"], ["TWO"], ["three"]]
+@test after[1] === before[1] && after[3] === before[3]
+@test after[2] !== before[2]
+
+source[] = "one\nTWO\nnew\nthree"
+inserted = objects(block)
+@test runs(block) == [["one"], ["TWO"], ["new"], ["three"]]
+@test inserted[1] === after[1] && inserted[2] === after[2] && inserted[4] === after[3]
+
+source[] = "one\nthree"
+removed = objects(block)
+@test runs(block) == [["one"], ["three"]]
+@test removed[1] === inserted[1] && removed[2] === inserted[4]
+@test get_flat_string(block) == "one\nthree"
+
+# Equal texts: a shorter text keeps the lines of its head.
+source[] = "x\nx\nx"
+three = objects(block)
+source[] = "x\nx"
+@test all(map(===, objects(block), three[1:2]))
+
+# With a placeholder: one muted line while the text is empty, the same object each
+# time, and the lines of the text otherwise.
+code = Cell("")
+block = make_text_block(() -> code[], style; placeholder = "code", empty_thunk = () -> isempty(code[]))
+@test runs(block) == [["code"]]
+hint = block.elements[1]
+@test hint.elements[1].font_color == color_solarized_gray
+@test hint.elements[1].font == style.font
+code[] = "a\nb"
+@test runs(block) == [["a"], ["b"]]
+@test block.elements[1].elements[1].font_color == style.color
+code[] = ""
+@test runs(block) == [["code"]]
+@test block.elements[1] === hint
+
+end # @testset "make_text_block gives a line for each line of a string"
+
+@testset "append_text! adds a text at the end of a block and keeps its lines" begin
+
+style = StyleText(StyleFont("Ubuntu Mono", 20), color_red)
+runs(block) = [[span.content for span in line.elements] for line in block.elements]
+
+# The text up to the first newline goes into the last run; each line after a
+# newline is a new line in the style of that run.
+block = make_text_block("Hello", style)
+first_line = block.elements[1]
+@test append_text!(block, ", world\nand\n") === block
+@test runs(block) == [["Hello, world"], ["and"], [""]]
+@test get_flat_string(block) == "Hello, world\nand\n"
+@test block.elements[1] === first_line
+@test block.elements[2].elements[1].font == style.font
+@test block.elements[2].elements[1].font_color == style.color
+
+# An empty text changes nothing, and a block of an empty string grows as a stream
+# of deltas grows the string.
+@test runs(append_text!(block, "")) == [["Hello, world"], ["and"], [""]]
+streamed = make_text_block("")
+foreach(delta -> append_text!(streamed, delta), ["one ", "two\nthr", "ee", "\n", "four"])
+@test get_flat_string(streamed) == "one two\nthree\nfour"
+@test runs(streamed) == [["one two"], ["three"], ["four"]]
+end # @testset "append_text! adds a text at the end of a block and keeps its lines"
+
+@testset "get_flat_caret and get_flat_range read the flat and the structural form" begin
+    # "ab" and "cd" on two lines: "cd" starts at flat offset 3.
+    block = TextBlock(TextLine(TextString("ab")), TextLine(TextString("cd")))
+    structural(line, s, e) = ConcreteReference(FieldReferenceStep("elements"),
+        ConcreteReference(RangeReferenceStep(line - 1, line), ConcreteReference(FieldReferenceStep("elements"),
+            ConcreteReference(RangeReferenceStep(0, 1), ConcreteReference(FieldReferenceStep("content"),
+                ConcreteReference(RangeReferenceStep(s, e), EmptyReference()))))))
+    @test get_flat_range(block, TextModule.make_flat_range_reference(1, 4)) == (1, 4)
+    @test get_flat_range(block, TextModule.make_flat_caret_reference(2)) == (2, 2)
+    @test get_flat_range(block, structural(2, 0, 2)) == (3, 5)
+    @test get_flat_range(block, structural(2, 1, 1)) == (4, 4)
+    @test get_flat_caret(block, structural(2, 1, 1)) == 4
+    @test get_flat_caret(block, structural(2, 0, 2)) === nothing
+    @test get_flat_range(block, EmptyReference()) === nothing
+    @test get_flat_range(block, nothing) === nothing
+end # @testset "get_flat_caret and get_flat_range read the flat and the structural form"
+
 @testset "Shift and a motion key select a range" begin
     shift = ModifierKeys(; shift = true)
     ctrl_shift = ModifierKeys(; ctrl = true, shift = true)
-    at(selection) = set_selection!(TextBlock(TextString("hello world")), selection)
+    at(selection) = set_selection!(TextBlock(TextLine(TextString("hello world"))), selection)
     pair(op) = (op.path.head.start, op.path.head.stop)
     caret = TextModule.make_flat_caret_reference(5)
     range = TextModule.make_flat_range_reference(3, 5)

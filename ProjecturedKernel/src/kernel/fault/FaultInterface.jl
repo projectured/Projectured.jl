@@ -6,14 +6,17 @@
 """
     append_fault!(target, record)
 
-Show `record` on `target`, whatever showing it means there.
+Show `record` on `target`, whatever showing it means there. Answer `false` when
+the target did not show it; any other answer says that it did.
 
 Use it through [`drain_faults!`](@ref) rather than directly: the drain calls it
-once per new record, per target, on the editor's own task. A target that holds
+for each target, once for a new record and again each time the count of the
+record reaches a power of ten, on the editor's own task. A target that holds
 cells may therefore write them, which a reactive computation may not.
 
-The kernel answers nothing. A package that owns a log document adds the method
-for its own type, so this layer never names one.
+The kernel answers `false`, so the drain reports a record that a target of no
+known type was given at the next tier. A package that owns a log document adds
+the method for its own type, so this layer never names one.
 
 # Example
 
@@ -37,7 +40,7 @@ its own method where it can do better.
 
 # Example
 
-    play_fault_sound!(editor.backend)
+    play_fault_sound!(backend)
 
 See also [`report_fault!`](@ref), which is what calls it.
 """
@@ -63,44 +66,24 @@ See also [`record_fault!`](@ref), which records a fault in the store.
 function get_fault_store end
 
 """
-    make_safe_mode_projection(store) -> projection or nothing
+    is_fault_exception(exception) -> Bool
 
-A projection that shows the faults in `store` and nothing else.
+Whether a catch-all arm may take `exception` as a fault, rather than let it
+through.
 
-Use it when the printer failed so many times in a row that it draws nothing.
-The projection it answers replaces the one that fails, so the screen still
-shows something: at worst, the list of what went wrong.
-
-The default is `nothing`. Then nothing replaces the projection, and the frame
-before stays on the screen. A package that can draw a fault answers it, so this
-layer names neither a log document nor a projection.
-
-# Example
-
-    projection = make_safe_mode_projection(editor.faults)
-
-See also [`FaultStore`](@ref), the store that it shows.
-"""
-function make_safe_mode_projection end
-
-"""
-    is_passthrough_exception(exception) -> Bool
-
-Whether a barrier must let `exception` through rather than catch it.
-
-Answer `true` for an exception that means the program is to stop or can not go
+Answer `false` for an exception that means the program is to stop or can not go
 on: a request to quit, an interrupt, a stack that ran out, a heap that ran out.
 Catching one of those turns a clean stop into a hang, or hides a state no
 barrier can repair.
 
-The default is `false`, except for an interrupt, a stack overflow and an
+The default is `true`, except for an interrupt, a stack overflow and an
 out-of-memory error. A layer above that owns a control-flow exception adds a
 method for it.
 
 # Example
 
-    is_passthrough_exception(exception) && rethrow()
+    is_fault_exception(exception) || rethrow()
 
-See also [`run_fault_barrier!`](@ref), which is what asks.
+See also [`run_fault_barrier!`](@ref), one of the arms that ask it.
 """
-function is_passthrough_exception end
+function is_fault_exception end

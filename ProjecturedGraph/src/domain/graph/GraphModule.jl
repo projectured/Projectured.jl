@@ -16,13 +16,15 @@ using ..KernelModule
 using ..PlatformModule
 
 # Imported to extend: this module adds a method to each of these.
-import ..ProjectionModule: print_document, read_intent, map_reference_forward, map_reference_backward
+import ..ProjectionModule: print_document, read_intent, map_reference_forward, map_reference_backward,
+    get_child_iomaps, read_child_by_route
 
 export GraphDocument
 export GraphLayoutDocument
 export GraphLayoutEngine, GridEmbedding, layout_graph, layout_engine_name,
        get_supported_constraint_kinds, check_constraints, GRAPH_CONSTRAINT_KINDS,
-       get_constraint_pins, get_constraint_fixed_sizes, get_constraint_clusters,
+       get_constraint_pins, get_constraint_starts, get_constraint_fixed_sizes,
+       get_constraint_clusters,
        layout_vertices, get_vertex_sizes,
        get_straight_routes, get_extent_transform, fit_into_extent!
 export FruchtermanReingoldLayout

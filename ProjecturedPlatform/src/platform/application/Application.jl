@@ -1,9 +1,10 @@
 # Fragment of `ApplicationModule` — the ProjecturEd application: a window that
-# shows files, with a Files pane and the assistant beside them.
+# shows what the editor holds, with the Explorer first, a tab for each file, and
+# the assistant beside them.
 #
-# The Files pane, the file tabs and the assistant are the groups of a split, and
-# the pane gestures rearrange them. Every file tab holds a `FileDocument`, so
-# `Ctrl+S` saves and `Ctrl+O` reloads it, and the Files pane opens a file with
+# The main group and the assistant are the groups of a split, and the pane
+# gestures rearrange them. Every file tab holds a `FileDocument`, so `Ctrl+S` saves
+# and `Ctrl+O` reloads it, and the Files tool opens a file with
 # `OpenFileOperation`.
 
 """
@@ -25,12 +26,15 @@ answer.
 """
 function get_application_greeting_text(backend::Symbol)
     body = """
-        This window shows files. The Files pane lists the working directory, and \
-        each tab holds one open file.
+        This window shows what the editor holds. The Explorer lists the working \
+        directory, the open files, the tasks, the assistants and the tools of the \
+        editor, and a press on a row shows its page beside the tree. Each other \
+        tab holds one open file.
 
-        Press Enter on a file in the Files pane, or double-click it, to open it in \
-        a new tab. Ctrl+S saves the tab that has the focus, and Ctrl+O reads it \
-        again from disk. F1 lists the keys that work where the focus is, and \
+        Ctrl+click a row of the Explorer to open its page in a new tab. The Files \
+        button of the toolbar lists the working directory, where Enter on a file \
+        opens it in a new tab. Ctrl+S saves the tab that has the focus, and \
+        Ctrl+O reads it again from disk. F1 lists the keys that work where the focus is, and \
         Ctrl+Shift+P runs a command by its name.
 
         Alt+click anything in a tab to select it, and Alt with an arrow to move \
@@ -42,7 +46,11 @@ function get_application_greeting_text(backend::Symbol)
         I can open a path as a tab, save one back, arrange the panes, and build \
         a card, a table or a form to show you something.
         """
-    requirement = backend === :anthropic ?
+    requirement = backend === :none ?
+        "No model backend is chosen, so I cannot answer yet. Choose one in the Start " *
+        "settings of the Settings tab, or start the window with --assistant=ollama, " *
+        "--assistant=anthropic or --assistant=acp." :
+        backend === :anthropic ?
         "I use Claude. The environment variable ANTHROPIC_API_KEY must hold your key." :
         backend === :acp ?
         "I am an external agent that runs its own loop, through the Agent Client " *
@@ -61,8 +69,9 @@ end
                                agent_session_meta = DEFAULT_AGENT_SESSION_META) -> Assistant or nothing
 
 The assistant pane of the application. `backend` is one of
-[`APPLICATION_ASSISTANTS`](@ref); `:none` answers `nothing`, and the window then
-has no assistant pane. An empty `model` means the default model of the backend,
+[`APPLICATION_ASSISTANTS`](@ref). With `:none` the pane opens too: it says that no
+model backend is chosen, and where to choose one, and a message that a person
+sends there names the backends. An empty `model` means the default model of the backend,
 and a `context` of `0` means its default token window. A given `llm` is the model
 that the assistant asks, in place of the one it builds from `backend`, `model` and
 `context`: a scripted model that stands in for the real one, or an `OllamaLlm`
@@ -77,7 +86,6 @@ function make_application_assistant(backend::Symbol; model::AbstractString = "",
     backend in APPLICATION_ASSISTANTS ||
         error("make_application_assistant: the backend must be one of ",
               join(APPLICATION_ASSISTANTS, ", "), ", not ", repr(backend))
-    backend === :none && return nothing
     greeting = ConversationConversation([
         ConversationTurn(:assistant, [ConversationPart(get_application_greeting_text(backend))])])
     Assistant(; conversation = greeting, backend = backend, model = String(model),
@@ -90,8 +98,10 @@ end
     make_application_document(paths; root = pwd(), assistant = nothing,
                               settings = make_settings())
 
-The document of the application window: one file tab for each path, a Files
-pane over `root`, and the assistant when it is not `nothing`. A path that does not
+The document of the application window: an Explorer whose first entry is the
+folder `root`, in front of its group, one file tab for each path behind it in the
+same group, and the assistant when it is not `nothing`. The rest of the content of the Explorer comes
+when the editor starts ([`start_application!`](@ref)). A path that does not
 exist opens as the empty seed of its extension. Each history of the window keeps
 as many steps as the `HistorySettings` of `settings` say.
 """
@@ -100,48 +110,43 @@ function make_application_document(paths::AbstractVector;
                                    settings::Settings = make_settings())
     history = make_history_wrap(settings)
     tabs = [make_file_tab_content(path, history) for path in paths]
-    workspace = _make_application_workspace(root)
     # Each file tab holds a history of its own, so `Ctrl+Z` takes back an edit in
     # the file the person is looking at. The wrapper `undo` puts one around the
     # whole tree, so a splitter that moves, a tab that opens and a chat draft can
     # be taken back too.
-    _make_application_pane_tree(tabs, workspace, assistant)
+    _make_application_pane_tree(tabs, root, assistant)
 end
 
-# The folder the window lists. The toolbar's explorer opens the same one, so a
-# Files pane a person closed comes back as it was.
-function _make_application_workspace(root::AbstractString)
+# The workspace of the folder the window lists.
+function _make_application_folders(root::AbstractString)
     folder = abspath(root)
     Workspace([WorkspaceFolder(basename(folder), folder)])
 end
 
-# The Files pane, the files and the assistant side by side. The focus starts
-# inside the first file, or on the root row of the Files pane when no file is
-# open, so the first key reaches that document and not the tab strip. The root
-# row is the first folder of the workspace as a whole; the workspace itself is
-# not selected, so its page shows no ring.
-function _make_application_pane_tree(tabs, workspace, assistant)
-    files = PaneGroup(PaneTab[PaneTab(get_document_title(tab), tab) for tab in tabs])
-    places = PaneGroup(PaneTab[PaneTab("Files", workspace)])
-    groups = Any[places, files]
-    weights = [0.2, 0.8]
+# The file explorer of the folder the window lists, which the Files button of the
+# toolbar opens.
+_make_application_workspace(root::AbstractString) = WorkspaceExplorer(_make_application_folders(root))
+
+# The main group, with the Explorer first and a tab for each file after it, and
+# the assistant beside it. The focus starts on the root row of the tree of the
+# Explorer, also when files are open, so the window opens on the Explorer and the
+# assistant, and the first key reaches the tree and not the tab strip.
+function _make_application_pane_tree(tabs, root::AbstractString, assistant)
+    explorer = Explorer(ExplorerSection("Explorer", Any[_make_application_folders(root)]))
+    main = PaneGroup(PaneTab[PaneTab("Explorer", explorer),
+                             (PaneTab(get_document_title(tab), tab) for tab in tabs)...])
+    groups = Any[main]
+    weights = [1.0]
     if assistant !== nothing
         # The tab has no name of its own, so it shows the name of the assistant,
         # and the title that an external agent gives its session.
         push!(groups, PaneGroup(PaneTab[PaneTab("", assistant)]))
-        weights = [0.18, 0.5, 0.32]
+        weights = [0.68, 0.32]
     end
     tree = PaneTree(PaneSplit(:vertical, groups; weights = weights))
-    if isempty(tabs)
-        tab = get_pane_tab_reference(tree, places, 1)
-        set_selection!(tree, extend_reference(tab, FieldReferenceStep("content"),
-                                              FieldReferenceStep("folders"),
-                                              ElementReferenceStep(1)))
-    else
-        tab = get_pane_tab_reference(tree, files, 1)
-        set_selection!(tree, extend_reference(tab, FieldReferenceStep("content"),
-                                              FieldReferenceStep("content")))
-    end
+    tab = get_pane_tab_reference(tree, main, 1)
+    set_selection!(tree, extend_reference(tab, FieldReferenceStep("content"), FieldReferenceStep("tree"),
+                                          FieldReferenceStep("root")))
     tree
 end
 
@@ -151,23 +156,21 @@ end
         -> Vector{Pair{Type,Any}}
 
 How the application draws what a tab holds, in front of the defaults of
-`NaturalToGraphics`: the history around a file, the Files pane, the assistant
-and its conversation, and plain text. A document of a domain draws through the
-natural renderer, which every loaded domain registers itself with, so the
-application names no domain.
+`NaturalToGraphics`: the Files pane, the assistant and its conversation, and
+plain text. A document of a domain draws through the natural renderer, which
+every loaded domain registers itself with, so the application names no domain.
+A history around a file draws through the row that the undo slice registers.
 """
 function make_application_content_projections(; measure = FontFileMeasure(),
                                                appearance::Appearance = Appearance())
+    text_theme = get_scaled_theme!(appearance, TextTheme)
     text_to_graphics = ChainingProjection(WordWrapping(measure = measure),
-                                          TextToGraphics(measure = measure))
+                                          TextToGraphics(measure = measure, theme = text_theme))
     conversation_rows = Pair{Type,Any}[
         make_conversation_draft_row(measure = measure, appearance = appearance),
         make_conversation_row(measure = measure, appearance = appearance),
     ]
     Pair{Type,Any}[
-        # A history around what a tab holds is invisible: it prints what it holds
-        # and answers that output.
-        UndoBuffer        => UndoBufferToAnyProjection(),
         TextDocument      => text_to_graphics,
         # The file system slice registers a row for a workspace, and this one
         # overrides it for one reason: what a file opens WITH is the
@@ -175,6 +178,17 @@ function make_application_content_projections(; measure = FontFileMeasure(),
         # gives every file it opens a history.
         # The file system stage has no mark of its own, so a fault in it costs the
         # workspace, at the barrier of the renderer that draws it.
+        # An explorer draws the folders of its workspace itself, with its own open
+        # folders, so it comes before the row of any workspace document.
+        WorkspaceExplorer => ChainingProjection(
+            RecursiveProjection(FaultCatchingProjection(
+                inner = FileSystemToWidget(),
+                substitute = FaultToWidget())),
+            RecursiveProjection(FaultCatchingProjection(
+                inner = WidgetToGraphics(; measure = measure,
+                                         theme = get_scaled_theme!(appearance, WidgetTheme),
+                                         graphics_theme = get_scaled_theme!(appearance, GraphicsTheme)),
+                substitute = FaultToGraphics()))),
         WorkspaceDocument => ChainingProjection(
             RecursiveProjection(WorkspaceToFileSystem()),
             RecursiveProjection(FaultCatchingProjection(
@@ -200,7 +214,7 @@ function make_application_content_projections(; measure = FontFileMeasure(),
         conversation_rows...,
         # A tab title and a plain text file are prose, not a quoted string.
         PrimitiveDocument => ChainingProjection(RecursiveProjection(FaultCatchingProjection(
-                                                    inner = PrimitiveToText(),
+                                                    inner = PrimitiveToText(; theme = text_theme),
                                                     substitute = FaultToText())),
                                                 text_to_graphics),
     ]
@@ -225,33 +239,47 @@ end
 """
     make_application_wrappers(; root = pwd(), assistant = nothing, status_bar = true,
                               measure = FontFileMeasure(),
-                              appearance::Appearance = Appearance()) -> NamedTuple
+                              appearance::Appearance = Appearance(),
+                              document = nothing) -> NamedTuple
 
 The wrappers of `build_editor` that the application window has, as keywords:
 its undo, its chrome, the clipboard and the walk, F1 help, the command palette,
-and the gesture log, the message log, the statistics and the fault log, which
-fill the tools of the toolbar. **One place says which wrappers this binary has.**
-[`run_application`](@ref), [`make_application_window`](@ref) and the warm-up of
-a build come here, so none of them holds a list of its own.
+the gesture log, the message log, the statistics and the fault log, which fill
+the tools of the toolbar, the list of the assistants of its tabs, which the
+Assistants button of the toolbar opens, and the watch of the files that its tabs
+show. **One place says which wrappers this binary has.** [`run_application`](@ref),
+[`make_application_window`](@ref) and the warm-up of a build come here, so none of
+them holds a list of its own.
 
 The toolbar has the assistant when `assistant` is not `nothing`, a fresh one
-with its backend, its model and its greeting, and its explorer lists `root`.
+with its backend, its model and its greeting, and its Files tool lists `root`.
 `status_bar = false` leaves out the status bar, which a video that shows what
 the window paints again uses, because the status bar changes with every move of
 the caret. The clipboard offers all of its gestures: a person who edits a file
-expects `Ctrl+X` to cut.
+expects `Ctrl+X` to cut. `document` is the pane tree of the window: the gesture
+log records into the first gesture log that its tabs show, which a file or a
+take gave before the editor existed.
 """
 make_application_wrappers(; root::AbstractString = pwd(), assistant = nothing,
                           status_bar::Bool = true, measure = FontFileMeasure(),
-                          appearance::Appearance = Appearance()) =
+                          appearance::Appearance = Appearance(), document = nothing) =
     (; undo = true,
        shell = (; assistant = _make_assistant_factory(assistant),
-                  explorer = _ -> _make_application_workspace(root),
+                  files = _ -> _make_application_workspace(root),
                   status_bar, measure, appearance),
        clipboard = true,
        gesture_help = (; measure),
        command_palette = (; measure),
-       gesture_log = true, message_log = true, frame_statistics = true, fault_log = true)
+       gesture_log = _make_gesture_log_option(document), message_log = true,
+       frame_statistics = true, background_work = true, fault_log = true, assistant_list = true,
+       file_change = true)
+
+# The gesture log of a window records into the first gesture log that a tab of
+# its pane tree shows, or into a new one.
+function _make_gesture_log_option(document)
+    logs = document isa PaneTree ? collect_pane_tab_contents(document, GestureLog) : GestureLog[]
+    isempty(logs) ? true : (; log = first(logs))
+end
 
 """
     make_application_window(paths; root = pwd(), assistant = nothing,
@@ -275,11 +303,11 @@ function make_application_window(paths::AbstractVector;
                                  appearance::Appearance = Appearance(),
                                  settings::Settings = make_settings())
     # The caller's `build_editor` adds the appearance and the settings wrappers.
-    parts = make_editor_parts(make_application_document(paths; root, assistant, settings),
-                              make_application_projection(; measure, appearance);
+    document = make_application_document(paths; root, assistant, settings)
+    parts = make_editor_parts(document, make_application_projection(; measure, appearance);
                               appearance = false, settings = false,
                               make_application_wrappers(; root, assistant, status_bar, measure,
-                                                          appearance)...)
+                                                          appearance, document)...)
     (parts.document, parts.projection)
 end
 
@@ -301,39 +329,188 @@ function _make_application_pane_projection(content, measure, appearance::Appeara
 end
 
 """
-    make_application_api() -> Vector
+    make_editor_api() -> Vector
 
-What the assistant of this window may write, and the whole of it.
+What the assistant of a window of the editor may write: the vocabulary that
+every window declares, and that a window of a domain extends with its own verbs.
 
-Five vocabularies: the pane verbs that arrange the window, the widget names that
+The vocabularies: the pane verbs that arrange the window, the widget names that
 build what a pane shows, the file verbs that open and save one, the workspace
-this application lists, and what each loaded domain registered with
-`register_assistant_api!`. Every exported name here is a verb the assistant reaches
-through `execute_julia_code`, and nothing else resolves.
+that the Files pane lists, the text form of a document of any domain, the verbs
+that edit a collection, the verbs that filter, sort, group and limit a
+collection, the verbs that gather the members of one kind into a roster, the
+verbs of the groups of tasks, the verb that shows a document as a tree, the verbs
+that show and describe the processes of the system, and what each loaded domain
+registered with `register_assistant_api!`. Every name here is a verb the
+assistant reaches through `execute_julia_code`, and nothing else resolves.
 
-Each vocabulary is declared where its verbs are, so a second host that offers the
-same verbs states it once and this function only names which it wants.
+Each vocabulary is declared where its verbs are, so a host that offers the same
+verbs states it once and this function only names which it wants. The Projectured
+application declares this list as it is; the OMNeT++ IDE adds the verbs of its
+simulations to it.
 """
-make_application_api() = Any[
+make_editor_api() = Any[
     make_pane_api()...,
     make_interface_api()...,
     make_file_api()...,
-    # What this application holds and the file slice does not name: the tree the
-    # Files pane lists, and the operation that opens a row of it.
-    FileSystemModule => (:OpenFileOperation, :Workspace, :WorkspaceFolder),
+    # The tree that the Files pane lists, and the operation that opens a row of it.
+    FileSystemModule => (:Workspace, :WorkspaceFolder, :WorkspaceExplorer),
+    WidgetModule => (:OpenFileOperation,),
     # How a model reads what a tab holds, which is what a window of files is
     # asked about: find a document in the window, see through the history a file
     # carries, take the content of a file document, and read or write a document
     # of any domain as its own text.
     DocumentModule => (:search_documents, :get_wrapped_document),
     FileFormatModule => (:get_file_content,),
-    NaturalModule => (:print_natural_text, :parse_natural_text),
+    NaturalModule => (:print_natural_text, :parse_natural_text, :describe_natural_formats),
+    # The text of a part that has no text of its own domain: the constructor that
+    # builds it.
+    SerializationModule => (:print_pred_text,),
+    # What the person does and did: the part that the person selected, the part
+    # under the pointer, the history of the changes, the gestures, the messages and
+    # the faults of the window, and the text that the person copied.
+    FocusModule => (:find_selected_part, :find_part_under_pointer, :select_part!),
+    UndoModule => (:describe_undo_history,),
+    GestureLogModule => (:get_session_gesture_log,),
+    MessageLogModule => (:get_session_message_log,),
+    FaultViewModule => (:get_session_fault_log,),
+    ClipboardModule => (:read_os_clipboard, :write_os_clipboard!),
+    # What a model draws with for the person: the shapes and the text of a
+    # canvas, their colors and fonts. A chart and a graph come with their domains.
+    GraphicsModule => (:GraphicsCanvas, :GraphicsRect, :GraphicsText, :GraphicsLine,
+                       :GraphicsCircle, :GraphicsArc, :GraphicsPolyline, :GraphicsPolygon,
+                       :GraphicsSpline, :GraphicsImage),
+    StyleModule => (:StyleColor, :StyleFont),
+    # The time of the animation clock of the editor, which a live coordinate of a
+    # shape reads to move.
+    ClockModule => (:get_reactive_clock_time, :get_clock_time),
+    # The commands of a part, which a key or the command palette runs for the
+    # person, listed and run by their words.
+    GestureHelpModule => (:describe_commands, :run_command!),
+    # What controls the window and what shows the person a part: a part as a page
+    # of a navigator, and the settings of the window.
+    NavigatorModule => (:open_page!,),
+    SettingsManagingModule => (:describe_settings, :change_setting!),
     # The verbs that edit a collection of a document, as edits of the editor.
     EditorModule => (:insert_elements!, :delete_elements!),
+    # The verbs that filter, sort, group and limit a collection, which change how
+    # it shows and not its data.
+    ArrangementModule => (:filter_collection!, :sort_collection!, :group_collection!, :limit_collection!),
+    # The verbs that gather the members of one kind from the whole window or the
+    # session into a table, the sources of such a table, and the words that say
+    # what it can show.
+    RosterModule => (:Roster, :show_roster!, :describe_roster_sources, :describe_item_facets,
+                     :edit_shown_items!, :CollectionItems, :ItemsWithin, :StoreRecords),
+    # The verbs that list, describe, stop, run again and close the groups of tasks
+    # of the session, whichever verb started them.
+    make_task_api()...,
+    # The verb that shows a document and the documents under it as a tree, and the
+    # label of a node as a tree shows it.
+    TreeModule => (:DocumentTree, :show_document_tree!, :format_tree_node_label),
+    # The verbs that show the processes under a process as a tree, and write them
+    # as text.
+    SystemProcessModule => (:show_system_process_tree!, :describe_system_process_tree),
+    # The verb that shows the work of the agent of an assistant as a page.
+    AssistantModule => (:show_assistant_work!,),
+    # The content of the explorer of the window as a part of it, the page of a part
+    # in the explorer, and the documents that a model adds to it: a section and a
+    # dashboard of cards.
+    ExplorerModule => (:find_explorer_content, :open_explorer_page!, :ExplorerSection, :Dashboard,
+                       :DashboardCard),
+    PaneModule => (:TabDocuments,),
     # What each loaded domain offers for its own documents, such as the shape of
     # a JSON file, which a model reads to find the fields of a record.
     get_registered_assistant_api()...,
 ]
+
+"""
+    EDITOR_SYSTEM
+
+What the assistant of every window of the editor is told about the verbs that
+[`make_editor_api`](@ref) declares and the tools that
+[`register_editor_tools!`](@ref) adds. The system text of a window holds it,
+beside what that window adds about itself, so [`make_editor_api`](@ref) and this
+text change together.
+"""
+const EDITOR_SYSTEM =
+    "YOU WORK IN THE WINDOW BESIDE THE PERSON. Read the guide " *
+    "resource://guide/guide/orientation first: it shows each step below in code. " *
+    "The verbs act on the window, and no verb but `select_part!` moves the " *
+    "selection of the person.\n\n" *
+    "READ what the person does, what the window shows and the data under it. " *
+    "`find_pane(title)` answers a tab by its title, `find_focused_pane()` the tab " *
+    "where the person works, `find_selected_part()` the part that the person " *
+    "selected, and `find_part_under_pointer()` the part under the mouse pointer. " *
+    "`get_edited_document(tab)` answers the document that a tab shows, which acts " *
+    "like the data: index it, iterate it, read a field. " *
+    "`print_natural_text(part)` answers the text of a document or of a part of it, " *
+    "and of the logs of the session: `get_session_gesture_log()`, " *
+    "`get_session_message_log()` and `get_session_fault_log()`. " *
+    "`print_pred_text(part)` prints a part that has no text of its own domain, " *
+    "such as a widget or a chart. `describe_undo_history()` says what changed last, " *
+    "`show_layout()` prints what is where, `describe_settings()` lists the " *
+    "settings, and `read_os_clipboard()` answers the text that the person copied. " *
+    "`search_documents` finds a document in the window when no tab names it. " *
+    "`find_explorer_content()` answers the root section of the explorer, whose " *
+    "entries are the documents that the person keeps there, and " *
+    "`format_tree_node_label(entry)` says the label of an entry, such as Files, " *
+    "Tasks or Dashboards: `[format_tree_node_label(entry) for entry in " *
+    "find_explorer_content().entries]` lists them. " *
+    "Example: `part_1 = find_selected_part(); println(print_natural_text(part_1))`.\n\n" *
+    "TELL the person with a document in a tab: `open_pane!(document; title, " *
+    "target, side)` puts it in a tab, beside or under another tab. WidgetModule " *
+    "and LayoutModule build what a tab shows: a card, a button, a table, a row or " *
+    "a column of them. To draw, put shapes and text on a canvas: " *
+    "`GraphicsCanvas`, `GraphicsRect`, `GraphicsText`, `GraphicsLine`, " *
+    "`GraphicsCircle`, `GraphicsPolyline`, with `StyleColor` and `StyleFont`. " *
+    "A loaded domain, such as a chart or a graph, says below how its documents " *
+    "are made. A shape takes a function of no " *
+    "arguments for a coordinate, and one that reads " *
+    "`get_reactive_clock_time(editor.clock)` moves the shape on each frame. " *
+    "`open_page!(part)` opens a part as a " *
+    "page of its own, `open_explorer_page!(part)` shows its page in the explorer " *
+    "beside the tree, `select_part!(part)` selects a part to show it, and " *
+    "`write_os_clipboard!(text)` gives the person a text to paste. " *
+    "`show_roster!(source; title, columns, filter, sort, group, aggregates, first)` " *
+    "shows a table of the members of one kind, gathered from the whole window or " *
+    "the session: `TabDocuments(type)` gives the documents of the tabs, and " *
+    "`StoreRecords(:log)` a store of the session; `describe_roster_sources()` and " *
+    "`describe_item_facets(type)` say which sources and which keys exist. " *
+    "`show_document_tree!(root; title)` shows a document as a tree, " *
+    "`show_system_process_tree!(process_ids; title)` and " *
+    "`describe_system_process_tree(process_ids)` show processes, and " *
+    "`show_assistant_work!(assistant)` shows the work of the agent of an assistant. " *
+    # @style: the example is text for the agent; it shows how a canvas is written, and draws nothing
+    "Example: `open_pane!(GraphicsCanvas([GraphicsRect(10, 10, 120, 40; " *
+    "color = StyleColor(0.2, 0.4, 0.8, 1.0)), GraphicsText(\"hello\", 20, 34; " *
+    "font = StyleFont(\"DejaVu Sans\", 14))]; w = 200, h = 80); title = \"Sketch\")`.\n\n" *
+    "CONTROL the window: `get_parent(editor, tab)` answers the group that holds a " *
+    "tab; `focus_pane!`, `move_pane!` and `close_pane!` bring a tab forward, move it " *
+    "and close it. `filter_collection!`, `sort_collection!`, `group_collection!` " *
+    "and `limit_collection!` change the rows that `show_roster!` answers. " *
+    "`change_setting!(name, value)` changes a setting of the window. " *
+    "`make_file_tab_content(path)` opens a path as the content of a tab, " *
+    "`write_document_file(document, path)` writes a document to a file, and " *
+    "`Workspace` names the folders that the Files pane lists. " *
+    "`list_task_groups()` lists the groups of tasks of the session, and " *
+    "`describe_task_group`, `get_task_output`, `stop_tasks!`, `rerun_tasks!` and " *
+    "`close_task_group!` act on one. The tool `undo` takes back the last change, as " *
+    "Ctrl+Z does, `redo` puts it back, and the tool `take_picture` shows you what " *
+    "the window draws. Example: `change_setting!(:partial_render, false)`.\n\n" *
+    "CHANGE a document with a verb, so the change is an edit that Ctrl+Z takes back: " *
+    "`replace_referenced_value!(part, new_value)`, " *
+    "`insert_elements!(collection, index, values)` and " *
+    "`delete_elements!(collection, index)`. Write a new value as the text of its " *
+    "domain, which you know well, not with the constructors of its documents: " *
+    "`parse_natural_text(format, text)` makes a document from its text, and " *
+    "`describe_natural_formats()` lists the formats. `describe_commands(part)` " *
+    "lists the commands of a part, which a key or the command palette runs for the " *
+    "person, and `run_command!(part, description)` runs one by its words. On an " *
+    "entry of the explorer they also give the commands of its row, such as a move. " *
+    "To add a document to the explorer, insert it into the entries of " *
+    "`find_explorer_content()`, such as `Dashboard(title, [DashboardCard(title, document)])` " *
+    "or `ExplorerSection(title)`. " *
+    "Example: `delete_elements!(people_1, 2)`."
 
 """
     APPLICATION_SYSTEM
@@ -341,30 +518,15 @@ make_application_api() = Any[
 What the assistant of this application is told about itself.
 
 It is the editor's own instructions with one paragraph added: which verbs this
-window offers. The greeting, this text and [`make_application_api`](@ref) are
-three descriptions of one thing, so all three change together.
+window offers, which is [`EDITOR_SYSTEM`](@ref). The greeting, this text and
+[`make_editor_api`](@ref) are three descriptions of one thing, so all three
+change together.
 """
 const APPLICATION_SYSTEM = DEFAULT_ASSISTANT_SYSTEM * "\n\n" *
     "THIS WINDOW SHOWS FILES. Its verbs are the functions of the modules " *
     "PaneModule, WidgetModule, LayoutModule, FileFormatModule and " *
-    "FileSystemModule, and the names that search_api lists. Read the guide " *
-    "resource://guide/guide/orientation first: it shows each step below in code. " *
-    "find_pane(title) answers a tab by its title, and " *
-    "get_edited_document(tab) answers the document that the tab shows, which acts " *
-    "like the data: index it, iterate it, read a field. print_natural_text(document) " *
-    "answers its text. To change a document, use a verb, so the change is an edit " *
-    "that Ctrl+Z takes back: replace_referenced_value!(part, new_value), " *
-    "insert_elements!(collection, index, values) and " *
-    "delete_elements!(collection, index). open_pane!(document; " *
-    "title, target, side) puts a document in a tab, beside or under another tab, " *
-    "and get_parent(editor, tab) answers the group that holds a tab; focus_pane!, " *
-    "move_pane! and close_pane! bring a pane forward, move it and close it, and " *
-    "show_layout prints what is where. WidgetModule and LayoutModule build what a " *
-    "pane shows — a card, a button, a table, a row or a column of them. " *
-    "FileFormatModule opens a path as a tab with make_file_tab_content and writes a " *
-    "document back with write_document_file. FileSystemModule names the workspace " *
-    "the Files pane lists. search_documents finds a document in the window when no " *
-    "tab names it. " *
+    "FileSystemModule, and the names that search_api lists. " *
+    EDITOR_SYSTEM * " " *
     "Call one tool per round, and put the whole Julia source " *
     "in the code argument of execute_julia_code: a call with no code does " *
     "nothing and costs the round."
@@ -373,7 +535,8 @@ const APPLICATION_SYSTEM = DEFAULT_ASSISTANT_SYSTEM * "\n\n" *
     make_application_system() -> String
 
 The system text of the assistant of this application: [`APPLICATION_SYSTEM`](@ref),
-then the section "Reach what a tab holds" of the orientation guide, which shows in
+the paragraph of the loaded domains ([`make_domain_system`](@ref)), then the
+section "Reach what a tab holds" of the orientation guide, which shows in
 code how to read what a tab holds, change a part of it with a verb, add a record and
 open a table beside a tab.
 
@@ -384,8 +547,23 @@ with the section, S2 passed 10 of 10 seeds and the tasks of one prompt 12 of 12;
 without it, 4 of 5 and 4 of 6. The guide stays the one place of the section.
 """
 make_application_system() =
-    APPLICATION_SYSTEM * "\n\nHOW TO WORK IN THIS WINDOW, from the orientation guide:\n\n" *
+    APPLICATION_SYSTEM * make_domain_system() *
+    "\n\nHOW TO WORK IN THIS WINDOW, from the orientation guide:\n\n" *
     read_guide_section("guide/orientation", "Reach what a tab holds")
+
+"""
+    make_domain_system() -> String
+
+The paragraph of the system text that the loaded domains give: the sentence that
+each domain registered with its names ([`describe_registered_assistant_api`](@ref)),
+after a blank line, or an empty string when no loaded domain gave one. The system
+text of every window holds it after [`EDITOR_SYSTEM`](@ref), so a window tells its
+model about a domain exactly while the window loads that domain.
+"""
+function make_domain_system()
+    domains = describe_registered_assistant_api()
+    isempty(domains) ? "" : "\n\nTHE DOMAINS OF THIS WINDOW. " * domains
+end
 
 """
     make_application_settings(file; fault_policy = nothing, assistant = nothing,
@@ -495,8 +673,8 @@ function run_application(paths::AbstractString...;
     # The settings carry the fault policy of the command line, and the first print
     # runs under it already.
     policy = make_fault_policy(get_settings_group!(settings, FaultSettings))
-    editor = build_editor(make_application_document(collect(String, paths); root,
-                                                    assistant = chat, settings),
+    document = make_application_document(collect(String, paths); root, assistant = chat, settings)
+    editor = build_editor(document,
                           make_application_projection(; measure, appearance);
                           backend, appearance, settings, fault_policy = policy,
                           # The natural projection draws what a tooltip holds. The
@@ -506,9 +684,16 @@ function run_application(paths::AbstractString...;
                                     opened_window_projections = vcat(
                                         Pair{Type,Any}[make_natural_tooltip_row(; measure, appearance)],
                                         make_application_content_projections(; measure, appearance))),
-                          make_application_wrappers(; root, assistant = chat, measure, appearance)...)
+                          make_application_wrappers(; root, assistant = chat, measure, appearance,
+                                                      document)...)
     start_application!(editor; mcp, assistant, model)
-    run_editor!(editor; mcp = mcp ? (; host = mcp_host, port = mcp_port) : false)
+    # The Explorer shows what the last window of this folder showed, and keeps it
+    # for the next start when the window closes.
+    file = get_explorer_content_file(root)
+    _restore_explorer_content!(editor, file)
+    result = run_editor!(editor; mcp = mcp ? (; host = mcp_host, port = mcp_port) : false)
+    save_explorer_content!(get_session_explorer_content(; editor), file; editor)
+    result
 end
 
 # ── The command line ─────────────────────────────────────────────────────────
@@ -586,6 +771,36 @@ function _parse_mcp_address(text::AbstractString)
     (host === nothing ? nothing : String(host), port)
 end
 
+# Set for a binary that `restart_with_window_threads!` started, so it never
+# starts itself again.
+const _THREADS_RESTART_VARIABLE = "PROJECTURED_THREADS_RESTARTED"
+
+"""
+    restart_with_window_threads!(arguments) -> Union{Cint, Nothing}
+
+Run the binary that runs now again, with `arguments` and the Julia option
+`--threads=auto,2`, when the process has one interactive thread, and answer the
+exit code of that run. The window of the new run gives each code unit an
+interactive thread of its own, so a tool call never waits behind a long
+computation ([`find_code_unit_thread_notice`](@ref)).
+
+`nothing`, and nothing runs, when the process has a second interactive thread
+already, when it is `julia` itself, as a script or a REPL is, which takes its
+threads from its own command line, and in the run that this function started.
+A `--julia-args` that the person gave the binary is not passed on.
+"""
+function restart_with_window_threads!(arguments)
+    length(Threads.threadpooltids(:interactive)) >= 2 && return nothing
+    haskey(ENV, _THREADS_RESTART_VARIABLE) && return nothing
+    executable = unsafe_string(Base.JLOptions().julia_bin)
+    startswith(basename(executable), "julia") && return nothing
+    command = addenv(`$executable $arguments --julia-args --threads=auto,2`,
+                     _THREADS_RESTART_VARIABLE => "1")
+    process = run(ignorestatus(command))
+    # A run that a signal ended answers as a shell does.
+    Cint(process.termsignal == 0 ? process.exitcode : 128 + process.termsignal)
+end
+
 """
     run_application_command(arguments; backends) -> Cint
 
@@ -597,8 +812,14 @@ answer the exit code: 0 when the window closes, 1 for a wrong command line, and
 `(sdl = SdlBackend, web = WebBackend)`. It names the backends that the build put
 into the binary, and `--backend` accepts only those. Without `--backend`, the
 first one opens the window.
+
+A built binary that runs with one interactive thread starts again with a second
+one first ([`restart_with_window_threads!`](@ref)), and answers the exit code of
+that run.
 """
 function run_application_command(arguments; backends)
+    restarted = restart_with_window_threads!(arguments)
+    restarted === nothing || return restarted
     command = try
         parse_application_arguments(arguments)
     catch err
@@ -722,7 +943,7 @@ function warm_application()
         events = Any[KeyDown(:down, ModifierKeys(); time = time()),
                      KeyPress('x'; time = time()),
                      press...,
-                     KeyDown(:return, ModifierKeys(); time = time()),
+                     KeyPress('\n'; time = time()),
                      KeyDown(:s, ModifierKeys(ctrl = true); time = time()),
                      # Ctrl+T opens a tab on an empty placeholder, Insert turns
                      # the placeholder into the name buffer, and Enter commits
@@ -734,7 +955,7 @@ function warm_application()
                      KeyDown(:backspace, ModifierKeys(); time = time()),
                      KeyDown(:left, ModifierKeys(); time = time()),
                      KeyDown(:delete, ModifierKeys(); time = time()),
-                     KeyDown(:return, ModifierKeys(); time = time())]
+                     KeyPress('\n'; time = time())]
         for event in events
             change = read_intent(composed, nothing,
                                  Intent(WindowInput(:ProjecturEd, event)), editor.iomap)
@@ -778,11 +999,27 @@ function _find_drawn_text_point(node, text::AbstractString, x0::Int = 0, y0::Int
 end
 
 """
+    register_editor_tools!(set) -> set
+
+Add to `set` the tools that every window of the editor gives its assistant beside
+the default ones: `undo` and `redo`, which take back the last change and put it
+back as Ctrl+Z and Ctrl+Shift+Z do, and `take_picture`, which shows the model
+what the window draws. A host calls it on the tools of its editor when it
+declares [`make_editor_api`](@ref) there.
+"""
+function register_editor_tools!(set)
+    register_undo_tools!(set)
+    register_picture_tools!(set)
+    set
+end
+
+"""
     start_application!(editor; mcp = false, assistant = :none, model = "")
 
 What the application does once the editor exists: it declares the API of
-[`make_application_api`](@ref) on the tools of the editor, and adds the `undo`
-and `redo` tools. With `mcp`, the tools also get the meaning model of the
+[`make_editor_api`](@ref) on the tools of the editor, adds the tools of
+[`register_editor_tools!`](@ref), and posts the acquire of the documents of its tabs
+(`AcquireDocumentOperation`), such as a sheet that computes its formulas. With `mcp`, the tools also get the meaning model of the
 backend `assistant` names, with `model` (empty for its default), because an MCP
 client runs no turn of the assistant and its searches by description rank by
 meaning too.
@@ -798,8 +1035,19 @@ function start_application!(editor; mcp::Bool = false, assistant::Symbol = :none
         # functions a model finds with `search_api` and calls through
         # `execute_julia_code`; they are not tools, so their descriptions cost
         # nothing until it asks.
-        declare_api!(editor.tools, make_application_api())
-        register_undo_tools!(editor.tools)
+        declare_api!(editor.tools, make_editor_api())
+        register_editor_tools!(editor.tools)
+    end
+    # The documents of the tabs enter the window: the acquire applies at the first
+    # drain of the loop, so the start of the window runs no work of them.
+    # The Explorer of the window shows the work of the session and the tools of the
+    # editor after what the window brought, which exist once the editor does.
+    editor isa Editor && _fill_explorer_content!(editor)
+    editor isa Editor && post_operation!(editor, AcquireDocumentOperation(get_window_tree(editor.document)))
+    # How to start Julia, when a tool call of this window has no thread of its own.
+    if editor isa Editor
+        notice = find_code_unit_thread_notice(editor.backend)
+        notice === nothing || @warn notice
     end
     (mcp && assistant !== :none && hasproperty(editor, :tools)) || return nothing
     try

@@ -39,13 +39,17 @@ Its reader routes a `WindowInput` event by the window id, not by the position in
 - `OpenWindowOperation` and `CloseWindowOperation` from any reader below, also inside a `CompoundOperation`. So the choice of an item in a menu can set a value and close the menu in one operation. `CloseWindowOperation` names its window by the id, so it is self-contained (`is_self_contained_operation`): it passes up also through a projection that knows no window, such as a projection of a document whose view holds a menu. `OpenPopupOperation` is self-contained too: it names no place in a document, so a projection that puts its output where its input is passes it on as it is, and a menu inside the view of a document in a pane opens its submenu. `ScreenToScreen` already turned a popup into such an operation before it reaches here.
 - A native resize becomes a `ResizeWindowOperation`. It writes the `width` and `height` cells, and because those cells are the exact range of the content, the content lays out again with no new projection.
 - A native close removes the window.
-- A window with `auto_dismiss` closes on its own loss of focus, on a `MouseDown` in another window, and on a bare Escape. The press goes on to its window, so a press on another menu name closes the open menu and opens its own. The Escape goes no further: the answer is `DoNothingOperation`, because the editor quits on an Escape that no reader answers.
+- A window with `auto_dismiss` closes on its own loss of focus, on a `MouseDown` in another window, and on a bare Escape. The press goes on to its window, so a press on another menu name closes the open menu and opens its own. The Escape goes no further: the answer is `DoNothingOperation`, because an `EscapeQuittingProjection` around everything can quit on an Escape that no reader answers.
 - A `:popup` never holds the focus, so it also closes when any other window loses the focus, for example when the person switches to another program.
 - While a `modal` window is open, an event for another window stops here.
 
 The projection changes only the input screen. `ScreenToScreen` then updates the output.
 
 **A window operation that reaches the editor opens the window too.** A wrapper outside the screen projection, such as the ones that keep the tooltip window and the context menu window, and a verb, such as `open_file_dialog!`, answer an `OpenWindowOperation` or a `CloseWindowOperation` that passes no window manager. `evaluate_operation` applies it to the screen that the editor's document wraps (`get_wrapped_document`), with the same code as the window manager.
+
+### Quitting on Escape
+
+`EscapeQuittingProjection(; inner)` (in [EscapeQuitting.jl](../../../../source/platform/screen/EscapeQuitting.jl)) is transparent: it prints as `inner` and maps references as `inner`. Its reader asks `inner` first. When `inner` gives no operation and the gesture is a bare Escape, alone or in a `WindowInput`, it answers `QuitEditorOperation()`. A modified Escape and any other gesture pass on. It must be the outermost reader, so a popup, a tooltip, a dialog, a drag and the command palette take Escape first. The wrapper keyword `quit_on_escape = true` of `build_editor` adds it, in the layer `:screen` with the number 100, around every other wrapper. The keyword is off by default, and the ProjecturEd application does not turn it on: a person presses Escape to cancel, and a program must not close then. File > Exit (Ctrl+Q) quits it; see [shell.md](../shell/shell.md). The windows of the REPL examples (`run_example`, `run_console_example`) put the projection around their own projection.
 
 ### The shape of the pointer during a drag
 
@@ -61,6 +65,12 @@ The parts that say a shape are listed in [widget.md](../widget/widget.md#the-sha
 ### The place of a part
 
 `find_part_place(projection, iomap, source)` answers where a window that a command opens at a part stands: the bottom left corner of the box of the node that draws the part, in screen coordinates, or `nothing` when the part has no image. `source` is a reference from the input of `iomap`, a screen. The part is mapped forward with the type of each node on its reference, and the box is read from the printed output with `find_reference_box` ([reference.md](../../kernel/reference.md), "The place of a part"). The tooltip window and the context menu window open a window that has no point there, 4 pixels lower, so the window stands below the part and does not cover it.
+
+### The picture of a part
+
+`write_part_picture(editor, source, filename)`, in `source/platform/screen/PartPicture.jl`, writes a picture of a part. `source` is a reference from the document of the editor. The function maps it forward through the projection of the editor (`map_reference_forward`, with `annotate_reference_types`), walks the printed screen to the `GraphicsCanvas` that the reference reaches, and writes that canvas with the `write_image` of the backend. The canvas keeps its own size, moves to the origin, and lies on the background of its window. The picture holds all of the part, also what a pane scrolls out of view. A part whose view has no canvas of its own, such as a file under the wrapper of its undo, takes the nearest part above it on the path that has one.
+
+`write_window_picture(editor, source, filename)` writes the window that shows `source`, or the first window. Both functions answer `nothing` with no window, or with no backend that writes an image (`applicable(write_image, …)`).
 
 ### The layers of a window
 

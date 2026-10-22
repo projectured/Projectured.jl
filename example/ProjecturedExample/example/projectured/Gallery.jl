@@ -21,7 +21,9 @@ end
                 command_palette=false, gesture_log=false,
                 fault_tolerant=true, profile=false)
 
-Open one window per example, side by side. Each example contributes a
+Open one window per example, side by side. A bare Escape that nothing in the
+windows took quits, through an `EscapeQuittingProjection` around everything, and
+so does the close button of a window. Each example contributes a
 `WindowDocument` with the example's domain document as content; the
 composed projection dispatches each window's content to that example's
 own projection by **reference path** (so two examples with the same
@@ -49,10 +51,11 @@ the example's own projection), the editor's document, and the editor's
 projection (both rendered generically via `ObjectToSyntax`).
 
 When `text_highlighting=true` (or `text_filtering=true`), the example's
-projection is replaced by a `ProjectionConfiguringProjection` that stacks an
-editable control bar for a `TextHighlighting` (resp. `TextFiltering`)
-projection above the projected text. Editing the controls re-highlights /
-re-filters live; `Ctrl+F` toggles the bar, `Escape` hides it. Expects a
+document is wrapped in a `FindBarView`: the text in a `HighlightedText` (or a
+`FilteredText`), under a bar that holds a form of its pattern. Typing in the
+form highlights (or filters) again as a person types; `Ctrl+F` shows the bar
+and puts the caret in the pattern, `Escape` hides it and puts the caret back in
+the text, and a button beside the bar puts it over the text. Expects a
 `TextBlock` document (the text examples). The two flags are mutually exclusive.
 
 When `clipboard=true`, each example is wrapped in a `ClipboardSlice` and the
@@ -160,7 +163,8 @@ does that work with it, and runs the loop with `run_editor!(editor)`.
 """
 run_example(documents::Vector, projections::Vector, names::Vector;
             profile::Bool = false, kwargs...) =
-    _run_editor_profiled(make_example_editor(documents, projections, names; kwargs...);
+    _run_editor_profiled(_post_acquire_operations!(make_example_editor(documents, projections, names; kwargs...),
+                                                   documents);
                          profile = profile)
 
 """
@@ -255,14 +259,11 @@ function make_example_editor(documents::Vector, projections::Vector, names::Vect
             is_text    = document isa TextBlock
             document   = make_clipboard_document(document; collection=clipboard_collection)
             projection = make_clipboard_projection(projection; collection=clipboard_collection, text=is_text)
-        elseif text_highlighting
-            # Stack a TextHighlighting control bar above the (text) document; the
-            # document's own projection is replaced by the configuring pipeline.
-            # A default pattern makes the highlight (and the case_insensitive
-            # toggle's effect) visible out of the box. Expects a TextBlock document.
-            projection = make_text_configuring_projection(TextHighlighting("dolor"))
-        elseif text_filtering
-            projection = make_text_configuring_projection(TextFiltering("dolor"))
+        elseif text_highlighting || text_filtering
+            # Wrap the (text) document in a find bar view, whose projection takes
+            # the place of the document's own. Expects a TextBlock document.
+            document   = make_find_bar_document(document; filter=text_filtering)
+            projection = make_find_bar_projection()
         end
         # The layered wrappers. Each one composes with the exclusive wrapper above
         # and with the others, in this order, so a projection wrapper that comes
@@ -321,6 +322,7 @@ function make_example_editor(documents::Vector, projections::Vector, names::Vect
     shell     && push!(content_unwrap, :content)
     dragging  && push!(content_unwrap, :content)
     clipboard && push!(content_unwrap, :content)
+    (text_highlighting || text_filtering) && push!(content_unwrap, :content, :text)
     compose = tooltip ? (p, b) -> _multi_window_projection_tooltipped(p) :
                          (p, b) -> _multi_window_projection(p)
     # The recorder sits at the root of whichever composer runs, because the root
@@ -415,7 +417,7 @@ end
 # Prefix `fields` onto `selection`, so a path rooted at the innermost document
 # becomes one rooted at `document`. Each level is built against the document it
 # addresses, which is what folds that node's type into the step. The wrappers are
-# a closed set, so the two field names they introduce are spelled out — a
+# a closed set, so the field names they introduce are spelled out — a
 # `@reference` path names its steps literally.
 function _prefix_content_fields(document, fields, selection)
     isempty(fields) && return selection
@@ -423,12 +425,15 @@ function _prefix_content_fields(document, fields, selection)
     inner = _prefix_content_fields(child, fields[2:end], selection)
     fields[1] === :child   && return @reference(document, child.^(inner))
     fields[1] === :content && return @reference(document, content.^(inner))
+    fields[1] === :text    && return @reference(document, text.^(inner))
     error("_prefix_content_fields: no wrapper introduces the field :$(fields[1])")
 end
 
 # Build the scene (above), compose the screen projection via `compose(projs, backend)`,
 # put the gesture tracker around both, and make the editor on `backend`, printed
-# once. The shared start of `make_example_editor` and `run_file_editor`.
+# once. The shared start of `make_example_editor` and `run_file_editor`. A bare
+# Escape that nothing took quits an example window, so the projection is an
+# `EscapeQuittingProjection` around everything.
 function _make_window_scene_editor(docs, projs, names; width, height, backend, compose,
                                    content_unwrap::Vector{Symbol}=Symbol[],
                                    feeds::Vector{Feed}=Feed[])
@@ -436,8 +441,8 @@ function _make_window_scene_editor(docs, projs, names; width, height, backend, c
         _build_window_scene(docs, names; width=width, height=height, content_unwrap=content_unwrap),
         compose(projs, backend);
         inner_wrappers = [wrap_tooltip_window, wrap_context_menu_window])
-    make_editor(screen, composed; backend = backend, feeds = feeds,
-                fault_policy = FaultPolicy())
+    make_editor(screen, EscapeQuittingProjection(inner = composed); backend = backend,
+                feeds = feeds, fault_policy = FaultPolicy())
 end
 
 # Run the loop of `editor`, under the profiler when `profile` is set.
@@ -462,7 +467,15 @@ function _run_window_scene(docs, projs, names; width, height, backend,
     editor = _make_window_scene_editor(docs, projs, names; width=width, height=height,
                                        backend=backend, compose=compose,
                                        content_unwrap=content_unwrap, feeds=feeds)
+    _post_acquire_operations!(editor, docs)
     _run_editor_profiled(editor; profile=profile, mcp=mcp)
+end
+
+# The documents enter the window as its loop starts: each acquire applies at the
+# first drain of the loop, so a sheet that holds no value computes off the loop.
+function _post_acquire_operations!(editor, documents)
+    foreach(document -> post_operation!(editor, AcquireDocumentOperation(document)), documents)
+    editor
 end
 
 # Build a projection that projects the screen down to each
@@ -534,7 +547,7 @@ _make_opened_window_dispatch(measure) =
 #
 # Wrap a domain document in a `TooltipSource` whose `content` is a
 # *reactive* `TextBlock`: the elements thunk re-reads `doc.selection`
-# every frame and rebuilds the colored spans via `ReferenceToText`. The
+# every frame and rebuilds the colored lines via `ReferenceToText`. The
 # `TooltipDecoratorProjection` reader watches the wrapped document and
 # emits `OpenWindowOperation` / `CloseWindowOperation` as the selection
 # arrives / clears; the `WindowManagingProjection` applies those to the
@@ -548,16 +561,11 @@ function _make_tooltip_source(doc; id::Symbol)
         ctx = PrinterContext()
         short = print_document(short_proj, nothing, sel, ctx).output
         long  = print_document(long_proj,  nothing, sel, ctx).output
-        spans = TextDocument[]
-        for i in 1:length(short.elements)
-            push!(spans, short.elements[i])
-        end
-        push!(spans, TextNewline(font=short_proj.font))
-        push!(spans, TextNewline(font=short_proj.font))
-        for i in 1:length(long.elements)
-            push!(spans, long.elements[i])
-        end
-        spans
+        # The lines of the two forms, with an empty line between them.
+        lines = TextDocument[short.elements[i] for i in 1:length(short.elements)]
+        push!(lines, TextLine(TextString("", short_proj.font)))
+        append!(lines, TextDocument[long.elements[i] for i in 1:length(long.elements)])
+        lines
     end)
     TooltipSource(child = doc, content = content, style = :tooltip, id = id)
 end
@@ -624,7 +632,7 @@ Keywords:
   - `interactive` — when `true`, run the read-eval-print loop: poll the
                     keyboard, apply operations, repaint. `Home` selects the root
                     node, arrows navigate the tree, `Ctrl+Space` toggles
-                    structural ⇄ text selection, `Ctrl+C` quits. Character-level
+                    structural ⇄ text selection, `Ctrl+C` and Escape quit. Character-level
                     text editing works too: it is in the `@gestures TextBlock`
                     table (`source/platform/text/TextDocument.jl`), geometry-free and so
                     available even though this pipeline omits `TextToGraphics`.
@@ -640,7 +648,8 @@ function run_console_example(; document=make_json_document_example(),
         # that lands on the rendered screen and corrupts it (the console owns the
         # display). Discard those logs for the duration of the interactive loop.
         Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
-            run_editor!(make_editor(document, projection; backend = backend,
+            run_editor!(make_editor(document, EscapeQuittingProjection(inner = projection);
+                                     backend = backend,
                                      devices = Device[Keyboard()],
                                      fault_policy = FaultPolicy()))
         end
@@ -654,6 +663,7 @@ function run_console_example(; document=make_json_document_example(),
     return nothing
 end
 
+# @optional: the output file stands first, as the destination named at a command line.
 """
     record_assistant_conversation_video(filename=tempname()*".mp4"; reply, kwargs...) -> String
 
@@ -677,7 +687,6 @@ text. The reply is streamed on an `@async` task that the recording lets settle
 (via `record_video`'s `wait_for`) before holding the final frames for
 `final_hold` seconds (longer than the default so the answer lingers on screen).
 """
-# @optional: the output file stands first, as the destination named at a command line.
 function record_assistant_conversation_video(filename::AbstractString = tempname() * ".mp4";
                                               reply::AbstractString = """
                                                   Sure! Here's a recursive factorial in Julia:
@@ -695,11 +704,9 @@ function record_assistant_conversation_video(filename::AbstractString = tempname
     projection = make_assistant_projection_example()
 
     # A composer part-break: commit the active part and start the next one.
-    tab   = (event = KeyDown(:tab, ModifierKeys();
-                             time = time()),              hold = 0.5)
-    enter = (event = KeyDown(:return, ModifierKeys();
-                             time = time()),           hold = 0.6)
-    alt_enter = (event = KeyDown(:return, ModifierKeys(alt=true);
+    tab   = (event = KeyPress('\t'; time = time()),              hold = 0.5)
+    enter = (event = KeyPress('\n'; time = time()),           hold = 0.6)
+    alt_enter = (event = KeyPress('\n', ModifierKeys(alt=true);
                                  time = time()), hold = 0.8)
 
     gestures = vcat(

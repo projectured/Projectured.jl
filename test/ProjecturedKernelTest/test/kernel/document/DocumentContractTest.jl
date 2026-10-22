@@ -18,7 +18,7 @@ Covers:
 using Test
 using ProjecturedKernel.DocumentModule
 using ProjecturedKernel.CellModule: Cell, Computation, @computation, ImmutableCell,
-                                    ReactiveCell, AbstractCell, is_cell_up_to_date
+                                    ReactiveCell, AbstractCell, is_cell_valid
 # The reference layer supplies the type our test-local selection field carries.
 # Non-cell/document imports are allowed only to build the fixture; the contract
 # tests below still exercise DocumentModule generics.
@@ -244,9 +244,9 @@ function test_document_contract()
         # A copy re-boxes each field through the constructor of its cell. A function
         # in a field is a value, and the copy keeps it a value that no read calls.
         callback() = "called"
-        node = ToyNode(callback, nothing, nothing)
-        @test copy_document(node).label === callback
-        @test copy_document(ImmutableCell, node).label === callback
+        node = ContractPair(callback, nothing, nothing)
+        @test copy_document(node).first === callback
+        @test copy_document(ImmutableCell, node).first === callback
     end
 
     @testset "show prints a field that reaches an object graph as its type name" begin
@@ -378,7 +378,7 @@ function test_document_contract()
         reader[]
         sync_document!(shadow, source)
         @test getfield(shadow, :selection)[] === kept
-        @test is_cell_up_to_date(reader)
+        @test is_cell_valid(reader)
 
         # A native source holds a live selection document as the value of its field.
         native = MToyNode("root", nothing, SelectionDocument(; primary = path))
@@ -533,7 +533,7 @@ function test_document_contract()
             computed = ToyNode("", nothing, nothing)
             set_cell_computation!(getfield(computed, :label), () -> "computed")
             @test occursin("computes", refusal(computed))
-            @test occursin("action", refusal(ToyNode(() -> "called", nothing, nothing)))
+            @test occursin("action", refusal(ContractPair(() -> "called", nothing, nothing)))
             @test occursin("action", refusal(ContractPair(Ref{Any}(1), nothing, nothing)))
             looped = ContractPair(nothing, nothing, nothing)
             looped.second = looped

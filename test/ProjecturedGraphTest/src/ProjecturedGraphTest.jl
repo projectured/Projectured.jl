@@ -44,9 +44,11 @@ for _src in _SOURCES
     end
 end
 
+include("../test/domain/graph/document/GraphNoteTest.jl")
 include("../test/domain/graph/projection/GraphProjectionTest.jl")
 include("../test/domain/graph/projection/FruchtermanReingoldLayoutTest.jl")
 include("../test/domain/graph/projection/GraphThemeTest.jl")
+include("../test/domain/graph/projection/GraphVertexDragTest.jl")
 
 include("../test/domain/graph/GraphSuite.jl")
 

@@ -7,6 +7,7 @@ using ProjecturedKernel.ProjectionModule
 using ProjecturedKernel.IoMapModule
 using ProjecturedKernel.DocumentModule
 using ProjecturedKernel.DeviceModule
+using ProjecturedKernel.ClockModule: Clock
 import ProjecturedKernel.BackendModule
 import ProjecturedKernel.BackendModule: Backend
 import ProjecturedKernel.OperationModule: QuitEditorOperation
@@ -118,6 +119,20 @@ function test_build_editor()
         @test isempty(_BUILD_PROBE_STEPS)
     end
 
+    @testset "make_editor and build_editor give the editor the clock of the caller" begin
+        clock = Clock()
+        editor = make_editor(BuildProbe(), BuildProbeProjection();
+                             backend = BuildProbeBackend(), devices = Device[], clock)
+        @test editor.clock === clock
+        built = build_editor(BuildProbe(), BuildProbeProjection();
+                             backend = BuildProbeBackend(), devices = Device[],
+                             _BUILD_PROBE_PLATFORM_OFF..., clock)
+        @test built.clock === clock
+        other = make_editor(BuildProbe(), BuildProbeProjection();
+                            backend = BuildProbeBackend(), devices = Device[])
+        @test other.clock isa Clock && other.clock !== clock
+    end
+
     @testset "the wrappers apply layer by layer, and in order inside a layer" begin
         empty!(_BUILD_PROBE_STEPS)
         editor = build_editor(BuildProbe(), BuildProbeProjection();
@@ -191,6 +206,18 @@ function test_build_editor()
         wait(task)
         @test task.sticky
         @test all(==(thread), seen)
+    end
+
+    @testset "a loop that the caller does not wait for goes to an interactive thread first" begin
+        thread = ProjecturedKernel.EditorModule._find_editor_thread()
+        others(pool) = [t for t in Threads.threadpooltids(pool) if t != Threads.threadid()]
+        if !isempty(others(:interactive))
+            @test thread in others(:interactive)
+        elseif !isempty(others(:default))
+            @test thread in others(:default)
+        else
+            @test thread === nothing
+        end
     end
 
     @testset "with wait = false, the editor is built and runs on a task of its own" begin

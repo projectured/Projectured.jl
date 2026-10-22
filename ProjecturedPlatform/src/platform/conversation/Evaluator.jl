@@ -8,7 +8,7 @@ abstract type EvaluatorDocument <: Document end
 
 """
     EvaluatorForm(form; source, result, output, is_error, tool_use_id, tool_name, input,
-                  form_collapsed, result_collapsed)
+                  form_collapsed, result_collapsed, is_running)
 
 A code form paired with its evaluation result. `form` is the code document
 (a `JuliaDocument`); `result` is the result document: a `TextBlock`, a live
@@ -39,6 +39,10 @@ and a reader treats the form as an evaluation whose input is the code.
 `form_collapsed` and `result_collapsed` are view state, the same as a part's
 `collapsed`: each says whether that section of the form is folded. A result that
 is an error starts folded, and everything else starts open.
+
+`is_running` says that the evaluation of the form runs in the background: the form
+shows that, and a control that stops it, until its result comes. A file does not
+keep it, and a copy of the form does not run.
 """
 @document struct EvaluatorForm <: EvaluatorDocument
     form::Document
@@ -51,6 +55,7 @@ is an error starts folded, and everything else starts open.
     input::Dict{String,Any}
     form_collapsed::Bool
     result_collapsed::Bool
+    is_running::Bool
 end
 
 EvaluatorForm(form::Document;
@@ -62,11 +67,12 @@ EvaluatorForm(form::Document;
               output::AbstractString = "",
               input::AbstractDict = Dict{String,Any}(),
               form_collapsed::Bool = false,
-              result_collapsed::Bool = is_error) =
+              result_collapsed::Bool = is_error,
+              is_running::Bool = false) =
     EvaluatorForm(Cell(form), Cell(result), Cell(is_error),
                   Cell(String(tool_use_id)), Cell(String(tool_name)),
                   Cell(String(source)), Cell(String(output)), Cell(Dict{String,Any}(input)),
-                  Cell(form_collapsed), Cell(result_collapsed), Cell(nothing))
+                  Cell(form_collapsed), Cell(result_collapsed), Cell(is_running), Cell(nothing))
 
 # ── The file form ────────────────────────────────────────────────────────────
 
@@ -76,7 +82,7 @@ EvaluatorForm(form::Document;
 # an input can be any text, so a mapping of names can not hold it.
 pred_arguments(f::EvaluatorForm) = (), Pair{Symbol,Any}[
     :form             => f.form,
-    :result           => f.result,
+    :result           => _make_file_result(f),
     :is_error         => f.is_error,
     :tool_use_id      => f.tool_use_id,
     :tool_name        => f.tool_name,
@@ -86,6 +92,20 @@ pred_arguments(f::EvaluatorForm) = (), Pair{Symbol,Any}[
     :form_collapsed   => f.form_collapsed,
     :result_collapsed => f.result_collapsed,
 ]
+
+# The result as a file writes it. A result that the notation of a file can not
+# write, such as a live document of the session that an evaluation returned, is
+# written as the text of the tool.
+function _make_file_result(f::EvaluatorForm)
+    result = f.result
+    try
+        print_pred_text(result)
+        result
+    catch exception
+        exception isa FileCutException || rethrow()
+        make_evaluator_result_text(f.output)
+    end
+end
 
 function make_pred_document(::Type{<:EvaluatorForm}, positional, keywords)
     values = Dict{Symbol,Any}(keywords)
@@ -114,7 +134,7 @@ has_document_duplicate(::EvaluatorDocument) = true
 # computes, or a widget that holds a function. The duplicate of a form shares
 # its result, and an evaluation in the duplicate puts a new result there.
 copy_document(policy::DuplicatePolicy, form::EvaluatorForm) =
-    copy_document_fields(policy, form; result = form.result)
+    copy_document_fields(policy, form; result = form.result, is_running = false)
 
 """
     get_evaluation_kind_label(name::AbstractString) -> "eval" | "resource" | "tool"
@@ -184,13 +204,78 @@ get_evaluation_section_labels(f::EvaluatorForm) =
     make_evaluator_arguments_text(input) -> TextBlock
 
 The form of a tool call that is not an evaluation: one `key: value` line per
-argument, in key order.
+argument, in key order. A value that is a list or a dictionary is JSON text,
+indented over several lines when it is longer than a line.
 """
 make_evaluator_arguments_text(input::AbstractDict) =
-    TextBlock(TextString(join(["$(key): $(value)" for (key, value) in sort(collect(input); by = first)], "\n")))
+    make_text_block(join([string(key, ": ", _format_argument_value(value))
+                          for (key, value) in sort(collect(input); by = first)], "\n"),
+                    _EVALUATOR_TEXT_STYLE)
 
-# Convenience: build a result document from a plain output string.
-make_evaluator_result_text(s::AbstractString) = TextBlock(TextString(String(s)))
+# A value of an argument as the line writes it: a list or a dictionary as JSON,
+# in one line when it fits, else indented; any other value as it prints.
+function _format_argument_value(value)
+    value isa Union{AbstractVector,AbstractDict} || return string(value)
+    line = sprint(_write_json, value)
+    length(line) <= _ARGUMENT_LINE_WIDTH ? line : sprint(_write_json, value, 0)
+end
+
+# How many characters of JSON a line takes before the value is indented.
+const _ARGUMENT_LINE_WIDTH = 80
+
+# JSON text of `value`, in one line, or indented by two spaces a level from
+# `depth` when `depth` is given. The keys of a dictionary are in key order.
+function _write_json(io::IO, value, depth::Union{Nothing,Int} = nothing)
+    if value isa AbstractDict
+        items = sort!([(string(key), item) for (key, item) in value]; by = first)
+        _write_json_items(io, items, depth, '{', '}') do (key, item)
+            _write_json(io, key)
+            print(io, ": ")
+            _write_json(io, item, depth === nothing ? nothing : depth + 1)
+        end
+    elseif value isa Union{AbstractVector,Tuple}
+        _write_json_items(io, collect(value), depth, '[', ']') do item
+            _write_json(io, item, depth === nothing ? nothing : depth + 1)
+        end
+    elseif value isa AbstractString || value isa Symbol
+        print(io, '"')
+        for c in string(value)
+            c == '"' ? print(io, "\\\"") : c == '\\' ? print(io, "\\\\") :
+            c == '\n' ? print(io, "\\n") : c == '\t' ? print(io, "\\t") :
+            c == '\r' ? print(io, "\\r") :
+            c < ' ' ? print(io, "\\u", lpad(string(UInt16(c), base = 16), 4, '0')) :
+            print(io, c)
+        end
+        print(io, '"')
+    elseif value === nothing || value === missing
+        print(io, "null")
+    elseif value isa Union{Bool,Integer} || (value isa AbstractFloat && isfinite(value))
+        print(io, value)
+    else
+        _write_json(io, string(value))
+    end
+    nothing
+end
+
+# The items of a list or a dictionary between `open` and `close`, each written by
+# `write_item`: in one line, or one item a line, indented, from `depth`.
+function _write_json_items(write_item, io::IO, items, depth, open::Char, close::Char)
+    print(io, open)
+    for (index, item) in enumerate(items)
+        depth === nothing ? (index > 1 && print(io, ", ")) :
+            print(io, index > 1 ? ",\n" : "\n", "  "^(depth + 1))
+        write_item(item)
+    end
+    depth === nothing || isempty(items) || print(io, "\n", "  "^depth)
+    print(io, close)
+end
+
+# Convenience: build a result document from a plain output string, a line for each
+# of its lines.
+make_evaluator_result_text(s::AbstractString) = make_text_block(String(s), _EVALUATOR_TEXT_STYLE)
+
+# The style of the text of an evaluator: that of a bare `TextString`.
+const _EVALUATOR_TEXT_STYLE = StyleText(UNSTYLED_TEXT_FONT, color_default)
 
 # ── ToggleEvaluatorSectionOperation ─────────────────────────────────────────
 
@@ -247,6 +332,12 @@ them can change, and a comment is never lost. See
 typed into as the Julia domain types, instead of a string. A structured form can
 hold a pasted object. Enter still evaluates the whole form, and commits the hole
 as part of that.
+
+`evaluate_in_background` says whether a form evaluates as background work, so the
+window answers while it runs. The form shows that it runs, and a control that
+stops it, and its result comes when the work ends. Such code reaches a document
+only through the verbs. Off, a form evaluates as a code unit of the editor, which
+holds its documents until it ends.
 """
 @document struct EvaluatorToplevel <: EvaluatorDocument
     elements::CellVector = CellVector()
@@ -256,10 +347,11 @@ as part of that.
     history_prefix::String = ""
     parse_evaluated_forms::Bool = true
     type_structured_forms::Bool = false
+    evaluate_in_background::Bool = false
 end
 EvaluatorToplevel(elements::Vector) =
     EvaluatorToplevel(CellVector(Cell[Cell(e) for e in elements]), Cell(true),
-                      Cell(0), Cell(""), Cell(""), Cell(true), Cell(false), Cell(nothing))
+                      Cell(0), Cell(""), Cell(""), Cell(true), Cell(false), Cell(false), Cell(nothing))
 
 set_cell_computation!(t::EvaluatorToplevel, f::Function) =
     (set_cell_computation!(getfield(t.elements, :elements), () -> Cell[Cell(x) for x in f()]); t)
@@ -294,8 +386,13 @@ the document prints back as the same tokens on the same lines as that code,
 whatever the spaces between them. The evaluation runs the code as typed either
 way.
 
-Declines — leaves the toplevel untouched — when the caret names no element, or
-that element's source is blank. Both are checked here, at evaluation time, not
+With the toplevel's `evaluate_in_background` on, the form evaluates as
+background work: the fresh form opens at once, the form shows that it runs, and
+its result comes through the editor when the work ends.
+[`StopEvaluatorFormOperation`](@ref) stops it.
+
+Declines — leaves the toplevel untouched — when the caret names no element, that
+element's source is blank, or its evaluation still runs. Both are checked here, at evaluation time, not
 at read time: the gesture always fires and lets the operation decide, exactly
 as the composer's own evaluate does.
 """
@@ -417,20 +514,45 @@ end
 # window are one session, as the windows of one Julia process share `Main`, and
 # a name one form binds is defined in the next. It shares the observers of those
 # tools, so a host still hears what an evaluation made. The table is weak, and
-# the namespace lets go of `editor` after each evaluation, so an editor that is
-# gone takes its namespace with it.
-const _EVALUATOR_TOOL_SETS = Ref{Any}(nothing)
+# the namespace lets go of `editor` once no evaluation of it runs, so an editor
+# that is gone takes its namespace with it.
+#
+# A session also keeps the background work of each form whose evaluation runs, so
+# a stop of the form finds it. The end of the work takes it out, because the work
+# holds the editor.
+struct _EvaluatorSession
+    set::ToolSet
+    works::IdDict{EvaluatorForm,BackgroundWork}
+    lock::ReentrantLock
+end
 
-function _get_evaluator_tool_set(editor)
+_EvaluatorSession(set::ToolSet) = _EvaluatorSession(set, IdDict{EvaluatorForm,BackgroundWork}(), ReentrantLock())
+
+const _EVALUATOR_SESSIONS = Ref{Any}(nothing)
+const _EVALUATOR_SESSIONS_LOCK = ReentrantLock()
+
+function _get_evaluator_session(editor)
     tools = hasproperty(editor, :tools) ? editor.tools : nothing
-    tools isa ToolSet || return ToolSet()
-    sets = _EVALUATOR_TOOL_SETS[]
-    sets === nothing && (sets = _EVALUATOR_TOOL_SETS[] = WeakKeyDict{ToolSet,ToolSet}())
-    get!(sets, tools) do
-        set = ToolSet()
-        set.observers = tools.observers
-        set
+    tools isa ToolSet || return _EvaluatorSession(ToolSet())
+    lock(_EVALUATOR_SESSIONS_LOCK) do
+        sessions = _EVALUATOR_SESSIONS[]
+        sessions === nothing &&
+            (sessions = _EVALUATOR_SESSIONS[] = WeakKeyDict{ToolSet,_EvaluatorSession}())
+        get!(sessions, tools) do
+            set = ToolSet()
+            set.observers = tools.observers
+            _EvaluatorSession(set)
+        end
     end
+end
+
+# The namespace binds `editor` while an evaluation runs. Once none runs, it binds
+# nothing, so the namespace holds no editor.
+function _release_evaluation_editor!(session::_EvaluatorSession)
+    session.set.scratch === nothing && return nothing
+    lock(() -> isempty(session.works), session.lock) &&
+        Core.eval(session.set.scratch, :(editor = nothing))
+    nothing
 end
 
 function evaluate_operation(editor, op::EvaluateSelectedFormOperation)
@@ -438,6 +560,7 @@ function evaluate_operation(editor, op::EvaluateSelectedFormOperation)
     i = _find_selected_form_index(t)
     i === nothing && return nothing
     element = t.elements[i]
+    element.is_running === true && return nothing
     code = element.form
     # A form that holds an object has no text that runs: it runs as an `Expr`
     # that holds the object itself, and so does any other form that is already
@@ -449,27 +572,35 @@ function evaluate_operation(editor, op::EvaluateSelectedFormOperation)
     # value does not, as in the Julia REPL.
     hides_value = _ends_with_semicolon(text)
     describe_value = hides_value ? (_ -> "") : describe_value_for_person
-    set = _get_evaluator_tool_set(editor)
-    output = try
-        by_expression ?
-            execute_julia_expression!(set, editor, make_natural_expression(:jl, code);
-                                      describe_value = describe_value) :
-            execute_julia_code!(set, editor, text; describe_value = describe_value)
+    session = _get_evaluator_session(editor)
+    # The expression is made here, because it reads the form, a document. A failure
+    # to make it is the result of the form.
+    expression = nothing
+    result = nothing
+    try
+        by_expression && (expression = make_natural_expression(:jl, code))
     catch e
-        sprint(showerror, e, catch_backtrace())
+        result = EvaluationResult(sprint(showerror, e, catch_backtrace()), nothing, e)
     end
-    # The next evaluation binds `editor` again, so the namespace holds none.
-    set.scratch === nothing || Core.eval(set.scratch, :(editor = nothing))
-    is_err = occursin("ERROR", output) || occursin("Error", output)
-    # A `Document` return value is kept as the result so it renders live;
-    # otherwise the printed output, exactly as the composer's own evaluate does.
-    val = get_last_evaluated_value(set)
-    result = hides_value && !is_err ? _make_hidden_value_result(output) :
-             val isa Document ? val :
-             _is_silent_nothing(val, output) ? _make_nothing_result() :
-             make_evaluator_result_text(rstrip(output))
-    element.result = result
-    element.is_error = is_err
+    if result === nothing && t.evaluate_in_background === true
+        element.is_running = true
+        work = start_background_work(; description = "Evaluate a form", editor) do
+            _run_form_evaluation(editor, session, element, text, by_expression, expression,
+                                 describe_value, hides_value)
+        end
+        # The end of the work can come first when no loop runs the editor.
+        lock(() -> (element.is_running === true && (session.works[element] = work)), session.lock)
+    else
+        if result === nothing
+            result = try
+                _evaluate_form_code(session.set, editor, text, by_expression, expression, describe_value)
+            catch e
+                EvaluationResult(sprint(showerror, e, catch_backtrace()), nothing, e)
+            end
+        end
+        _release_evaluation_editor!(session)
+        _write_form_result!(element, result, hides_value)
+    end
     push!(t.elements, _make_fresh_form(t))
     # The fresh form is where the next key goes, so the view goes to the end, and
     # its history starts from its own empty draft.
@@ -484,6 +615,75 @@ function evaluate_operation(editor, op::EvaluateSelectedFormOperation)
     # A hole of a structured form commits as part of its evaluation, whatever the
     # toplevel says of parsing a string form.
     (t.parse_evaluated_forms || _is_julia_hole(element.form)) && _parse_evaluated_form!(element)
+    nothing
+end
+
+_evaluate_form_code(set, editor, text, by_expression, expression, describe_value) =
+    by_expression ? run_julia_expression!(set, editor, expression; describe_value) :
+                    run_julia_code!(set, editor, text; describe_value)
+
+# The result of an evaluation in the form. A `Document` value is kept as the
+# result so it renders live; otherwise the printed output, exactly as the
+# composer's own evaluate does.
+function _write_form_result!(element::EvaluatorForm, result::EvaluationResult, hides_value::Bool)
+    output = result.output
+    value = result.value
+    is_error = occursin("ERROR", output) || occursin("Error", output)
+    element.result = hides_value && !is_error ? _make_hidden_value_result(output) :
+                     value isa Document ? value :
+                     _is_silent_nothing(value, output) ? _make_nothing_result() :
+                     make_evaluator_result_text(rstrip(output))
+    element.is_error = is_error
+    nothing
+end
+
+# The background work of a form: the evaluation, and then its result through the
+# editor, also when the evaluation threw an exception that means stop.
+function _run_form_evaluation(editor, session, element, text, by_expression, expression,
+                              describe_value, hides_value)
+    result = nothing
+    try
+        result = _evaluate_form_code(session.set, editor, text, by_expression, expression,
+                                     describe_value)
+    catch exception
+        is_fault_exception(exception) || rethrow()
+        result = EvaluationResult(sprint(showerror, exception, catch_backtrace()), nothing, exception)
+    finally
+        run_on_editor_task!(editor; wait = false, description = "the result of a form") do
+            result === nothing || _write_form_result!(element, result, hides_value)
+            lock(session.lock) do
+                element.is_running = false
+                delete!(session.works, element)
+            end
+            _release_evaluation_editor!(session)
+        end
+    end
+    nothing
+end
+
+# ── StopEvaluatorFormOperation ──────────────────────────────────────────────
+
+"""
+    StopEvaluatorFormOperation(form)
+
+Stop the evaluation of `form` that runs in the background, as the stop of a code
+unit stops one: the `sleep` of its code and the waits of the verbs end, and its
+result says so. Code that computes runs to its end, because Julia can not stop
+code that runs. The control on a running form makes it. It does nothing when the
+evaluation of `form` does not run.
+"""
+struct StopEvaluatorFormOperation <: Operation
+    form::EvaluatorForm
+end
+
+# It names the form it stops, not a path into one, so it travels up the chain as
+# it is.
+OperationModule.is_self_contained_operation(::StopEvaluatorFormOperation) = true
+
+function evaluate_operation(editor, op::StopEvaluatorFormOperation)
+    session = _get_evaluator_session(editor)
+    work = lock(() -> get(session.works, op.form, nothing), session.lock)
+    work === nothing || stop_background_work!(work)
     nothing
 end
 
@@ -514,8 +714,9 @@ form, or `nothing` when the form keeps its string.
 
 A form becomes a Julia document when the document prints back as the same tokens
 on the same lines as the code; the spaces between them may change. Otherwise the
-form keeps its string: code with a comment, code that the print would change in
-another way (the juxtaposed product `2x` prints as `2 * x`), code that does not
+form keeps its string: code of several statements, such as a comment above a
+statement, code that the print would change in another way (the juxtaposed
+product `2x` prints as `2 * x`), code that does not
 parse, or code that no loaded domain reads as Julia. Use it to check the forms of
 a script before they are typed.
 
@@ -583,13 +784,14 @@ end
     ToggleEvaluatorOptionOperation(toplevel, option)
 
 Turn one option of an [`EvaluatorToplevel`](@ref) on or off: `option` is
-`:parse_evaluated_forms` or `:type_structured_forms`. A check box above the
-forms and a rule of the command palette both make it.
+`:parse_evaluated_forms`, `:type_structured_forms` or `:evaluate_in_background`.
+A check box above the forms and a rule of the command palette both make it.
 
 `:type_structured_forms` also changes the bottom form, where the next key goes,
 and keeps its text: a string becomes a Julia hole, and a hole or a parsed form
 becomes a string. The evaluated forms keep their shape.
-`:parse_evaluated_forms` changes only the evaluations that come after it.
+`:parse_evaluated_forms` and `:evaluate_in_background` change only the
+evaluations that come after them.
 """
 struct ToggleEvaluatorOptionOperation <: Operation
     toplevel::EvaluatorToplevel
@@ -607,6 +809,8 @@ function evaluate_operation(editor, op::ToggleEvaluatorOptionOperation)
     elseif op.option === :type_structured_forms
         t.type_structured_forms = !(t.type_structured_forms === true)
         _change_bottom_form_kind!(editor, t)
+    elseif op.option === :evaluate_in_background
+        t.evaluate_in_background = !(t.evaluate_in_background === true)
     else
         error("ToggleEvaluatorOptionOperation: unknown option $(op.option)")
     end
@@ -740,12 +944,32 @@ function _make_down_operation(t::EvaluatorToplevel)
 end
 
 @gestures EvaluatorToplevel begin
-    override(KeyDown(:return;)) => "Evaluate" => _make_evaluate_operation(doc)
-    KeyDown(:return; shift) => "Insert a line break" => _make_form_newline_operation(doc)
+    override(KeyPress('\n';)) => "Evaluate" => _make_evaluate_operation(doc)
+    KeyPress('\n'; shift) => "Insert a line break" => _make_form_newline_operation(doc)
     KeyDown(:up;) => "Recall an older form, or go to the form above" => _make_up_operation(doc)
     KeyDown(:down;) => "Recall a newer form, or go to the form below" => _make_down_operation(doc)
     nothing => "Parse evaluated forms" =>
         ToggleEvaluatorOptionOperation(doc, :parse_evaluated_forms)
     nothing => "Type structured forms" =>
         ToggleEvaluatorOptionOperation(doc, :type_structured_forms)
+    nothing => "Evaluate in the background" =>
+        ToggleEvaluatorOptionOperation(doc, :evaluate_in_background)
+end
+
+# An evaluator runs while one of its forms runs in the background, and failed
+# when its last form gave an error.
+function get_document_decoration(evaluator::EvaluatorToplevel)
+    forms = [element for element in evaluator.elements if element isa EvaluatorForm]
+    conditions = DocumentCondition[]
+    any(form -> form.is_running, forms) && push!(conditions, DocumentCondition(:running))
+    !isempty(forms) && last(forms).is_error && push!(conditions, DocumentCondition(:failed))
+    DocumentDecoration(; icon = :terminal, conditions, tooltip = () -> _make_evaluator_note(evaluator))
+end
+
+# What a row of the evaluator says when the pointer rests on it: what it does,
+# and how many forms it holds and how many failed.
+function _make_evaluator_note(evaluator::EvaluatorToplevel)
+    forms = [element for element in evaluator.elements if element isa EvaluatorForm]
+    TooltipNote(; title = "Evaluator", text = "Type Julia code, and evaluate it.",
+                facts = ["Forms" => string(length(forms)), "Failed" => string(count(form -> form.is_error, forms))])
 end

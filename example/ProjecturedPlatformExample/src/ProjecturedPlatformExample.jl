@@ -9,8 +9,9 @@ plan/done/example-package-split.md). It hosts:
   syntax and text documents, the widget gallery, the layout examples, the
   collection views (reversing/filtering/searching/sorting), the text
   decorators (line numbering, word wrapping, filtering, highlighting), the
-  object reflections (ObjectToSyntax / ObjectToWidget), and the rotating
-  vector animation;
+  object reflections (ObjectToSyntax / ObjectToWidget), the rotating vector
+  animation, and a tree of documents, a work plan and a tree of system
+  processes, which the natural renderer draws;
 - the visual half of the example harness: `print_example` (console rendering
   of the projected output) and `write_example_pdf` (the dependency-free Pdf
   backend; text is measured from the font files, with no SDL).
@@ -66,7 +67,9 @@ include("../example/platform/SyntaxFoldingDocumentExample.jl")
 include("../example/platform/TextToStringDocumentExample.jl")
 include("../example/platform/WordWrappingDocumentExample.jl")
 include("../example/platform/TextFilteringDocumentExample.jl")
+include("../example/platform/FindBarViewDocumentExample.jl")
 include("../example/platform/TextHighlightingDocumentExample.jl")
+include("../example/platform/TextMarkingDocumentExample.jl")
 include("../example/platform/WidgetDocumentExample.jl")
 include("../example/platform/LayoutDocumentExample.jl")
 include("../example/platform/CollectionDocumentExample.jl")
@@ -74,7 +77,30 @@ include("../example/platform/PrimitiveDocumentExample.jl")
 include("../example/platform/AppearanceDocumentExample.jl")
 include("../example/platform/LazyDocumentExample.jl")
 include("../example/platform/PaneDocumentExample.jl")
+include("../example/platform/FilePageDocumentExample.jl")
+include("../example/platform/RosterDocumentExample.jl")
+include("../example/platform/TaskDocumentExample.jl")
+include("../example/platform/TerminalDocumentExample.jl")
 include("../example/platform/NavigatorDocumentExample.jl")
+include("../example/platform/TreeDocumentExample.jl")
+include("../example/platform/WorkPlanDocumentExample.jl")
+include("../example/platform/SystemProcessDocumentExample.jl")
+include("../example/platform/ExplorerDocumentExample.jl")
+include("../example/platform/BackgroundWorkDocumentExample.jl")
+include("../example/platform/FaultDocumentExample.jl")
+include("../example/platform/ProjectionDocumentExample.jl")
+include("../example/platform/MessageLogDocumentExample.jl")
+include("../example/platform/McpLogDocumentExample.jl")
+include("../example/platform/GestureLogDocumentExample.jl")
+include("../example/platform/StatisticsDocumentExample.jl")
+include("../example/platform/SettingsDocumentExample.jl")
+include("../example/platform/SettingsManagingDocumentExample.jl")
+include("../example/platform/HelpDocumentExample.jl")
+include("../example/platform/InspectorDocumentExample.jl")
+include("../example/platform/TooltipDocumentExample.jl")
+include("../example/platform/DragTrackingDocumentExample.jl")
+include("../example/platform/GestureTrackingDocumentExample.jl")
+include("../example/platform/ArrangementDocumentExample.jl")
 include("../example/platform/RotatingVectorDocumentExample.jl")
 
 include("../example/platform/SyntaxProjectionExample.jl")
@@ -90,7 +116,9 @@ include("../example/platform/SyntaxFoldingProjectionExample.jl")
 include("../example/platform/TextToStringProjectionExample.jl")
 include("../example/platform/WordWrappingProjectionExample.jl")
 include("../example/platform/TextFilteringProjectionExample.jl")
+include("../example/platform/FindBarViewProjectionExample.jl")
 include("../example/platform/TextHighlightingProjectionExample.jl")
+include("../example/platform/TextMarkingProjectionExample.jl")
 include("../example/platform/WidgetProjectionExample.jl")
 include("../example/platform/LayoutProjectionExample.jl")
 include("../example/platform/CollectionProjectionExample.jl")
@@ -105,6 +133,7 @@ include("../example/platform/SortingProjectionExample.jl")
 # The table projection: NaturalToGraphics with the sans chrome font. It names no
 # domain, and both the graph example and the table example need it.
 include("../example/platform/TableProjectionExample.jl")
+include("../example/platform/NaturalProjectionExample.jl")
 
 include("../example/platform/PlatformExamples.jl")
 include("../example/platform/Harness.jl")
@@ -122,6 +151,27 @@ export make_list_node_document_example, make_collection_projection_example
 export make_constraint_layout_document_example, make_constraint_layout_projection_example
 export make_filtering_projection_example, make_flow_layout_document_example
 export make_graphics_canvas_document_example, make_grid_layout_document_example
+export make_graphics_rect_document_example, make_scroll_layout_document_example,
+       make_text_gutter_atom_document_example, make_roster_document_example,
+       make_file_page_document_example, make_closed_task_group_document_example,
+       make_terminal_document_example, make_task_document_example,
+       make_task_group_document_example, make_task_group_list_document_example,
+       make_task_execution_document_example, make_task_stream_document_example,
+       make_task_stream_lines_document_example
+export make_fault_log_document_example, make_fault_report_document_example,
+       make_message_log_document_example, make_mcp_log_document_example,
+       make_gesture_log_document_example, make_frame_statistics_document_example,
+       make_frame_time_series_document_example, make_settings_document_example,
+       make_settings_document_document_example, make_about_page_document_example,
+       make_selection_inspector_document_example, make_tooltip_content_document_example,
+       make_tooltip_note_document_example,
+       make_tooltip_window_state_document_example, make_drag_tracking_state_document_example,
+       make_gesture_tracking_state_document_example, make_arrangement_document_example,
+       make_arrangement_chips_document_example, make_text_spacing_atom_document_example,
+       make_text_graphics_atom_document_example, make_pane_group_document_example,
+       make_pane_split_document_example, make_appearance_document_document_example,
+       make_command_palette_document_example, make_widget_toolbar_item_atom_document_example,
+       make_widget_highlight_document_example, make_context_menu_window_state_document_example
 export make_horizontal_layout_document_example, make_layout_constraint_document_example
 export make_layout_document_example, make_layout_projection_example
 export make_lazy_bidirectional_document_example, make_lazy_bidirectional_projection_example
@@ -130,7 +180,13 @@ export make_line_numbering_document_example, make_line_numbering_projection_exam
 export make_nested_object_to_widget_document_example, make_object_document_example
 export make_object_projection_example, make_object_to_widget_document_example
 export make_object_to_widget_projection_example, make_plain_text_document_example
+export make_object_to_widget_chosen_widgets_projection_example,
+       make_object_to_widget_plain_record_document_example,
+       make_object_to_widget_plain_record_projection_example
 export make_object_field_document_example, make_object_field_form_document_example
+export make_plain_server_copy_form_document_example, make_plain_server_cell_form_document_example
+export make_object_field_widget_form_document_example, make_plain_server_mutable_form_document_example
+export make_object_field_form_chosen_widgets_projection_example
 export make_object_field_form_projection_example, make_object_field_syntax_projection_example
 export make_plain_text_projection_example, make_primitive_string_document_example
 export make_primitive_string_projection_example, make_reference_inspector_document_example
@@ -140,8 +196,12 @@ export make_sorting_projection_example, make_stack_layout_document_example
 export make_syntax_document_example, make_syntax_leaf_document_example
 export make_syntax_projection_example, make_text_document_example
 export make_text_filtering_document_example, make_text_filtering_projection_example
+export make_highlighted_filtered_text_document_example, make_highlighted_filtered_text_projection_example
+export make_find_bar_document, make_find_bar_projection, make_find_bar_document_example,
+       make_filter_bar_document_example
 export make_text_highlighting_document_example, make_text_highlighting_projection_example
-export make_text_line_atom_document_example, make_text_newline_atom_document_example
+export make_text_marking_document_example, make_text_marking_projection_example
+export make_text_line_atom_document_example
 export make_text_projection_example, make_text_string_atom_document_example
 export make_text_layout_projection_example, make_text_baseline_document_example
 export make_text_line_height_document_example, make_text_kerning_document_example
@@ -165,7 +225,9 @@ export make_widget_insertion_document_example, make_widget_label_document_exampl
 export make_widget_list_document_example, make_widget_menu_document_example
 export make_widget_menu_item_document_example, make_widget_option_document_example
 export make_widget_popup_document_example, make_widget_popup_projection_example
-export make_widget_progress_bar_document_example, make_widget_progress_ring_document_example, make_widget_projection_example
+export make_widget_progress_bar_atom_document_example, make_widget_progress_bar_document_example,
+       make_widget_progress_ring_atom_document_example, make_widget_progress_ring_document_example,
+       make_widget_projection_example
 export make_gesture_map_document_example
 export make_table_projection_example, make_math_table_projection_example
 export make_pane_document_example, make_empty_pane_document_example, make_pane_projection_example
@@ -189,10 +251,14 @@ export make_widget_tooltip_document_example, make_widget_transform_pane_document
 export make_widget_tree_document_example, make_window_document_document_example
 export make_word_wrapping_document_example, make_word_wrapping_projection_example
 export nested_object_to_widget_example, object_example, object_to_widget_example
+export object_to_widget_chosen_widgets_example, object_to_widget_plain_record_example
 export object_field_form_example, object_field_syntax_example
+export plain_server_copy_form_example, plain_server_cell_form_example, object_field_widget_form_example
+export object_field_form_chosen_widgets_example, plain_server_mutable_form_example
 export plain_text_example, print_example, reversing_example, rotating_vector_example
 export searching_example, sieve, sieve_bidirectional, sieve_prev, sorting_example
-export syntax_example, text_example, text_filtering_example, text_highlighting_example
+export syntax_example, text_example, text_filtering_example, text_highlighting_example, text_marking_example
+export find_bar_example, filter_bar_example, highlighted_filtered_text_example
 export text_with_image_example, widget_accordion_example, widget_alert_example
 export widget_avatar_example, widget_badge_example, widget_button_action_example
 export widget_button_example, widget_button_image_example, widget_card_example, widget_collapsible_card_example
@@ -211,6 +277,14 @@ export widget_toggle_example, widget_toggle_group_example, widget_toolbar_exampl
 export widget_toolbar_item_example
 export widget_tooltip_example, widget_transform_pane_example, widget_tree_example
 export word_wrapping_example, write_example_pdf
+export OutlineItem, make_document_tree_document_example, document_tree_example
+export make_explorer_document_example, make_explorer_section_document_example,
+       make_explorer_search_document_example, make_dashboard_document_example
+export make_background_work_log_document_example
+export make_work_plan_document_example, make_work_plan_step_document_example, work_plan_example
+export make_system_process_tree_document_example, make_system_process_document_example,
+       system_process_tree_example
+export make_natural_projection_example
 export Example, AtomicDocument, platform_examples, platform_atomic_documents
 export print_example, write_example_pdf
 
@@ -256,9 +330,11 @@ include("../example/platform/filesystem/FilesProjectionExample.jl")
 
 export filesystem_example_root
 export make_filesystem_document_example, make_filesystem_file_document_example, make_filesystem_directory_document_example
+export make_filesystem_chooser_document_example
 export make_filesystem_projection_example, make_filesystem_widget_projection_example
 export make_files_document_example, make_files_projection_example
-export make_workspace_folder_document_example, make_workspace_document_example
+export make_workspace_folder_document_example, make_workspace_document_example,
+       make_workspace_explorer_document_example
 end # module FileSystemExamples
 
 for _part in (FileSystemExamples,)

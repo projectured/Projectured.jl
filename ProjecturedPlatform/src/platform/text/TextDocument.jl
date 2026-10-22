@@ -1,20 +1,23 @@
 # Fragment of `TextModule`.
 #
 # The text domain bridges the structural (syntax tree) and visual (graphics) domains.
-# Text is stored as a flat sequence of spans, each with its own reactive style and color.
+# Text is stored as a sequence of lines, each a sequence of spans with their own
+# reactive style and color.
 # The selection is a flat character offset, making keyboard navigation straightforward
 # before the pixel-coordinate layout is applied.
 #
 # The domain includes:
-# - **Span types**: `TextString` (text content), `TextNewline` (line break), `TextSpacing` (spacing), `TextGraphics` (embedded graphics)
-# - **Container type**: `TextBlock` (sequence of spans)
+# - **Span types**: `TextString` (text content), `TextSpacing` (spacing), `TextGraphics` (embedded graphics)
+# - **Line type**: `TextLine` (a sequence of spans, with the break before it)
+# - **Container type**: `TextBlock` (sequence of lines)
 # - **Base type**: `TextDocument` abstract type for all text documents
 # - **Insertion kit** (`@domain Text`): `TextNothing` (the empty-text placeholder) and
 #   `TextInsertion` (the typed-name buffer Insert opens on it)
 #
 # Selection semantics (`[i]` = 1-based item, `{k}` = 0-based cursor):
 # - Spans: `.content{k}` — cursor at boundary k within the span's content
-# - TextBlock: `.elements[i]` — the i-th span, then `.content{k}` for the cursor within it
+# - TextBlock: `.elements[i].elements[j]` — span j of line i, then `.content{k}` for
+#   the cursor within it; the canonical caret is the flat `TextRangeReferenceStep{k}`
 #
 # Each span has reactive styling fields:
 # - `font` — font style (e.g., "bold", "italic", "monospace")
@@ -33,36 +36,6 @@
 # turning one into the other, and the traits wiring them together.
 
 @domain Text
-
-# ── TextNewline ─────────────────────────────────────────────────────
-
-"""
-    TextNewline
-
-Represents a line break in text. All styling fields are reactive cells for
-incremental updates.
-
-# Fields
-
-- `font::Cell{StyleFont}` — font specification
-- `font_color::Cell` — text color
-- `fill_color::Cell` — background fill color
-- `line_color::Cell` — border/line color
-- `padding::Cell` — inset/padding value
-
-# Constructor
-
-- `TextNewline(; font, font_color="", fill_color=nothing, line_color=nothing, padding=nothing)`
-  — the macro's keyword constructor; `font` is the one field without a default,
-  and so the one required keyword.
-"""
-@document struct TextNewline <: TextDocument
-    font::StyleFont
-    font_color::StyleColor = ""
-    fill_color::StyleColor = nothing
-    line_color::StyleColor = nothing
-    padding::Inset = nothing
-end
 
 # ── TextSpacing ─────────────────────────────────────────────────────
 
@@ -84,19 +57,19 @@ in pixels or character spaces.
 
 # Constructor
 
-- `TextSpacing(size::Number; unit=:pixel, font, font_color="", fill_color=nothing, line_color=nothing, padding=nothing)`
+- `TextSpacing(size::Number; unit=:pixel, font, font_color=nothing, fill_color=nothing, line_color=nothing, padding=nothing)`
 """
 @document struct TextSpacing <: TextDocument
     size::Number
     unit::Symbol
     font::StyleFont
-    font_color::StyleColor
-    fill_color::StyleColor
-    line_color::StyleColor
-    padding::Inset
+    font_color::Union{StyleColor, Nothing}
+    fill_color::Union{StyleColor, Nothing}
+    line_color::Union{StyleColor, Nothing}
+    padding::Union{Inset, Nothing}
 end
 
-TextSpacing(size::Number; unit=:pixel, font, font_color="", fill_color=nothing, line_color=nothing, padding=nothing) =
+TextSpacing(size::Number; unit=:pixel, font, font_color=nothing, fill_color=nothing, line_color=nothing, padding=nothing) =
     TextSpacing(Cell(size), Cell(unit), Cell(font), Cell(font_color), Cell(fill_color), Cell(line_color), Cell(padding), Cell(nothing))
 
 # ── TextString ─────────────────────────────────────────────────────
@@ -129,9 +102,9 @@ refers to the cursor within the span's `content` field:  `.content{k}`
     content::AbstractString
     font::ImmutableCell{StyleFont}
     font_color::ImmutableCell{StyleColor}
-    fill_color::StyleColor
-    line_color::StyleColor
-    padding::Inset
+    fill_color::Union{StyleColor, Nothing}
+    line_color::Union{StyleColor, Nothing}
+    padding::Union{Inset, Nothing}
     pointer_shape::Any
 end
 
@@ -216,9 +189,9 @@ it, take the style of the nearest text run of its line.
     content::Document
     width::Int32
     height::Int32
-    fill_color::StyleColor
-    line_color::StyleColor
-    padding::Inset
+    fill_color::Union{StyleColor, Nothing}
+    line_color::Union{StyleColor, Nothing}
+    padding::Union{Inset, Nothing}
 end
 
 TextGraphics(content, width::Integer, height::Integer; fill_color=nothing, line_color=nothing, padding=nothing) =
@@ -235,24 +208,29 @@ const OBJECT_REPLACEMENT_CHARACTER = '\uFFFC'
 # ── TextBlock ───────────────────────────────────────────────────────────
 
 """
-    TextBlock(spans)
+    TextBlock(lines...)
+    TextBlock(lines::Vector)
+    TextBlock(() -> lines)
 
-A sequence of `TextString` spans. The span list is a reactive `Cell`
-holding `Vector{TextString}`, so structural changes (add/remove spans)
-are tracked alongside per-span value changes.
+A text: a sequence of `TextLine`s. The arguments of each constructor are the
+lines, and the elements of a thunk are lines too. The list of lines is a
+`CellVector`, or a lazy `ListNode` of lines, so structural changes (add/remove
+lines) are tracked alongside per-span value changes. A block of zero lines is
+valid; a filter with no match gives one.
 
-The `selection` cell holds a path into the span sequence, or `nothing`:
-  `.elements[i]`  — cursor within element i
+The `selection` cell holds a place in the text, or `nothing`: the flat caret
+`TextRangeReferenceStep{k}`, or the structural `.elements[i].elements[j].content{k}`
+that an edit leaves behind.
 """
 @document struct TextBlock <: TextDocument
     elements::CollectionDocument = CellVector()
 end
 
-TextBlock(spans::Vector{<:TextDocument}) =
-    TextBlock(CellVector(Cell[Cell(s) for s in spans]), Cell(nothing))
+TextBlock(lines::Vector{<:TextDocument}) =
+    TextBlock(CellVector(Cell[Cell(line) for line in lines]), Cell(nothing))
 
-TextBlock(spans::TextDocument...) =
-    TextBlock(CellVector(Cell[Cell(s) for s in spans]), Cell(nothing))
+TextBlock(lines::TextDocument...) =
+    TextBlock(CellVector(Cell[Cell(line) for line in lines]), Cell(nothing))
 
 TextBlock(f::Function) = TextBlock(CellVector(Computation(f)), Cell(nothing))
 
@@ -270,14 +248,10 @@ trailing blank line.
 line, not a span**: no caret can land inside it, and a projection that indents
 does not have to emit (and later re-find) a whitespace `TextString`.
 
-The invariant — no `TextNewline` element, and no `TextString` whose content embeds
-a `'\\n'` — is a producer-side convention; nothing enforces it yet, since a span's
-content is a reactive cell that can grow a newline after construction.
-
-A block's elements are meant to be *either* spans *or* lines, not a mix. Mixing
-degrades gracefully rather than erroring (a line still breaks before itself), but
-the flat character offsets get hard to reason about, and no projection produces
-such a block.
+The invariant — no `TextString` whose content embeds a `'\\n'` — is a
+producer-side convention, since a span's content is a reactive cell that can grow
+a newline after construction; the guard `test_text_runs_hold_no_break` checks the
+examples.
 
 `gutter` is what the gutter shows beside the line: any document that the
 recursion prints to graphics, such as a [`TextGutter`](@ref), or `nothing`. It is
@@ -306,14 +280,14 @@ end
 
 TextLine(spans::Vector{<:TextDocument}; indentation::Integer = 0, gutter = nothing, fold = nothing) =
     TextLine(CellVector(Cell[Cell(s) for s in spans]), Cell(Int(indentation)), Cell(gutter),
-             Cell(fold), Cell(Int[]), Cell(nothing))
+             Cell(fold), Cell(CellVector{Int}()), Cell(nothing))
 
 TextLine(spans::TextDocument...; indentation::Integer = 0, gutter = nothing, fold = nothing) =
     TextLine(collect(TextDocument, spans); indentation, gutter, fold)
 
 TextLine(f::Function; indentation::Integer = 0, gutter = nothing, fold = nothing) =
     TextLine(CellVector(Computation(f)), Cell(Int(indentation)), Cell(gutter), Cell(fold),
-             Cell(Int[]), Cell(nothing))
+             Cell(CellVector{Int}()), Cell(nothing))
 
 # A lone line is not a document — it is a part of a block. Both of its fields are
 # defaulted, so unlike the span types (each has a required field, and so no
@@ -323,6 +297,220 @@ TextLine(f::Function; indentation::Integer = 0, gutter = nothing, fold = nothing
 # line. It would also make `text` ambiguous — both `text block` and `text line`
 # start with it. Opt out, as `@domain` does for its own placeholder.
 DomainModule.insertable(::Type{<:TextLine}) = false
+
+# ── An edit of the lines of a block ────────────────────────────────────
+
+# Whether a flat edit of `block` is an edit of its lines: the replacement holds a
+# `'\n'` or the range covers a break.
+function _is_line_edit(block::TextBlock, start::Int, stop::Int, replacement::AbstractString)
+    occursin('\n', replacement) || (start < stop && any(==('\n'), view(_flat_chars(block), (start + 1):stop)))
+end
+
+
+# Replace the flat range `start:stop` of a block of lines with `replacement`: the
+# lines that the range covers join, and each `'\n'` of the replacement starts a line.
+# The first line keeps its object, its gutter and its fold; a new line takes its
+# indentation and no gutter. A run that the range cuts becomes two runs in its
+# style, and the text inserted takes the style of the run before it. An empty line
+# holds an empty run, so it has a height and a style for what is typed there.
+# Returns the flat offset after the inserted text.
+function _splice_lines!(block::TextBlock, start::Int, stop::Int, replacement::AbstractString)
+    lines = collect(block.elements)
+    offsets = get_flat_offsets(block)
+    a, start_in_line = _find_text_line_offset(lines, offsets, start)
+    b, stop_in_line = _find_text_line_offset(lines, offsets, stop)
+    head, style = _split_line_runs(lines[a], start_in_line, :head)
+    tail, tail_style = _split_line_runs(lines[b], stop_in_line, :tail)
+    style = something(style, tail_style, Some(nothing))
+    make(text) = style === nothing ? TextString(String(text)) : _make_run_like(style, text)
+    pieces = split(replacement, '\n')
+    runs = [TextDocument[] for _ in pieces]
+    append!(runs[1], head)
+    for (k, piece) in enumerate(pieces)
+        isempty(piece) || push!(runs[k], make(piece))
+    end
+    append!(runs[end], tail)
+    for line_runs in runs
+        isempty(line_runs) && push!(line_runs, make(""))
+    end
+    first_line = lines[a]
+    _replace_line_runs!(first_line, runs[1])
+    b > a && deleteat!(block.elements, (a + 1):b)
+    indentation = first_line.indentation
+    for k in 2:length(runs)
+        insert!(block.elements, a + k - 1, TextLine(runs[k]; indentation))
+    end
+    last = a + length(runs) - 1
+    at = length(runs) > 1 ? length(pieces[end]) : start_in_line + length(pieces[1])
+    get_flat_offsets(block)[last] + block.elements[last].indentation + at
+end
+
+# The line of a block of lines that holds the flat offset `flat`, and the offset in
+# the text of that line, after its indentation; an offset in the indentation stands
+# at the start of the text.
+function _find_text_line_offset(lines, offsets, flat::Int)
+    for k in length(lines):-1:1
+        flat >= offsets[k] || continue
+        line = lines[k]
+        length_of_text = get_flat_length(line) - line.indentation
+        return (k, clamp(flat - offsets[k] - line.indentation, 0, length_of_text))
+    end
+    (1, 0)
+end
+
+# The runs of `line` before the offset `at` of its text (`:head`) or after it
+# (`:tail`), a run that the offset cuts made anew for its part, and the run whose
+# style the text at the offset takes: the run before it, else the run after it.
+function _split_line_runs(line::TextLine, at::Int, part::Symbol)
+    runs = TextDocument[]
+    style = nothing
+    position = 0
+    for run in line.elements
+        length_of_run = get_flat_length(run)
+        if position + length_of_run <= at
+            part === :head && push!(runs, run)
+            run isa TextString && (style = run)
+        elseif position >= at
+            part === :tail && push!(runs, run)
+            (style === nothing && run isa TextString) && (style = run)
+        else
+            characters = collect(run.content::AbstractString)
+            cut = at - position
+            part === :head ? push!(runs, _make_run_like(run, String(characters[1:cut]))) :
+                             push!(runs, _make_run_like(run, String(characters[(cut + 1):end])))
+            style = run
+        end
+        position += length_of_run
+    end
+    filter!(run -> !(run isa TextString && isempty(run.content::AbstractString)), runs)
+    (runs, style)
+end
+
+# A run with the text `text` in the style of `run`.
+_make_run_like(run::TextString, text::AbstractString) =
+    TextString(Cell(String(text)), getfield(run, :font), getfield(run, :font_color), Cell(run.fill_color),
+               Cell(run.line_color), Cell(run.padding), Cell(run.pointer_shape), Cell(nothing))
+
+# Make `runs` the runs of `line`.
+function _replace_line_runs!(line::TextLine, runs::Vector{TextDocument})
+    elements = line.elements
+    deleteat!(elements, 1:length(elements))
+    for run in runs
+        push!(elements, run)
+    end
+end
+
+# ── make_text_block ────────────────────────────────────────────────────
+
+"""
+    make_text_block(content) -> TextBlock
+    make_text_block(content, style::StyleText) -> TextBlock
+    make_text_block(content::Function, style::StyleText; placeholder, empty_thunk) -> TextBlock
+
+A text of lines in `style` from a string, or from a function that gives one: a
+`TextLine` for each line of the string, with one run, and an empty run on an empty
+line. With no style, the runs are in the font of a text that names none
+(`UNSTYLED_TEXT_FONT`) and the default colour, as `TextString(content)` is. The flat string of the block is the string, because the break before a line
+counts one character as the `'\\n'` does, so a flat offset is an offset into the
+string.
+
+When the string of the function changes, a line whose text did not change keeps
+its object: the lines of the common head and of the common tail. So a layout that
+keys a line by its object lays out the changed lines only.
+
+With a `placeholder` and an `empty_thunk`, the block is one line that shows the
+placeholder in a muted colour while `empty_thunk()` is true, as
+[`make_hinted_text`](@ref) does for one run; the line is the same object each time.
+"""
+make_text_block(content::AbstractString) =
+    make_text_block(content, StyleText(UNSTYLED_TEXT_FONT, color_default))
+
+make_text_block(content::AbstractString, style::StyleText) =
+    TextBlock(TextDocument[_make_text_block_line(text, style) for text in split(content, '\n')])
+
+function make_text_block(content::Function, style::StyleText;
+                         placeholder::Union{Nothing,AbstractString} = nothing, empty_thunk = nothing)
+    previous = Ref(Pair{String, TextLine}[])
+    hint = Ref{Union{Nothing,TextLine}}(nothing)
+    TextBlock(function ()
+        if placeholder !== nothing && empty_thunk !== nothing && empty_thunk()
+            hint[] === nothing &&
+                (hint[] = TextLine(TextString(String(placeholder), style.font, color_solarized_gray)))  # @style: the hint colour of the content of the document, as `make_hinted_text` has it
+            return TextDocument[hint[]]
+        end
+        _compute_text_block_lines!(previous, content(), style)
+    end)
+end
+
+_make_text_block_line(text::AbstractString, style::StyleText) = TextLine(TextString(String(text), style))
+
+"""
+    append_text!(block::TextBlock, text) -> TextBlock
+
+Add `text` at the end of `block`, a block that [`make_text_block`](@ref) made from a
+string, not from a function: the text up to the first newline goes at the end of
+the last run of the last line, and each line after a newline is a new line of one
+run, in the font and the colour of that run. The lines before the last line keep
+their objects and their text, so a view of the block computes again only the last
+line and the lines that the text adds.
+
+Use it to grow a text that streams in, such as the answer of a model or the output
+of a program, so that each piece costs the same at the start and at the end of a
+long text.
+
+# Example
+
+    block = make_text_block("Hello")
+    append_text!(block, ", world\\nand more")   # the lines "Hello, world" and "and more"
+"""
+function append_text!(block::TextBlock, text::AbstractString)
+    isempty(text) && return block
+    lines = block.elements
+    isempty(lines) && push!(lines, TextLine())
+    run = _get_last_text_run!(lines[length(lines)])
+    pieces = split(text, '\n')
+    run.content = string(run.content::AbstractString, first(pieces))
+    for piece in Iterators.drop(pieces, 1)
+        push!(lines, TextLine(TextString(String(piece), run.font, run.font_color)))
+    end
+    block
+end
+
+# The last run of `line`, and a new empty run at its end when its last run is no
+# text, such as a line with no run.
+function _get_last_text_run!(line::TextLine)
+    runs = line.elements
+    if isempty(runs) || !(runs[length(runs)] isa TextString)
+        push!(runs, TextString("", UNSTYLED_TEXT_FONT))
+    end
+    runs[length(runs)]
+end
+
+# The lines of `content`, each with its text: the object of a line of `previous`
+# for each line of the common head and of the common tail, and a new line for the
+# lines between. `previous` takes the result.
+function _compute_text_block_lines!(previous::Ref{Vector{Pair{String, TextLine}}},
+                                    content::AbstractString, style::StyleText)
+    old = previous[]
+    texts = split(content, '\n')
+    count, old_count = length(texts), length(old)
+    head = 0
+    while head < min(count, old_count) && first(old[head + 1]) == texts[head + 1]
+        head += 1
+    end
+    tail = 0
+    while tail < min(count, old_count) - head && first(old[old_count - tail]) == texts[count - tail]
+        tail += 1
+    end
+    lines = Vector{Pair{String, TextLine}}(undef, count)
+    for k in 1:count
+        lines[k] = k <= head ? old[k] :
+                   k > count - tail ? old[old_count - (count - k)] :
+                   (String(texts[k]) => _make_text_block_line(texts[k], style))
+    end
+    previous[] = lines
+    TextDocument[last(line) for line in lines]
+end
 
 # ── TextGutter ─────────────────────────────────────────────────────────
 
@@ -353,26 +541,203 @@ DomainModule.insertable(::Type{<:TextGutter}) = false
 
 A region of lines that can fold: the line whose `fold` it is and the
 `line_count` lines after it. While it is `collapsed`, `TextFolding` hides all its
-lines but the first one, and puts `placeholder` at the end of the first one, or
-`…` when it is `nothing`. The lines stay in the text, so a number counts them.
+lines but the first one, and puts the runs of `placeholder` at the end of the first
+one, or `…` when it is `nothing`. The lines stay in the text, so a number counts them.
 A projection that makes the region can give it the `collapsed` cell of the part
 it shows, so the state stays in the document. `ToggleCollapseOperation` flips it.
 """
 @document struct TextFold <: TextDocument
     line_count::Int = 0
     collapsed::Bool = false
-    placeholder::Union{Document, Nothing} = nothing
+    placeholder::Union{Vector{TextDocument}, Nothing} = nothing
 end
 
 # A fold is a part of a line, not a document to insert on its own.
 DomainModule.insertable(::Type{<:TextFold}) = false
 
+# ── HighlightedText ─────────────────────────────────────────────────────────
+
+"""
+    HighlightedText(; text, pattern = "", regex = false, case_insensitive = false)
+
+A text with the matches of a pattern marked: the "highlight all" of a find bar.
+
+Use it to show where a pattern occurs in a text, and to let a person change the
+pattern. `text` is the text: a `TextBlock`, or another document whose projection
+gives one, such as a `FilteredText`. `pattern` is what a person types; `regex`
+says whether it is a regular expression or literal text, and `case_insensitive`
+whether case matters (`make_text_pattern`). The fields are data of the document,
+so a form of them edits the highlight, with a caret, undo and a save like any
+other field. `HighlightedTextToText` draws it.
+
+# Example
+
+    HighlightedText(text = TextBlock(TextString("alpha beta")), pattern = "beta")
+
+See also `make_text_pattern`, which makes the pattern from the fields.
+"""
+@document struct HighlightedText
+    text::Any
+    pattern::String = ""
+    regex::Bool = false
+    case_insensitive::Bool = false
+end
+
+# ── FilteredText ────────────────────────────────────────────────────────────
+
+"""
+    FilteredText(; text, pattern = "", regex = false, case_insensitive = false,
+                 invert = false)
+
+A text with only the lines that match a pattern: the `grep` of a find bar.
+
+Use it to narrow a text to the lines that a person looks for, and to let the
+person change the pattern. `text` is the text: a `TextBlock`, or another
+document whose projection gives one, such as a `HighlightedText`. `pattern`,
+`regex` and `case_insensitive` make the pattern, as for `HighlightedText`
+(`make_text_pattern`), and `invert` keeps the lines that do not match. An empty
+pattern keeps every line. `FilteredTextToText` draws it.
+
+# Example
+
+    FilteredText(text = HighlightedText(text = block, pattern = "dolor"),
+                 pattern = "dolor")   # the lines with "dolor", marked
+
+See also `HighlightedText`, which marks the matches and keeps every line.
+"""
+@document struct FilteredText
+    text::Any
+    pattern::String = ""
+    regex::Bool = false
+    case_insensitive::Bool = false
+    invert::Bool = false
+end
+
+# ── MarkedText ──────────────────────────────────────────────────────────────
+
+"""
+    TextMark(start, stop; text = nothing)
+
+A range of the string of a `MarkedText`, and the colour of its glyphs. `start`
+and `stop` count characters from 0, and `stop` is not in the range; a break
+counts one, so they are flat offsets of the printed text. `text` is a
+`ThemeColor`, such as `ColorRole(:function_name)`, or `nothing`, which keeps the
+colour of the text.
+
+# Example
+
+    TextMark(4, 8; text = ColorRole(:function_name))   # "main" in "int main() {"
+"""
+struct TextMark
+    start::Int
+    stop::Int
+    text::Union{ThemeColor, Nothing}
+end
+
+TextMark(start::Integer, stop::Integer; text = nothing) = TextMark(Int(start), Int(stop), text)
+
+"""
+    MarkedText(; text = "", marks = TextMark[])
+
+A string of any number of lines, and marks that colour ranges of it, such as
+the names of a source file in the colours of their kinds.
+
+Use it to show a text whose colours come from somewhere else than the text: a
+language server, a parser of a filter, a list of errors. `text` is the string
+that a person edits, with Enter, a paste of many lines and undo, as the string
+of a file. `marks` is a vector of `TextMark`, held as one value, so a new set
+of marks is one write; its cell can compute it (`set_cell_computation!`), so the
+colours follow a change of what they come from. The computation must give a
+final value: a provisional value, such as a background cell that has no answer
+yet, computes again at each read, and the lines read the marks once for each
+line. `MarkedTextToText` draws it.
+
+# Example
+
+    MarkedText(text = "int main() {\\n    return 0;\\n}",
+               marks = [TextMark(4, 8; text = ColorRole(:function_name))])
+
+See also `compute_moved_text_marks`, which moves the marks of an old text to a
+new one.
+"""
+@document struct MarkedText
+    text::String = ""
+    # `Any`, so the cell holds the vector as one value and not a list of cells.
+    marks::Any = TextMark[]
+end
+
+# A marked text that a file read again replaces keeps its object and takes the new
+# string, so its marks keep the cell that computes them, and they follow the new
+# string as they follow an edit.
+function replace_wrapped_document!(text::MarkedText, document::MarkedText)
+    text.text = document.text
+    text
+end
+
+"""
+    compute_moved_text_marks(marks, old_text, new_text) -> Vector{TextMark}
+
+The marks that were made for `old_text`, moved to `new_text`. The two texts
+have a common head and a common tail, and the part between them changed. A
+mark in the head stays, a mark in the tail moves by the difference of the
+lengths, and a mark that touches the changed part goes.
+
+Use it to show marks that come late, such as the answer of a server, on a text
+that changed after the question: the colours of the text around a key stay.
+
+# Example
+
+    marks = [TextMark(0, 3; text = ColorRole(:keyword)), TextMark(8, 13; text = ColorRole(:variable))]
+    compute_moved_text_marks(marks, "int x = count;", "int xy = count;")
+    # [TextMark(0, 3, …), TextMark(9, 14, …)]
+"""
+function compute_moved_text_marks(marks::AbstractVector{TextMark}, old_text::AbstractString,
+                                  new_text::AbstractString)
+    old_text == new_text && return collect(TextMark, marks)
+    old_length, new_length = length(old_text), length(new_text)
+    head = _count_common_head(old_text, new_text)
+    tail = _count_common_tail(old_text, new_text, min(old_length, new_length) - head)
+    changed_stop = old_length - tail
+    shift = new_length - old_length
+    moved = TextMark[]
+    for mark in marks
+        if mark.stop <= head
+            push!(moved, mark)
+        elseif mark.start >= changed_stop
+            push!(moved, TextMark(mark.start + shift, mark.stop + shift, mark.text))
+        end
+    end
+    moved
+end
+
+# The count of the characters at the start of `a` and `b` that are the same.
+function _count_common_head(a::AbstractString, b::AbstractString)
+    count = 0
+    i, j = firstindex(a), firstindex(b)
+    while i <= ncodeunits(a) && j <= ncodeunits(b) && a[i] == b[j]
+        count += 1
+        i, j = nextind(a, i), nextind(b, j)
+    end
+    count
+end
+
+# The count of the characters at the end of `a` and `b` that are the same, at most
+# `limit`, so that a head and a tail never share a character.
+function _count_common_tail(a::AbstractString, b::AbstractString, limit::Int)
+    count = 0
+    i, j = lastindex(a), lastindex(b)
+    while count < limit && i >= 1 && j >= 1 && a[i] == b[j]
+        count += 1
+        i, j = prevind(a, i), prevind(b, j)
+    end
+    count
+end
+
 # ── Span coordinates ──────────────────────────────────────────────────────
 #
-# A span's coordinate within a block is an *index path*, not a single index:
-# `[i]` is the i-th element of the block, `[i, j]` the j-th span of the
-# `TextLine` at element i. The cursor, word-motion and editing helpers all walk
-# these, so a block of lines and a flat block of spans are the same code — as does
+# A span's coordinate within a block is the path `[i, j]`: the j-th span of the
+# `TextLine` at element i. A block holds only lines, so every span is in a line.
+# The cursor, word-motion and editing helpers all walk these, as does
 # `TextToGraphics`, which keys its coordinate table (`SegmentCoordinate.span_path`) by them.
 const SpanPath = Vector{Int}
 
@@ -382,13 +747,13 @@ const SpanPath = Vector{Int}
 # a `.elements[i].content{k}` caret, so the freshly inserted text takes no
 # keystrokes. One empty span with the caret in it is the smallest typeable text.
 #
-# The span types (`TextString`, `TextNewline`, `TextSpacing`, `TextGraphics`) get
+# The span types (`TextString`, `TextSpacing`, `TextGraphics`) get
 # no factory on purpose: each has a required field, so none is zero-arg
 # constructible, and none is therefore a completion candidate. A factory would
 # make them committable at a *top-level* insertion, where a lone span is the root
 # document — and the text pipeline prints a `TextBlock`, not a bare span. Making
 # spans insertable belongs with a caret-level "insert a span here" gesture.
-@insertion TextBlock = @selected TextBlock([TextString("")]) elements[1].content{0}
+@insertion TextBlock = @selected TextBlock(TextLine(TextString(""))) elements[1].elements[1].content{0}
 
 
 # ── splice_value! methods for the text representations ──────────────
@@ -414,6 +779,7 @@ splice_value!(owner, field::Symbol, span::TextString, s::Int, e::Int, replacemen
 # grows a fresh span. Ranges that straddle two spans are left for a later
 # multi-span editing pass.
 function splice_value!(owner, field::Symbol, text::TextBlock, s::Int, e::Int, replacement::AbstractString)
+    _is_line_edit(text, s, e, replacement) && (_splice_lines!(text, s, e, replacement); return text)
     infos = _text_span_infos(text)
     for (path, len) in infos
         base = get_flat_base(text, path)
@@ -452,33 +818,30 @@ function _splice_beside_image!(text::TextBlock, s::Int, e::Int, replacement::Abs
 end
 
 # The element list that holds the span at `path`.
-_get_container(text::TextBlock, path::SpanPath) =
-    length(path) == 1 ? text.elements : text.elements[path[1]].elements
+_get_container(text::TextBlock, path::SpanPath) = text.elements[path[1]].elements
 
 # The span document at `path` (the caller has already established it is one).
-_span_at(text::TextBlock, path::SpanPath) =
-    length(path) == 1 ? text.elements[path[1]] : text.elements[path[1]].elements[path[2]]
+_span_at(text::TextBlock, path::SpanPath) = text.elements[path[1]].elements[path[2]]
 
 # ── read_gesture via reified @gestures: geometry-free text editing ───────
 #
-# The projection-independent half of the Text domain's reader, now a reified
-# `@gestures` table on `TextBlock` (was a `read_gesture(::TextBlock)` method); the
-# generic `read_bound_gesture` interpreter fires it, so the table that fires is
-# the one gesture-help enumerates. It reads only the span structure
-# (`text.elements`) and the flat-character `text.selection` — never pixel geometry.
-# The geometry-DEPENDENT gestures (visual up/down, plain Home/End, mouse clicks)
-# stay in `TextToGraphics`, which needs the laid-out coordinate map.
+# The projection-independent half of the reader of the Text domain: a `@gestures`
+# table on `TextBlock`, which the generic `read_bound_gesture` interpreter fires,
+# so the table that fires is the one that the gesture help lists. It reads only the
+# lines (`text.elements`) and the flat `text.selection`, never pixel geometry. The
+# gestures that need the layout (visual up/down, plain Home/End, mouse clicks) are
+# in `TextToGraphics`.
 #
-# Gestures match modifiers *exactly* (`KeyDown(:left;)` — note the `;`: no
-# modifiers — is the plain-Left gesture; `Ctrl+Left` and `Alt+Left` are distinct).
-# This is why the old reader's explicit "decline" arms vanish: `Alt+arrow` (a tree
-# gesture) and `Tab` simply have no binding here and so propagate inward; a plain
-# arrow while a *whole element* is selected is declined inside the char-motion
-# operation (which reads `text.selection`). The old reader matched these arrows
-# loosely and filtered the declines out by hand; exact matching is equivalent for
-# every tested/real input and lets the absence of a binding be the decline.
+# Gestures match modifiers exactly: `KeyDown(:left;)`, with the `;` and no flag, is
+# a plain Left, and Ctrl+Left and Alt+Left are other gestures. A gesture with no
+# binding here propagates: Alt+arrow (a tree gesture), and Tab, whose `'\t'` the
+# rule of typed text does not take. The rule of typed text takes printable text
+# only, so Ctrl+Return, which types `'\n'` with Ctrl, also propagates. A plain arrow
+# while a whole element is selected is declined inside the motion of the caret,
+# which reads `text.selection`.
 @gestures TextBlock begin
-    KeyPress(_, t)         => "Insert character"     => _text_insert(doc, t)
+    when(KeyPress(_, t), !any(iscntrl, t)) => "Insert character" => _text_insert(doc, t)
+    KeyPress('\n';)        => "Break the line"       => _text_break(doc)
     KeyDown(:period; ctrl) => "Toggle collapse"      => ToggleCollapseOperation()
     KeyDown(:backspace;)   => "Delete backward"      => _text_delete(doc, :backspace)
     KeyDown(:delete;)      => "Delete forward"       => _text_delete(doc, :delete)
@@ -500,8 +863,7 @@ end
 #
 # The text cursor is a single flat offset into the block's concatenated rendered
 # stream (the `get_flat_offsets` / `get_flat_length` space, which counts
-# TextNewline / TextSpacing / TextLine indentation and the implicit inter-line
-# break). Every offset `0 … total` is a valid caret rest, so character motion is
+# TextSpacing, TextLine indentation and the break before a line). Every offset `0 … total` is a valid caret rest, so character motion is
 # `± 1` clamped — no span bookkeeping and no boundary-duplicate skip: the *same*
 # visual caret has exactly one representation regardless of travel direction, and
 # a within-line span boundary collapses to a single offset while a line boundary
@@ -513,7 +875,7 @@ end
 function _text_flat_total(text::TextBlock)
     total = 0
     for (k, el) in enumerate(text.elements)
-        (el isa TextLine && k > 1) && (total += 1)   # implicit inter-line break
+        k > 1 && (total += 1)   # the break before the line
         total += get_flat_length(el)
     end
     total
@@ -525,13 +887,12 @@ end
 function _flat_chars(text::TextBlock)
     chars = Char[]
     for (k, el) in enumerate(text.elements)
-        (el isa TextLine && k > 1) && push!(chars, '\n')   # implicit inter-line break
+        k > 1 && push!(chars, '\n')   # the break before the line
         _push_flat_chars!(chars, el)
     end
     chars
 end
 _push_flat_chars!(chars, s::TextString) = append!(chars, collect(s.content::AbstractString))
-_push_flat_chars!(chars, ::TextNewline)  = push!(chars, '\n')
 _push_flat_chars!(chars, ::TextSpacing)  = push!(chars, ' ')
 _push_flat_chars!(chars, ::TextGraphics) = push!(chars, OBJECT_REPLACEMENT_CHARACTER)
 _push_flat_chars!(chars, ::TextDocument) = chars          # no position, as in get_flat_length
@@ -549,11 +910,13 @@ end
     get_flat_string(text::TextBlock) -> String
 
 The text as one string, one character for each position of the flat caret space
-(`get_flat_offsets`): a break for a `TextNewline` and for the break before a
-`TextLine`, a space for a `TextSpacing` and for each column of indentation, and
+(`get_flat_offsets`): a break for the break before a `TextLine`, a space for a `TextSpacing` and for each column of indentation, and
 U+FFFC for an inline image. An offset into the string is a flat offset.
 """
 get_flat_string(text::TextBlock) = String(_flat_chars(text))
+
+# The text of one line, its indentation included, with no break.
+get_flat_string(line::TextLine) = String(_push_flat_chars!(Char[], line))
 
 # The flat text selection `(start, stop)` — from a flat `TextRangeReferenceStep` head,
 # or a structural `.content{a:b}` caret canonicalised to its flat offsets — else
@@ -606,8 +969,8 @@ caret a *lowered* `ReplaceStringRangeOperation` leaves behind after a character 
 `nothing` for a range, a whole-element `∅` / `TextSpanReferenceStep` selection, or any
 non-caret shape.
 
-The text→text decorators (`WordWrapping`, `LineNumbering`, `TextFiltering`,
-`TextHighlighting`, `SelectionInverting`) forward-map the cursor through this, so the
+The text→text decorators (`WordWrapping`, `LineNumbering`, `FilteredTextToText`,
+`HighlightedTextToText`, `SelectionInverting`) forward-map the cursor through this, so the
 caret renders no matter which representation the last operation left on the block —
 without it, a structural caret maps to nothing and the cursor disappears after an edit.
 """
@@ -623,6 +986,20 @@ function get_flat_caret(block::TextBlock, ref)
     base = get_flat_base(block, path)
     base === nothing ? nothing : base + a
 end
+
+"""
+    get_flat_range(block, ref) -> (start, stop) | nothing
+
+The flat range that a reference denotes over `block`, from either form of a place
+in a text: the flat `TextRangeReferenceStep{s:e}` form, or the structural
+`….content{s:e}` form that an edit leaves behind. A caret is the empty range
+`(k, k)`. `nothing` for a whole-element `∅` or `TextSpanReferenceStep` selection,
+or any other shape.
+
+A projection that gives a text of one line maps a place backward through this and
+[`get_flat_caret`](@ref), so it does not name the steps of the shape of a text.
+"""
+get_flat_range(block::TextBlock, ref) = _text_flat_selection(block, ref)
 
 # The flat caret resolved to a `(span, char)` pair for the renderer / line-motion
 # geometry, or `nothing` when there is no caret, the selection is a range, or the
@@ -687,29 +1064,22 @@ end
 # span layout the cursor/word helpers walk.
 function _text_span_infos(text::TextBlock)
     infos = Tuple{SpanPath,Int}[]
-    for (i, el) in enumerate(text.elements)
-        if el isa TextString
-            push!(infos, ([i], length(el.content::AbstractString)))
-        elseif el isa TextLine
-            for (j, span) in enumerate(el.elements)
-                span isa TextString || continue
-                push!(infos, ([i, j], length(span.content::AbstractString)))
-            end
+    for (i, line) in enumerate(text.elements)
+        for (j, span) in enumerate(line.elements)
+            span isa TextString || continue
+            push!(infos, ([i, j], length(span.content::AbstractString)))
         end
     end
     infos
 end
 
-# The path of every inline image, in document order, at either depth.
+# The path of every inline image, in document order.
 function _collect_image_paths(text::TextBlock)
     paths = SpanPath[]
-    for (i, el) in enumerate(text.elements)
-        if el isa TextGraphics
-            push!(paths, Int[i])
-        elseif el isa TextLine
-            for (j, span) in enumerate(el.elements)
-                span isa TextGraphics && push!(paths, Int[i, j])
-            end
+    for (i, line) in enumerate(text.elements)
+        line isa TextLine || continue
+        for (j, span) in enumerate(line.elements)
+            span isa TextGraphics && push!(paths, Int[i, j])
         end
     end
     paths
@@ -724,25 +1094,49 @@ function _text_insert(text::TextBlock, str::AbstractString)
     ReplaceTextRangeOperation(make_flat_range_reference(sel[1], sel[2]), str)
 end
 
+# Enter: a break at the cursor. A projection that gives a value of one line
+# declines the break when it maps the edit back, so the key goes on to the bindings
+# around the text, such as the one that makes the value of a type-in.
+_text_break(text::TextBlock) = _text_insert(text, "\n")
+
 # Backspace / Delete: the flat range to remove. A non-empty selection is deleted;
 # a caret removes the char before it (backspace) / after it (delete), clamped at
-# the ends. Whether a range that crosses a span/break boundary actually applies is
-# decided when the op is lowered (v1: a cross-span range declines).
+# the ends. At the start of the text of a line (backspace) or at its end (delete) it
+# removes the break and the indentation of the lower line, so the two lines join.
 function _text_delete(text::TextBlock, key::Symbol)
     sel = _text_flat_selection(text)
     sel === nothing && return nothing
     s, e = sel
-    if s != e
-        rng = (s, e)
-    elseif key === :backspace
-        s > 0 || return nothing
-        rng = (s - 1, s)
-    else  # :delete
-        n = _text_flat_total(text)
-        s < n || return nothing
-        rng = (s, s + 1)
-    end
+    rng = s != e ? (s, e) :
+          something(_find_line_join_range(text, s, key), _find_char_range(text, s, key), Some(nothing))
+    rng === nothing && return nothing
     ReplaceTextRangeOperation(make_flat_range_reference(rng[1], rng[2]), "")
+end
+
+# The character before the caret `c` (`:backspace`) or after it (`:delete`), or
+# `nothing` at the end of the text in that direction.
+_find_char_range(text::TextBlock, c::Int, key::Symbol) =
+    key === :backspace ? (c > 0 ? (c - 1, c) : nothing) :
+                         (c < _text_flat_total(text) ? (c, c + 1) : nothing)
+
+# The flat range that joins two lines when the caret `c` stands at the start of the
+# text of a line (`:backspace`) or at its end (`:delete`): the break between them
+# and the indentation of the lower line, which no edit owns. `nothing` when the
+# caret stands elsewhere.
+function _find_line_join_range(text::TextBlock, c::Int, key::Symbol)
+    elements = collect(text.elements)
+    offsets = get_flat_offsets(text)
+    for (k, line) in enumerate(elements)
+        line isa TextLine || continue
+        start = offsets[k]
+        if key === :backspace && k > 1 && elements[k - 1] isa TextLine && c == start + line.indentation
+            return (start - 1, c)
+        elseif key === :delete && k < length(elements) && elements[k + 1] isa TextLine &&
+               c == start + get_flat_length(line)
+            return (c, offsets[k + 1] + elements[k + 1].indentation)
+        end
+    end
+    nothing
 end
 
 # Ctrl+Home / Ctrl+End: caret to flat offset 0 / the total flat length.
@@ -807,14 +1201,11 @@ end
 
 # The span at `path`'s content when it is a TextString; nothing otherwise.
 function _span_content(text::TextBlock, path::SpanPath)
+    length(path) == 2 || return nothing
     elements = text.elements
     i = path[1]
     (i < 1 || i > length(elements)) && return nothing
     el = elements[i]
-    if length(path) == 1
-        el isa TextString || return nothing
-        return el.content::AbstractString
-    end
     el isa TextLine || return nothing
     spans = el.elements
     j = path[2]
@@ -825,8 +1216,7 @@ function _span_content(text::TextBlock, path::SpanPath)
 end
 
 # Parse `text.selection[]` into (path, char_start, char_stop) when it matches
-# `.elements[i].content[s:e]` or the in-line `.elements[i].elements[j].content[s:e]`,
-# else return nothing. Selections are canonical at rest; the node types are
+# `.elements[i].elements[j].content[s:e]`, else return nothing. Selections are canonical at rest; the node types are
 # stripped (this parser extracts only integer span/char offsets) before the raw
 # structural walk.
 _text_selection_range(text::TextBlock) = _text_selection_range(text, text.selection)
@@ -843,18 +1233,15 @@ function _parse_selection_range(sel)
     t1 isa ConcreteReference || return nothing
     h2 = t1.head
     h2 isa RangeReferenceStep || return nothing
-    path = Int[h2.start + 1]
     rest = t1.tail
+    # The hop into the line: `.elements[j]` again before `.content`.
+    (rest isa ConcreteReference && rest.head isa FieldReferenceStep &&
+     rest.head.name == "elements") || return nothing
+    inner = rest.tail
+    (inner isa ConcreteReference && inner.head isa RangeReferenceStep) || return nothing
+    path = Int[h2.start + 1, inner.head.start + 1]
+    rest = inner.tail
     rest isa ConcreteReference || return nothing
-    # One optional hop into a TextLine: `.elements[j]` again before `.content`.
-    if rest.head isa FieldReferenceStep && rest.head.name == "elements"
-        inner = rest.tail
-        inner isa ConcreteReference || return nothing
-        inner.head isa RangeReferenceStep || return nothing
-        push!(path, inner.head.start + 1)
-        rest = inner.tail
-        rest isa ConcreteReference || return nothing
-    end
     (rest.head isa FieldReferenceStep && rest.head.name == "content") || return nothing
     t3 = rest.tail
     t3 isa ConcreteReference || return nothing
@@ -974,7 +1361,7 @@ lowered to the structural single-span form here so the clipboard stays unchanged
 """
 function make_text_insert_operation(text::TextBlock, str::AbstractString)
     op = _text_insert(text, str)
-    op === nothing ? nothing : _lower_text_range(text, op)
+    op === nothing ? nothing : _lower_unless_line_edit(text, op)
 end
 
 # A whole-element selection projects to `∅` (the root element), a
@@ -1002,7 +1389,7 @@ set_cell_computation!(st::TextBlock, f::Function) = (set_cell_computation!(getfi
 
 # The flat length a span contributes to the rendered character stream, matching
 # how the selection's offsets are counted: TextString → its content length,
-# TextNewline / TextSpacing / TextGraphics → 1, anything else → 0. An inline image
+# TextSpacing / TextGraphics → 1, anything else → 0. An inline image
 # is one position, so the caret before it and the caret after it differ.
 #
 # A `TextLine` contributes its indentation (which the renderers emit as leading
@@ -1010,12 +1397,15 @@ set_cell_computation!(st::TextBlock, f::Function) = (set_cell_computation!(getfi
 # lengths — but *not* the break it implies: that sits between elements, so the
 # container adds it (see `get_flat_offsets`) and a line-structured block gets
 # `n-1` breaks for `n` lines rather than a phantom trailing one.
+#
+# A `TextBlock` contributes its whole flat length, breaks included: a block that a
+# document holds in a field, such as the value of a syntax leaf.
 get_flat_length(span::TextString) = length(span.content::AbstractString)
-get_flat_length(::TextNewline) = 1
 get_flat_length(::TextSpacing) = 1
 get_flat_length(::TextGraphics) = 1
 get_flat_length(line::TextLine) =
     line.indentation + sum(get_flat_length(s) for s in line.elements; init = 0)
+get_flat_length(text::TextBlock) = _text_flat_total(text)
 get_flat_length(::TextDocument) = 0
 
 """
@@ -1034,7 +1424,7 @@ function get_flat_offsets(text::TextBlock)
     offsets = Int[]
     pos = 0
     for (k, element) in enumerate(text.elements)
-        (element isa TextLine && k > 1) && (pos += 1)   # the break before this line
+        k > 1 && (pos += 1)   # the break before this line
         push!(offsets, pos)
         pos += get_flat_length(element)
     end
@@ -1074,60 +1464,14 @@ function get_flat_selection(text::TextBlock)
     (base + a, base + b, a == b)
 end
 
-# ── Decorator flat↔element helpers ─────────────────────────────────────────
-# The text→text decorators (WordWrapping, LineNumbering, TextFiltering,
-# TextHighlighting, SelectionInverting) remap the flat cursor between their input
-# and output blocks through a per-span seg table keyed on element index + char.
-# These bridge a flat offset (the break/indentation-aware caret space) and the
-# `(element_index, char)` the seg tables use. The decorator blocks are flat
-# sequences (TextString / TextNewline / TextSpacing — no nested TextLines), so an
-# element index is a single `[i]` path.
-
-"""
-    convert_flat_offset_to_element(block, flat) -> (element_index, char) | nothing
-
-The `TextString` element a flat offset lands in and the char offset within it, or
-the inline image beside it where no `TextString` holds the offset (char 0 before
-the image, char 1 after it). A gap offset (on a break/spacing element) clamps to
-the nearest `TextString` boundary; `nothing` only when the block has no
-`TextString`.
-"""
-function convert_flat_offset_to_element(block::TextBlock, flat::Int)
-    loc = _find_flat_place(block, flat)
-    loc !== nothing && length(loc[1]) == 1 && return (loc[1][1], loc[2])
-    best = nothing
-    bestd = typemax(Int)
-    for (path, len) in _text_span_infos(block)
-        length(path) == 1 || continue
-        base = get_flat_base(block, path)
-        base === nothing && continue
-        d = flat < base ? base - flat : (flat > base + len ? flat - (base + len) : 0)
-        if d < bestd
-            bestd = d
-            best = (path[1], clamp(flat - base, 0, len))
-        end
-    end
-    best
-end
-
-"""
-    convert_element_to_flat_offset(block, element_index, char) -> flat | nothing
-
-The flat offset of `char` within the `TextString` at `element_index`.
-"""
-function convert_element_to_flat_offset(block::TextBlock, elem::Int, char::Int)
-    base = get_flat_base(block, Int[elem])
-    base === nothing ? nothing : base + char
-end
-
 # The flat offset the span at `path` starts at, or nothing when the path does not
 # land on a span.
 function get_flat_base(text::TextBlock, path::SpanPath)
+    length(path) == 2 || return nothing
     offsets = get_flat_offsets(text)
     i = path[1]
     (1 <= i <= length(offsets)) || return nothing
     base = offsets[i]
-    length(path) == 1 && return base
     line = text.elements[i]
     line isa TextLine || return nothing
     spans = line.elements
@@ -1306,6 +1650,13 @@ function evaluate_operation(editor, op::ReplaceTextRangeOperation)
         return
     end
     block isa TextBlock || return
+    if _is_line_edit(block, start, stop, op.replacement)
+        newpos = _splice_lines!(block, start, stop, op.replacement)
+        steps = get_reference_steps(strip_reference_types(op.reference))
+        clear_selection!(document)
+        set_selection!(document, Reference(steps[1:end-1]..., TextRangeReferenceStep(newpos, newpos)))
+        return
+    end
     image_edit = _make_image_edit(block, start, stop, op.replacement)
     if image_edit !== nothing
         evaluate_operation(editor, reroot_operation(image_edit, Tuple(get_reference_steps(block_path))))
@@ -1363,9 +1714,7 @@ function _flat_span_range_end(block::TextBlock, flat::Int)
 end
 
 # The `(span_path, char)` a flat offset resolves to, clamping a break/gap offset to the
-# nearest `TextString` span. Path-returning (so it locates a span inside a `TextLine`,
-# `[i, j]`), unlike `convert_flat_offset_to_element` which yields only a top-level index and so
-# returns nothing for a line-structured block.
+# nearest `TextString` span. The path is `[line, run]`.
 function _flat_to_span_nearest(block::TextBlock, flat::Int)
     exact = _flat_to_span(block, flat)
     exact === nothing || return exact
@@ -1391,10 +1740,23 @@ end
 # A block whose elements are a list has no flat caret stream: the list can be
 # endless, so it has no end to go to, and a flat offset would walk it. Such a
 # block reads no key.
+#
+# An edit of the lines of a block of lines stays flat: one whose replacement holds a
+# `'\n'`, or whose range covers a break. Each stage maps its flat offsets, and the
+# stage that owns the text splits or joins its lines.
 function _read_lowered_gesture(block::TextBlock, evt)
     block.elements isa ListNode && return nothing
     op = read_gesture(block, evt)
-    op isa ReplaceTextRangeOperation ? _lower_text_range(block, op) : op
+    op isa ReplaceTextRangeOperation ? _lower_unless_line_edit(block, op) : op
+end
+
+# A flat edit lowered to the run it falls in, or kept flat when it is an edit of
+# the lines of `block`.
+function _lower_unless_line_edit(block::TextBlock, op::ReplaceTextRangeOperation)
+    r = strip_reference_types(op.reference)
+    (r isa ConcreteReference && r.head isa TextRangeReferenceStep &&
+     _is_line_edit(block, r.head.start::Int, r.head.stop::Int, op.replacement)) && return op
+    _lower_text_range(block, op)
 end
 
 function _lower_text_range(block::TextBlock, op::ReplaceTextRangeOperation)
@@ -1417,9 +1779,9 @@ function _lower_text_range(block::TextBlock, op::ReplaceTextRangeOperation)
         a = something(_flat_span_range_start(block, s), _flat_to_span_nearest(block, s), Some(nothing))
         b = something(_flat_span_range_end(block, e),   _flat_to_span_nearest(block, e), Some(nothing))
     end
-    # `a[1]` / `b[1]` are now full span paths (`[i]` or `[i, j]`); a range that stays
-    # within one span has equal paths. `_text_replace_path` builds the nested
-    # `.elements[i](.elements[j]).content[s:e]` reference for either depth.
+    # `a[1]` / `b[1]` are now span paths `[i, j]`; a range that stays within one
+    # span has equal paths. `_text_replace_path` builds the nested
+    # `.elements[i].elements[j].content[s:e]` reference.
     (a === nothing || b === nothing || a[1] != b[1]) && return nothing   # cross-span: v1 decline
     # A non-empty flat range that collapses to an empty span range fell entirely in a
     # break / spacing / indentation gap — there is no editable content to remove (e.g.
@@ -1493,38 +1855,30 @@ end
 _get_container_reference(path::SpanPath) =
     _elements_prefix(path[1:end-1], ConcreteReference(FieldReferenceStep("elements"), EmptyReference()))
 
-# The span whose style a new run beside the image at `path` takes: the nearest
-# text run of the image's line, the run before the image first; on a line with no
-# text run, the first `TextString` or `TextNewline` of the block in document order,
+# The span whose style a new run beside the image at `path` (`[line, run]`) takes:
+# the nearest text run of the image's line, the run before the image first; on a
+# line with no text run, the first `TextString` of the block in document order,
 # where `TextToGraphics` finds the prevailing font of a block; `nothing` when the
-# block has neither.
+# block has none.
 function _find_style_span(text::TextBlock, path::SpanPath)
-    siblings = length(path) == 1 ? text.elements : text.elements[path[1]].elements
+    siblings = text.elements[path[1]].elements
     k = path[end]
     for i in (k - 1):-1:1
-        el = siblings[i]
-        el isa TextString && return el
-        el isa Union{TextNewline, TextLine} && break
+        siblings[i] isa TextString && return siblings[i]
     end
     for i in (k + 1):length(siblings)
-        el = siblings[i]
-        el isa TextString && return el
-        el isa Union{TextNewline, TextLine} && break
+        siblings[i] isa TextString && return siblings[i]
     end
-    for el in text.elements
-        el isa Union{TextString, TextNewline} && return el
-        el isa TextLine || continue
-        for span in el.elements
-            span isa TextString && return span
-        end
+    for line in text.elements, span in line.elements
+        span isa TextString && return span
     end
     nothing
 end
 
-# A new run of `content` in the style of `span` (a `TextString` or a
-# `TextNewline`), or in the default style when there is none.
+# A new run of `content` in the style of `span`, or in the default style when there
+# is none.
 _make_styled_run(content::AbstractString, ::Nothing) = TextString(content)
-_make_styled_run(content::AbstractString, span::Union{TextString, TextNewline}) =
+_make_styled_run(content::AbstractString, span::TextString) =
     TextString(Cell(content), span.font, span.font_color, Cell(span.fill_color),
                Cell(span.line_color), Cell(span.padding), Cell(nothing))
 

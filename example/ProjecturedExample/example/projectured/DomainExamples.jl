@@ -18,6 +18,9 @@ const xml_example            = Example("xml",            make_xml_document_examp
 const mixed_example          = Example("mixed",          make_mixed_document_example,          make_mixed_projection_example)
 const natural_example        = Example("natural",        make_natural_document_example,        make_natural_projection_example)
 const book_example           = Example("book",           make_book_document_example,           make_book_projection_example)
+const workflow_example       = Example("workflow",       make_workflow_document_example,       make_workflow_projection_example)
+const workflow_journal_example = Example("workflow_journal", make_workflow_journal_document_example, make_workflow_projection_example)
+const research_example       = Example("research",       make_research_study_document_example, make_research_projection_example)
 const markdown_example       = Example("markdown",       make_markdown_document_example,       make_markdown_projection_example)
 const markdown_rendered_example = Example("markdown_rendered", make_markdown_document_example,   make_markdown_rendered_projection_example)
 const rst_example            = Example("rst",            make_rst_document_example,            make_rst_projection_example)
@@ -84,10 +87,16 @@ const math_example           = Example("math",           make_math_document_exam
 # (`run_example(math_display_example)`) for everything else.
 const math_display_example   = Example("math_display",   make_math_display_document_example,   make_math_display_projection_example)
 const julia_example          = Example("julia",          make_julia_document_example,          make_julia_projection_example)
+const julia_code_example     = Example("julia_code",     make_julia_code_document_example,     make_julia_code_projection_example)
 const graphics_image_example = Example("graphics_image", make_json_document_example,           make_json_projection_example)
 const assistant_example      = Example("assistant",      make_assistant_document_example,      make_assistant_projection_example; render_width=1600, render_height=1000)
 const conversation_widget_example = Example("conversation_widget", make_conversation_document_example, make_conversation_widget_projection_example; render_width=1200, render_height=700)
 const conversation_editor_example = Example("conversation_editor", make_conversation_editor_document_example, make_conversation_editor_projection_example; render_width=1200, render_height=400)
+# The work page of an assistant in a navigator, as `show_assistant_work!` opens it,
+# drawn by the natural renderer: a double click on a node of one of its trees opens
+# the page of the node, and Back returns.
+const assistant_work_example = Example("assistant_work", () -> Navigator(make_assistant_work_document_example()),
+                                       make_natural_projection_example; render_width=1200, render_height=900)
 # The live-database (ODBC) catalog/object/sql_table examples and the native
 # AdaptagramsLayout graph examples (graph_adaptagrams, dvdrental_relationship) live
 # in the opt-in `ProjecturedODBCExample` / `ProjecturedAdaptagramsExample` / `ProjecturedTulipExample` packages, so this base package depends on
@@ -111,6 +120,23 @@ const dragging_example       = Example("dragging",        make_dragging_document
 # exists to demonstrate is unaffected.
 const clipboard_example      = Example("clipboard",       make_clipboard_document_example,      make_clipboard_projection_example)
 const formula_example        = Example("formula",         make_formula_document_example,        make_formula_projection_example)
+# A spreadsheet: an invoice whose formulas are named by their cells, A1 to D7.
+const formula_invoice_example = Example("formula_invoice", make_formula_invoice_document_example, make_formula_projection_example)
+# The same invoice as the grid of a spreadsheet. Deliberately kept OUT of the
+# `examples` registry below, for the reason `math_display_example` is: the grid
+# only shows the sheet, so the reader and the type-in sweeps have nothing to read.
+# `test_formula_grid()` in the domain suite covers it.
+const formula_invoice_grid_example = Example("formula_invoice_grid", make_formula_invoice_document_example, make_formula_grid_projection_example)
+# The M/M/1 queue in the math notation, with Greek names and subscripts.
+const formula_queue_example  = Example("formula_queue",   make_formula_queue_document_example,  make_formula_projection_example)
+# Formulas that compute for a second or more, off the loop. Deliberately kept OUT
+# of the `examples` registry below: a sweep that commits a formula computes it on
+# the task of the sweep, a second or more each time. Use it with
+# `run_example(formula_estimate_example)`: the window computes the values when it
+# opens the sheet, and the editor answers while they compute.
+const formula_estimate_example = Example("formula_estimate", make_formula_estimate_document_example, make_formula_projection_example)
+# A Markdown page that holds a sheet: a loan repayment report.
+const formula_report_example = Example("formula_report",  make_formula_report_document_example, make_formula_report_projection_example)
 # `versioning_example` is deliberately kept OUT of the `examples` registry below
 # (like `clipboard_example`). The version-elimination projection selects one of
 # several `ObjectVersion`s by criterion and re-roots edits under
@@ -144,6 +170,9 @@ const domain_examples = Example[
     mixed_example,
     natural_example,
     book_example,
+    workflow_example,
+    workflow_journal_example,
+    research_example,
     markdown_example,
     markdown_rendered_example,
     rst_example,
@@ -180,10 +209,12 @@ const domain_examples = Example[
     widget_split_tabs_example,
     math_example,
     julia_example,
+    julia_code_example,
     graphics_image_example,
     assistant_example,
     conversation_widget_example,
     conversation_editor_example,
+    assistant_work_example,
     sql_syntax_example,
     sql_insert_syntax_example,
     sql_update_syntax_example,
@@ -191,6 +222,9 @@ const domain_examples = Example[
     dragging_example,
     clipboard_example,
     formula_example,
+    formula_invoice_example,
+    formula_queue_example,
+    formula_report_example,
     versioning_example,
     undo_example,
     undo_history_example,
@@ -314,6 +348,7 @@ const domain_atomic_documents = AtomicDocument[
     AtomicDocument(:julia, "call",       make_julia_call_document_example),
     AtomicDocument(:julia, "assignment", make_julia_assignment_document_example),
     AtomicDocument(:julia, "block",      make_julia_block_document_example),
+    AtomicDocument(:julia, "toplevel",   make_julia_toplevel_document_example),
     AtomicDocument(:julia, "function",   make_julia_function_document_example),
     AtomicDocument(:julia, "array",            make_julia_array_document_example),
     AtomicDocument(:julia, "begin",             make_julia_begin_document_example),
@@ -340,6 +375,9 @@ const domain_atomic_documents = AtomicDocument[
     AtomicDocument(:julia, "curly",                     make_julia_curly_document_example),
     AtomicDocument(:julia, "do",                        make_julia_do_document_example),
     AtomicDocument(:julia, "docstring",                 make_julia_docstring_document_example),
+    AtomicDocument(:julia, "comment",                   make_julia_comment_document_example),
+    AtomicDocument(:julia, "multiline_comment",         make_julia_multiline_comment_document_example),
+    AtomicDocument(:julia, "end_of_line_comment",       make_julia_end_of_line_comment_document_example),
     AtomicDocument(:julia, "empty",                     make_julia_empty_document_example),
     AtomicDocument(:julia, "function_declaration",      make_julia_function_declaration_document_example),
     AtomicDocument(:julia, "interpolation",             make_julia_interpolation_document_example),
@@ -360,8 +398,28 @@ const domain_atomic_documents = AtomicDocument[
     AtomicDocument(:book, "chapter", make_book_chapter_document_example),
     AtomicDocument(:book, "list",    make_book_list_document_example),
     AtomicDocument(:book, "book",    make_book_book_document_example),
+    AtomicDocument(:workflow, "entry",    make_workflow_entry_document_example),
+    AtomicDocument(:workflow, "card",     make_workflow_card_document_example),
+    AtomicDocument(:workflow, "step",     make_workflow_step_document_example),
+    AtomicDocument(:workflow, "decision", make_workflow_decision_document_example),
+    AtomicDocument(:workflow, "workflow", make_workflow_document_example),
+    AtomicDocument(:workflow, "journal",  make_workflow_journal_document_example),
+    AtomicDocument(:workflow, "catalog",  make_workflow_catalog_document_example),
+    AtomicDocument(:research, "question",    make_research_question_document_example),
+    AtomicDocument(:research, "source",      make_research_source_document_example),
+    AtomicDocument(:research, "hypothesis",  make_research_hypothesis_document_example),
+    AtomicDocument(:research, "experiment",  make_research_experiment_document_example),
+    AtomicDocument(:research, "analysis",    make_research_analysis_document_example),
+    AtomicDocument(:research, "result",      make_research_result_document_example),
+    AtomicDocument(:research, "evidence",    make_research_evidence_document_example),
+    AtomicDocument(:research, "decision",    make_research_decision_document_example),
+    AtomicDocument(:research, "answer",      make_research_answer_document_example),
+    AtomicDocument(:research, "expectation", make_research_expectation_document_example),
+    AtomicDocument(:research, "study",       make_research_study_document_example),
+    AtomicDocument(:research, "map",         make_research_map_document_example),
     AtomicDocument(:filesystem, "file", make_filesystem_file_document_example),
     AtomicDocument(:filesystem, "directory", make_filesystem_directory_document_example),
+    AtomicDocument(:filesystem, "chooser",   make_filesystem_chooser_document_example),
     AtomicDocument(:sql, "all_columns",  make_sql_all_columns_document_example),
     AtomicDocument(:sql, "column_name",  make_sql_column_name_document_example),
     AtomicDocument(:sql, "table_name",   make_sql_table_name_document_example),
@@ -418,6 +476,15 @@ const domain_atomic_documents = AtomicDocument[
     AtomicDocument(:conversation, "draft",        make_conversation_draft_document_example),
     AtomicDocument(:conversation, "part",         make_conversation_part_document_example),
     AtomicDocument(:conversation, "turn",         make_conversation_turn_document_example),
+    # The work page of an assistant, and the page of one of its subagents.
+    AtomicDocument(:assistant, "work",       make_assistant_work_document_example),
+    AtomicDocument(:assistant, "agent_work", make_agent_work_document_example),
+    # An assistant with no transcript, and the list of the open assistants.
+    AtomicDocument(:assistant, "assistant",  make_assistant_atom_document_example),
+    AtomicDocument(:assistant, "list",       make_assistant_list_document_example),
+    # An evaluation that has run, and an evaluator that holds it.
+    AtomicDocument(:conversation, "evaluator_form",     make_evaluator_form_document_example),
+    AtomicDocument(:conversation, "evaluator_toplevel", make_evaluator_toplevel_document_example),
     AtomicDocument(:dbcatalog, "column",   make_db_catalog_column_document_example),
     AtomicDocument(:dbcatalog, "database", make_db_catalog_database_document_example),
     AtomicDocument(:dbcatalog, "rdbms",    make_db_catalog_rdbms_document_example),
@@ -426,7 +493,6 @@ const domain_atomic_documents = AtomicDocument[
     AtomicDocument(:formula, "environment", make_formula_environment_document_example),
     AtomicDocument(:formula, "formula",     make_formula_formula_document_example),
     AtomicDocument(:formula, "insertion",   make_formula_insertion_document_example),
-    AtomicDocument(:formula, "reference",   make_formula_reference_document_example),
     AtomicDocument(:graph, "graph",  make_graph_graph_document_example),
     AtomicDocument(:graph, "layout", make_graph_layout_document_example),
     AtomicDocument(:chart, "plot",        make_chart_plot_document_example),
@@ -435,6 +501,7 @@ const domain_atomic_documents = AtomicDocument[
     AtomicDocument(:sql, "table_expression", make_sql_table_expression_document_example),
     AtomicDocument(:workspace, "folder",    make_workspace_folder_document_example),
     AtomicDocument(:workspace, "workspace", make_workspace_document_example),
+    AtomicDocument(:workspace, "explorer",  make_workspace_explorer_document_example),
     AtomicDocument(:gesture, "map", make_gesture_map_document_example),
     AtomicDocument(:database, "instance", make_database_instance_document_example),
     # Two base-tier documents whose only example lives here, because the wrapper

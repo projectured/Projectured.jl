@@ -40,7 +40,7 @@ A `SystemColorsChange`, which a backend reports when the colour settings of the 
 
 ## One appearance for each editor
 
-The content, the tab strip of the `tabs` wrapper and the `AppearanceDocument` must draw from one `Appearance`. `build_editor` makes the argument of each wrapper with `make_wrapper_argument` before it builds anything; for the argument `true` this slice makes a new `Appearance`. With no projection named, `make_document_projection(document; arguments...)` gives the renderer the same object. `EditorParts.arguments` holds the arguments, so the `tabs` wrapper takes the appearance from there when its own argument names none. A start step of the wrapper copies the zoom of the appearance into the `Display`, so an editor starts at the zoom that its appearance holds. Another start step, `copy_system_colors!`, copies the colour settings of the operating system that `find_system_colors(editor.backend)` gives into `system_colors`, so a setting `:system` is right from the first print.
+The content, the tab strip of the `tabs` wrapper and the `AppearanceDocument` must draw from one `Appearance`. `build_editor` makes the argument of each wrapper with `make_wrapper_argument` before it builds anything; for the argument `true` this slice makes a new `Appearance`. With no projection named, `make_document_projection(document; arguments...)` gives the renderer the same object. `EditorParts.arguments` holds the arguments, so the `tabs` wrapper takes the appearance from there when its own argument names none. Before the editor exists, the wrapper calls `copy_system_colors!(parts.backend, appearance)`, which copies the colour settings of the operating system that `find_system_colors` gives into `system_colors`. The editor prints when it is made, and a style field of a projection reads its colour with no edge, so a part that the first print drew keeps the colours of that print until the view prints again: the copy must come before that print, so a setting `:system` is right from it. A start step of the wrapper copies the zoom of the appearance into the `Display`, so an editor starts at the zoom that its appearance holds.
 
 A main builder that builds its own projection makes one `Appearance`, builds with it, and passes it as `appearance = …` to `build_editor`.
 
@@ -124,6 +124,8 @@ its values at once, and the table of a theme that a builder makes later waits in
 `saved_themes`. A main builder, such as `run_application`, loads the file before
 it builds, so a saved appearance survives a restart. `SaveAppearanceOperation`
 and `LoadAppearanceOperation` are the buttons of the tab.
+
+`pred_arguments` of `Appearance` writes no field. A loaded `Appearance` is the appearance of the editor that loads it (`find_editor_appearance`), else a new `Appearance`, so a window file keeps that a tab shows the appearance. The TOML file above keeps the values.
 
 ## How it fits
 

@@ -14,15 +14,18 @@ capability, such as the output of an image, and refer to no concrete backend
 when it loads. A generic whose backend package is not loaded raises a
 `MethodError`.
 
-The contract is declared here and answered elsewhere. The module lives in two
+The contract is declared here and answered elsewhere. The module lives in three
 fragments that share this namespace:
 
 - [`BackendInterface.jl`](BackendInterface.jl) — the contract: the abstract
   `Backend` type and the open generics a backend package answers.
+- [`HeldFrameState.jl`](HeldFrameState.jl) — `HeldFrameState`, what one held
+  frame shows while a code unit runs.
 - [`BackendDefaults.jl`](BackendDefaults.jl) — the fallback behaviours the
   contract supplies itself, for the capabilities a backend can lack (pointer
   position, display size, the colour settings of the system, device
-  configuration, native windows, the input wait and the wake).
+  configuration, native windows, the input wait and the wake, and the held
+  frames).
 """
 module BackendModule
 
@@ -30,9 +33,11 @@ export Backend, initialize_backend!, quit_backend!,
        write_to_devices!, take_from_devices!, get_display_size, find_system_colors,
        configure_devices!,
        open_native_windows!, wait_for_input, wake_backend!,
+       HeldFrameState, shows_held_frames, prepare_held_frames!, run_held_frame!, end_held_frames!,
        write_image, record_video, render_canvas, decode_image, get_pointer_position
 
 include("BackendInterface.jl")
+include("HeldFrameState.jl")
 include("BackendDefaults.jl")
 
 end # module

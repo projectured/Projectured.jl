@@ -13,6 +13,8 @@ using ProjecturedXMLExample
 using ProjecturedMarkdownExample
 using ProjecturedRSTExample
 using ProjecturedBookExample
+using ProjecturedWorkflowExample
+using ProjecturedResearchExample
 using ProjecturedMathExample
 using ProjecturedJuliaExample
 using ProjecturedSQLExample
@@ -37,7 +39,7 @@ import ProjecturedPlatformExample: print_example, write_example_pdf
 for _src in (ProjecturedKernelExample, ProjecturedPlatformExample,
              ProjecturedJSONExample, ProjecturedYAMLExample, ProjecturedXMLExample, ProjecturedMarkdownExample, ProjecturedRSTExample, ProjecturedBookExample,
              ProjecturedMathExample, ProjecturedJuliaExample, ProjecturedSQLExample, ProjecturedDatabaseExample, ProjecturedPlatformExample, ProjecturedGraphExample, ProjecturedChartExample,
-             ProjecturedSequenceChartExample, ProjecturedDBCatalogExample, ProjecturedFormulaExample, ProjecturedFSMExample, ProjecturedProcessExample, ProjecturedPivotExample, ProjecturedConversationExample)
+             ProjecturedSequenceChartExample, ProjecturedDBCatalogExample, ProjecturedFormulaExample, ProjecturedFSMExample, ProjecturedProcessExample, ProjecturedPivotExample, ProjecturedConversationExample, ProjecturedWorkflowExample, ProjecturedResearchExample)
     _srcname = nameof(_src)
     for _n in names(_src)
         _n === _srcname && continue
@@ -64,11 +66,12 @@ const _EXAMPLE_DIR = normpath(joinpath(@__DIR__, "../example/projectured"))
 
 # The cross-domain compositions: a document that mixes two domains, the
 # render-anything example, the engine-feature demonstrations over a domain
-# fixture (clipboard, dragging, focusing, versioning), and the pane and table
-# layouts. A per-domain example package holds only its own domain.
+# fixture (clipboard, dragging, focusing, versioning), the page of prose that
+# holds a sheet, and the pane and table layouts. A per-domain example package holds only its own domain.
 include(joinpath(_EXAMPLE_DIR, "ClipboardDocumentExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "DraggingDocumentExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "FocusingDocumentExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "FormulaReportDocumentExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "NaturalDocumentExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "PaneDocumentExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "TableDocumentExample.jl"))
@@ -78,7 +81,7 @@ include(joinpath(_EXAMPLE_DIR, "UndoDocumentExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "ClipboardProjectionExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "DraggingProjectionExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "FocusingProjectionExample.jl"))
-include(joinpath(_EXAMPLE_DIR, "NaturalProjectionExample.jl"))
+include(joinpath(_EXAMPLE_DIR, "FormulaReportProjectionExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "PaneProjectionExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "VersioningProjectionExample.jl"))
 include(joinpath(_EXAMPLE_DIR, "UndoProjectionExample.jl"))
@@ -112,10 +115,13 @@ export run_value_viewer, make_value_viewer, make_value_viewer_feeds
 include(joinpath(_EXAMPLE_DIR, "Precompile.jl"))
 include(joinpath(_EXAMPLE_DIR, "PrecompileRecording.jl"))
 
-export EditorDomain, EditorIntrospection, JsonXmlToSyntax, assistant_example, book_example
+export EditorDomain, EditorIntrospection, JsonXmlToSyntax, assistant_example, book_example, workflow_example, workflow_journal_example, research_example
+export assistant_work_example
 export build_file_editor, clipboard_example, conversation_editor_example
 export conversation_widget_example, domain_for_path, dragging_example, editor_domain
 export filesystem_example, filesystem_widget_example, focusing_example, formula_example
+export formula_invoice_example, formula_invoice_grid_example, formula_queue_example
+export formula_estimate_example, formula_report_example
 export chart_example, chart_line_example, chart_bar_example,
        chart_histogram_example, chart_scatter_example, chart_strip_example,
        chart_inspector_example
@@ -160,7 +166,10 @@ export make_filesystem_projection_example, make_filesystem_widget_projection_exa
 export make_focusing_document_example, make_focusing_projection_example
 export make_formula_document_example, make_formula_projection_example
 export make_formula_environment_document_example, make_formula_formula_document_example
-export make_formula_insertion_document_example, make_formula_reference_document_example
+export make_formula_insertion_document_example, make_formula_invoice_document_example
+export make_formula_queue_document_example, make_formula_estimate_document_example
+export make_formula_grid_projection_example
+export make_formula_report_document_example, make_formula_report_projection_example
 export make_chart_document_example, make_chart_projection_example,
        make_chart_pipeline_example,
        make_chart_line_document_example, make_chart_line_projection_example,
@@ -188,11 +197,13 @@ export make_json_null_document_example, make_json_null_projection_example
 export make_json_projection_example, make_json_sorted_projection_example
 export make_json_string_document_example, make_json_string_projection_example
 export make_julia_document_example, make_julia_projection_example
+export make_julia_code_document_example, make_julia_code_projection_example
 export make_julia_abstract_type_document_example
 export make_julia_anonymous_type_annotation_document_example
 export make_julia_broadcast_document_example, make_julia_comprehension_document_example
 export make_julia_const_document_example, make_julia_curly_document_example
 export make_julia_do_document_example, make_julia_docstring_document_example
+export make_julia_comment_document_example, make_julia_multiline_comment_document_example, make_julia_end_of_line_comment_document_example
 export make_julia_empty_document_example, make_julia_function_declaration_document_example
 export make_julia_interpolation_document_example, make_julia_let_document_example
 export make_julia_macro_call_document_example, make_julia_module_def_document_example
@@ -253,7 +264,7 @@ export make_sql_nested_syntax_projection_example, make_sql_syntax_projection_exa
 export make_sql_update_document_example, make_sql_update_syntax_projection_example
 export make_sql_column_reference_document_example, make_sql_table_expression_document_example
 export make_table_document_example, make_table_projection_example
-export make_text_configuring_projection, make_versioning_document_example
+export make_versioning_document_example
 export make_versioning_projection_example
 export make_xml_document_example
 export make_xml_projection_example, make_yaml_document_example, make_yaml_projection_example
@@ -352,7 +363,6 @@ export make_scrolling_document, make_scrolling_projection
 export make_introspection_document, make_introspection_projection, EditorIntrospection
 export make_dragging_document, make_dragging_projection
 export make_shell_document, make_shell_projection, make_command_palette_decorator_projection
-export make_text_configuring_projection
 export Example, examples, run_example, make_example_editor, run_assistant_example, run_console_example, print_example, write_example_image, write_example_pdf, record_example_video, make_typein_gestures
 export run_message_log_feed_example, run_frame_statistics_feed_example,
        make_message_log_feed_projection_example, make_frame_statistics_feed_projection_example
@@ -384,7 +394,7 @@ export layout_example, constraint_layout_example, book_example, markdown_example
 export collection_example, reversing_example, filtering_example, searching_example, sorting_example, focusing_example, table_example, math_table_example, graph_example
 export lazy_example, lazy_bidirectional_example
 export math_example
-export julia_example
+export julia_example, julia_code_example
 export graphics_image_example
 export rotating_vector_example
 export make_rotating_vector_document

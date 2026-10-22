@@ -21,8 +21,10 @@ turns it into a write and an apply.
 """
 module SettingsManagingModule
 
+using ..AgentModule
 using ..CellModule
 using ..DocumentModule
+using ..DomainModule
 using ..EditorModule
 using ..EventModule
 using ..GestureBindingModule
@@ -42,6 +44,7 @@ using ..SelectionModule
 using ..SettingsModule
 using ..StyleModule
 using ..ToolModule
+using ..TooltipModule
 using ..WidgetModule
 
 import ..DocumentModule: get_wrapped_document
@@ -50,8 +53,11 @@ import ..EditorModule: wrap_editor!, get_wrapper_layers, is_wrapper_default,
 import ..ProjectionModule: print_document, read_intent, map_reference_forward,
                            map_reference_backward, get_child_iomaps
 
-export SettingsDocument, make_settings_document, make_toggle_setting_operation,
-       find_editor_settings
+import ..DomainModule: get_document_decoration
+import ..SerializationModule: pred_arguments, make_pred_document
+export SettingsDocument, make_settings_document, find_editor_settings, describe_settings,
+       change_setting!,
+       make_toggle_setting_operation
 export SettingsManagingProjection, SettingsManagingIoMap, wrap_setting_writes
 export start_settings!
 export SettingsToWidget, SettingsToWidgetIoMap

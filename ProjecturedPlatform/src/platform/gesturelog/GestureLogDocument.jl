@@ -29,11 +29,11 @@ end
 get_document_title(::GestureLog) = "Gestures"
 get_insertion_aliases(::Type{GestureLog}) = ["gestures"]
 
-# Last session's log is not this one's: `entries` and `count` are what a
-# session recorded, not a setting of the log, and `entries` holds
-# `GestureLogEntry` values the notation cannot write in any case. Only
-# `capacity` describes the log itself, so a load starts empty at the same size.
-pred_arguments(log::GestureLog) = (), Pair{Symbol,Any}[:capacity => log.capacity]
+# A file keeps that it shows the log of the session, and not what the log held:
+# the gestures of one session say nothing about the next, and only the log of the
+# session fills. A load gives the log of the session of its editor, and a load with
+# no editor a new log.
+pred_arguments(::GestureLog) = (), Pair{Symbol,Any}[]
 
 # ── Record ─────────────────────────────────────────────────────────────────
 
@@ -47,13 +47,14 @@ With `root`, the document the references of `operation` start at, the entry
 writes each reference as `describe_reference` writes it, from the deepest
 document on it that has a title. With `fold_typing`, a typed character joins the
 newest entry when that entry is a run of typed characters, so a typed sentence
-is one entry, `typed "…"`, with the operation of its last character.
+is one entry, `typed "…"`, with the operation of its last character. Return and
+Tab type a character that shows nothing, so each is an entry of its own.
 """
 function record_gesture!(log::GestureLog, gesture, operation; root = nothing,
                          fold_typing::Bool = false)
     text = root === nothing ? describe_operation(operation) : describe_operation(operation, root)
     event = gesture isa WindowInput ? gesture.event : gesture
-    if fold_typing && event isa KeyPress
+    if fold_typing && event isa KeyPress && !any(iscntrl, event.text)
         typing = log.typing * event.text
         log.typing = typing
         entry = GestureLogEntry(0, _describe_typing(typing), text, _operation_kind(operation))
@@ -168,22 +169,44 @@ end
 
 # ── The session's log ────────────────────────────────────────────────────────
 
-# One log for the session, because there is one editor and one history of what a
-# person did to it. `GestureLog()` still builds an empty one, which a test wants.
-const _SESSION_GESTURE_LOG = GestureLog()
-
 """
-    get_session_gesture_log() -> GestureLog
+    get_session_gesture_log(; editor = find_evaluation_editor()) -> GestureLog
 
-The one log of the session.
+The gesture log of the session of `editor`: by default the editor of the
+evaluation, or of the loop that runs the calling code. Each editor has its own,
+one history of what a person did to it, which the `gesture_log` wrapper records
+into. With no editor, a new empty log, which nothing keeps and nothing fills.
 
-Every gesture log a person opens is this document, so two of them show the same
-history rather than two halves of it. A view that shows only part of the history
-is a filter over this log, not a log of its own.
+Every gesture log a person opens in a window of the editor is this document, so
+two of them show the same history rather than two halves of it. A view that
+shows only part of the history is a filter over this log, not a log of its own.
+
+Use it to see what the person did last: `print_natural_text` prints one line for
+each gesture, with its keys or its click and the operation that it ran.
+
+# Example
+
+    println(print_natural_text(get_session_gesture_log()))
+
+See also `describe_undo_history`, `find_selected_part`.
 """
-get_session_gesture_log() = _SESSION_GESTURE_LOG
+function get_session_gesture_log end
 
-# A person who types `gestures` into an empty tab gets the session's log, not a
-# fresh empty one. A fresh one would never fill: what records is a decorator at
+get_session_gesture_log(; editor = find_evaluation_editor()) =
+    editor isa Editor ? get_session_document!(GestureLog, editor, GestureLog) : GestureLog()
+
+# A person who types `gestures` into an empty tab gets the log of the editor, not
+# a fresh empty one. A fresh one would never fill: what records is a decorator at
 # the root of the projection, and it records into the log it holds.
 make_insertion_document(::Type{GestureLog}) = get_session_gesture_log()
+make_pred_document(::Type{<:GestureLog}, positional, keywords) = get_session_gesture_log()
+
+get_document_decoration(log::GestureLog) =
+    DocumentDecoration(; icon = :keyboard, tooltip = () -> _make_gesture_log_note(log))
+
+# What a row of the log says when the pointer rests on it: what it holds, and how
+# many gestures it kept and recorded.
+_make_gesture_log_note(log::GestureLog) =
+    TooltipNote(; title = "Gestures", text = "Every gesture of this session, and what each one did.",
+                facts = ["Kept" => string(length(log.entries)), "Capacity" => string(log.capacity),
+                         "Recorded" => string(log.count)])

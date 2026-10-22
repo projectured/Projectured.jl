@@ -49,42 +49,53 @@ by a package that does not own the printer, or a rung that belongs to no domain.
 """
 module NaturalModule
 
+using ..ArrangementModule
 using ..CellModule
 using ..CollectionModule
 using ..DocumentModule
 using ..DomainModule
 using ..GraphicsModule
+using ..GestureBindingModule
+using ..IntentModule
 using ..IoMapModule
 using ..LayoutModule
+using ..OperationModule
 using ..PrimitiveModule
 using ..ProjectionAlgebraModule
 using ..ProjectionModule
 using ..StyleModule
 using ..TextModule
 using ..TooltipModule
+using ..GestureModule
 using ..WidgetModule
 using ..ReferenceModule
 
 # Imported to extend: this module adds a method to each of these.
-import ..ProjectionModule: print_document
+import ..ProjectionModule: print_document, read_intent, map_reference_forward, map_reference_backward
+import ..GestureBindingModule: get_document_gesture_bindings_own
 import ..EditorModule: make_document_projection
 
 export register_natural_domain!, register_natural_notation!, register_natural_format!,
        register_natural_parser!, register_natural_expression!, register_natural_rung!,
        make_natural_projection, get_natural_extension, get_natural_format,
-       get_natural_entries, parse_natural_text, has_natural_parser, find_natural_parser,
-       make_natural_expression, has_natural_expression,
+       get_natural_entries, parse_natural_text, describe_natural_formats,
+       make_prose_document, has_natural_parser,
+       find_natural_parser, make_natural_expression, has_natural_expression,
        print_natural_text
 export register_natural_syntax!, register_natural_graphics!, register_natural_fallback!,
        get_natural_syntax_entries, get_natural_graphics_entries, get_natural_fallback_entries
+export ArrangementChipsToGraphics, ArrangementChipsToGraphicsIoMap, ArrangementGroupRowsToWidget,
+       ArrangementGroupRowsToWidgetIoMap
 export NaturalToGraphics,
        register_natural_syntax!, register_natural_graphics!, register_natural_fallback!
-export TooltipContentToVerticalLayout, make_natural_tooltip_row
+export TooltipContentToVerticalLayout, TooltipNoteToVerticalLayout, make_natural_tooltip_row
 
 
 include("NaturalNotation.jl")
 include("NaturalRegistry.jl")
+include("NaturalArrangement.jl")
 include("NaturalProjection.jl")
 include("TooltipContentToLayout.jl")
+include("TooltipNoteToLayout.jl")
 
 end # module

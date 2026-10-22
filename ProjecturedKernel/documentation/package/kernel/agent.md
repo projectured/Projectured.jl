@@ -42,7 +42,11 @@ DefaultTools.jl   register_default_tools!, which puts the above into a ToolSet
 A `Tool` is a name, a description, abstractly-described parameters, and a handler
 `(target, args) -> String`. It carries **no wire format**: rendering it into
 Anthropic's `input_schema` is `ProjecturedAnthropic`'s job, rendering it into MCP's
-parameter list is `ProjecturedMCP`'s, and neither is the tool's business.
+parameter list is `ProjecturedMCP`'s, and neither is the tool's business. The
+handler of a tool of a turn can answer a `Task` whose value is the text, as the
+loop below describes. A handler can also answer an `LlmImage`. The MCP server gives
+it to its client as an image. `run_turn!` gives the model a line of text in its
+place (`_PICTURE_RESULT_TEXT`), because the result of a tool for a model is text.
 
 A `Tool` also names the media type of the text its handler returns,
 `result_mime_type`, as a `Resource` names its own with `mime_type`. It is
@@ -58,6 +62,15 @@ because an MCP text content has no media type.
 module `execute_julia_code!` evaluates into, and its last result live on the
 `ToolSet`. Two editors in one process therefore cannot see each other's tools or
 evaluate code into each other's namespace.
+
+**A value under the id of a call.** `keep_tool_call_value!(set, call_id, value)`
+keeps the value of a call until `take_tool_call_value!(set, call_id)` takes it,
+once. It ties the caller that runs a tool to the caller that draws its result,
+when the two are not the same: the MCP server keeps the document that an
+evaluation returned under the id that Claude Code gives the call, and the turn
+of the agent takes it when the result of that call comes. The set keeps at most
+`TOOL_CALL_VALUE_CAPACITY` values, 32, and the oldest goes first, so a value
+that nobody takes does not stay.
 
 A few values of the layer are process-global, each for a reason:
 
@@ -279,9 +292,11 @@ LlmInterface.jl  the Llm supertype; the stream_turn and render_tool_schema seams
                  meaning-model seams; the make_llm and get_default_llm_model factories
 LlmDefaults.jl   the fallbacks: no meaning model; the factories that take a symbol
 Llm.jl           a backend is opaque to the walk; bind_meaning_model!; get_llm_backend_names
-LlmMessage.jl    LlmText / LlmThinking / LlmToolUse / LlmToolResult; LlmMessage; LlmRequest
+LlmMessage.jl    LlmText / LlmImage / LlmThinking / LlmToolUse / LlmToolResult; LlmMessage; LlmRequest
 LlmEvent.jl      LlmTextDelta, LlmToolUseStart, LlmTurnEnd, … — what streams back
 ```
+
+`LlmImage(media_type, data)` holds the bytes of a picture (`data::Vector{UInt8}`) and its media type, such as `"image/png"`. An adapter writes it in the shape of its provider. An adapter whose model can not see a picture leaves it out.
 
 **None of this is any provider's wire format.** The messages and events are the
 project's own vocabulary, and an adapter translates its protocol into them. That is
@@ -489,7 +504,7 @@ package whose types cannot be referenced at load time.
 **Outbound** is this editor driving a model:
 
 ```julia
-run_turn!(agent, target; messages, on_event) -> stop_reason
+run_turn!(agent, target; messages, on_event, tools = Tool[]) -> stop_reason
 ```
 
 The loop owns a turn's **control flow** and nothing else: stream a round, collect the
@@ -511,8 +526,16 @@ parts; something else might simply print them.
 
 A round whose stream ends with no `LlmTurnEnd` and no `LlmFailure` ends the turn
 with `:error`, and its tool calls do not run. A tool that throws gives an
-`AgentToolResult` with `is_error = true`. An exception that
-`is_passthrough_exception` names goes through the loop, and `run_turn!` throws it.
+`AgentToolResult` with `is_error = true`. An exception that is not a fault
+(`is_fault_exception`) goes through the loop, and `run_turn!` throws it.
+
+`tools` are tools of this turn beside the `ToolSet` of the agent, such as a tool that
+asks the person of the caller, which no other client of the tool set, such as the MCP
+server, may see. Each tool call runs on the task of the editor. A handler can answer
+a `Task` in place of its text, as a tool that waits for a person does: the loop then
+waits for the task on its own task, so no frame of the editor waits with it, and the
+value of the task is the text of the tool; a task that throws gives the text of its
+error.
 
 **External** is this editor driving an agent that runs its own loop in another process. The agent owns its model, its tools and its history. The editor sends it a prompt, shows what it reports, and answers what it asks. It is not an `Llm`: `run_turn!` would run the tool calls of the agent a second time. [acp.md](../adapter/acp/acp.md) describes the one package that implements it.
 
@@ -523,27 +546,43 @@ A caller names a connection by a symbol and never names its type, as it does for
 ```julia
 connection = make_agent_connection(:acp)   # the built-in agent; `command` names another
 start_agent_connection!(connection)
-session_id = open_agent_session!(connection; directory = pwd(), mcp_servers = [access], instructions, on_event)
+events = AgentEventQueue()
+session_id = open_agent_session!(connection; directory = pwd(), mcp_servers = [access], instructions, on_event, events)
 set_agent_option!(connection, session_id, "effort", "max"; on_event)
 stop_reason = send_agent_prompt!(connection, session_id, prompt; on_event)
 ```
 
 With a `session_id`, `open_agent_session!` resumes that session, with the history that the agent keeps, when the agent can, and else opens a new session. The id that it returns says which: a new id means a session without the old history.
 
-The eight generics are `make_agent_connection(kind; kwargs...)`, `start_agent_connection!`, `open_agent_session!`, `set_agent_option!`, `send_agent_prompt!`, `cancel_agent_prompt!`, `close_agent_session!` and `stop_agent_connection!`. A package adds the methods for its kind. The `Symbol` entry dispatches to `make_agent_connection(::Val{kind})`. When no package answers, the entry throws an error that lists the loaded kinds. `get_agent_connection_names()` reads those kinds from the method table, as `get_llm_backend_names()` does. `get_agent_server_names()` does the same for the servers of the inbound direction.
+The generics are `make_agent_connection(kind; kwargs...)`, `start_agent_connection!`, `open_agent_session!`, `set_agent_option!`, `send_agent_prompt!`, `cancel_agent_prompt!`, `cancel_agent_subagent!`, `stop_agent_background_task!`, `close_agent_session!`, `stop_agent_connection!`, `has_agent_steering`, `steer_agent_prompt!`, `has_agent_sign_out` and `sign_out_agent!`. A package adds the methods for its kind. `has_agent_steering` says whether the agent takes a prompt into a turn that runs, and `steer_agent_prompt!` sends it. The two generics of the work of an agent are `cancel_agent_subagent!(connection, session_id, subagent_id)`, which asks the agent to stop the work of a subagent and answers `nothing`, and `stop_agent_background_task!(connection, session_id, task_id)`, which asks the agent to stop a background task and answers whether it did. The defaults do nothing and answer `nothing` and `false`, so a connection that can not do either needs no method. The `Symbol` entry dispatches to `make_agent_connection(::Val{kind})`. When no package answers, the entry throws an error that lists the loaded kinds. `get_agent_connection_names()` reads those kinds from the method table, as `get_llm_backend_names()` does. `get_agent_server_names()` does the same for the servers of the inbound direction.
 
 `send_agent_prompt!` takes a prompt, a vector of `LlmContent`, and waits until the turn of the agent ends. It answers why the turn ended: `:end_turn`, `:max_tokens`, `:max_turn_requests`, `:refusal` or `:cancelled`. It calls `on_event` on a task that is not the editor task, so the caller posts its writes through `run_on_editor_task!`. `on_event` gets these events:
 
 - `LlmTextStart`, `LlmTextDelta` and `LlmTextStop` for the text of the answer, and the three `LlmThinking…` events for its reasoning. They are the events that `stream_turn` sends, so the code that draws a model answer draws an agent answer.
-- `AgentToolCallUpdate` for a tool call that the agent runs itself. The event reports the call. The editor does not run it. A field that is `nothing` keeps the value of the last update with the same `id`.
-- `AgentPlanUpdate` for the plan of the agent. Each one replaces the plan before it.
+- `AgentToolCallUpdate` for a tool call that the agent runs itself. The event reports the call. The editor does not run it. A field that is `nothing` keeps the value of the last update with the same `id`. When the agent gives the output as the content of a file, such as a file that a tool read, `output_mime_type` is its media type and `output_uri` is the uri of the file.
+- `AgentPlanUpdate` for a plan of the agent. A session can have several plans, and each update replaces the plan with its `id`; the one plan of an agent that names none has the empty `id`. The content of a plan is its `entries`, a Markdown `markdown` or the `uri` of a file. An update with `is_removed` removes the plan. An `AgentPlanEntry` has a `content`, a `priority`, a `status`, and the `id`, the `description`, the `active_title` and the `blocked_by` of the step; `AgentPlanEntry(content, priority, status)` builds an entry with an empty id, an empty description, an empty active title and no blockers.
 - `AgentOptionsUpdate` for all the options of the session, when the agent changes one during the prompt, such as its mode.
 - `AgentUsageUpdate` for how much of its context window the session uses (`used` of `size` tokens), and its `cost` and `currency` when the agent says.
-- `AgentSessionInfoUpdate` for the `title` of the session; `nothing` keeps the title, and an empty one clears it.
+- `AgentSessionInfoUpdate` for the `title` of the session and its `process_id`, the id of the system process that does the work of the session. `nothing` keeps the value, and an empty title clears the title.
+- `AgentSubagentUpdate` for a subagent, an agent that the agent starts for a part of its work, with a session of its own. Its `id` names the subagent. It has a `title`, a `description`, a `state` (`:running`, `:idle`, `:requires_action` or `:unknown`), a `stop_reason`, `token_count`, `tool_call_count`, `duration` in seconds, `last_tool`, `summary` and `can_cancel`. A field that is `nothing` keeps the value of the last update with the same `id`. Its `event` is one event of the subagent as the agent reports it: its text, its reasoning, a tool call, a plan, a question, or its prompt, which is an `LlmMessage` of the role `:user`. The update of a subagent of a subagent is the `event` of the update of its parent, one level for each parent.
+- `AgentBackgroundTaskUpdate` for a background task: work that the agent starts and that runs after the call that started it, such as a command in the background. Its `id` names the task. It has a `kind`, a `title`, a `status` (`:running`, `:completed`, `:failed` or `:stopped`), the `tool_call_id` that started it, the `subagent_id` of the subagent that started it, an `output_uri`, a `summary`, a `start_time` and an `end_time` in seconds since 1970, and `can_stop`. A field that is `nothing` keeps its value.
+- `AgentNoticeUpdate` for a note of the agent that needs no answer: its `severity` (`:info`, `:warning` or `:error`), its `title` and its `description`.
+- `AgentCompactionUpdate` for a compaction of the context of the session: its `id`, its `status` (`:in_progress`, `:completed`, `:failed` or `:cancelled`) and its `summary`. `nothing` keeps the summary, and an empty one clears it.
 - `AgentCommandsUpdate` for the commands that the session offers, each an `AgentCommand` with its `name`, its `description` and an `input_hint` that says what it takes after its name.
+- `AgentSignInException`, thrown and not sent to `on_event`, when the agent needs a sign-in before it opens a session or runs a prompt. It holds the title of the agent, a sentence that says how to sign in, and one `AgentSignInMethod` for each way that this editor can run: its `id`, its `name`, its `description` and its `command`, a `Cmd` that the person answers in a terminal and that ends with the status 0 when the sign-in worked. `sign_out_agent!` asks the agent to forget the sign-in, when `has_agent_sign_out` says that it can; the defaults answer `false`.
 - `AgentPermissionRequest` for a question that waits for a person. Its `reply` takes the id of the chosen option, or `nothing`. The first call answers the agent and answers `true`; a later call does nothing and answers `false`. `cancel_agent_prompt!` answers each request that waits as `nothing`.
+- `AgentQuestionRequest` for a question of the agent that a person answers in a form: its `message`, its `fields`, each an `AgentQuestionField` with a `name`, a `title`, a `description`, a `kind` (`:choice`, `:choices`, `:text`, `:number`, `:integer` or `:boolean`), the `options` of a choice, each an `AgentOptionValue`, and `is_required`. Its `reply` takes a `Dict{String,Any}` of the values that the person filled, or `nothing` for a decline. The first call answers the agent and answers `true`; a later call does nothing and answers `false`. `cancel_agent_prompt!` answers each request that waits as cancelled.
 
-**The options of a session.** An `AgentOption` is one option, such as the model, with its `category` (`:mode`, `:model`, `:thought_level`, `:model_config` or `:other`), its `current_value`, and its `values`, each an `AgentOptionValue` with a `value` for the agent and a `name` for a person. `open_agent_session!` gives the options of the new session to its `on_event` as an `AgentOptionsUpdate`. `set_agent_option!` sets one option, and gives all the options that the agent answers to its `on_event`. **A connection keeps no `on_event` after the call that took it.** A caller captures the editor in it to post its writes, and a document must not hold the editor, even through the connection that it holds. So an update of the session that comes outside a call and outside a prompt — its options, its usage, its title, its commands — waits in the connection, the latest of each kind, and the next prompt gets them first. An agent can name its session just after a prompt ends, and the name is not lost.
+**The options of a session.** An `AgentOption` is one option, such as the model, with its `category` (`:mode`, `:model`, `:thought_level`, `:model_config` or `:other`), its `current_value`, and its `values`, each an `AgentOptionValue` with a `value` for the agent and a `name` for a person. `open_agent_session!` gives the options of the new session to its `on_event` as an `AgentOptionsUpdate`. `set_agent_option!` sets one option, and gives all the options that the agent answers to its `on_event`. **A connection keeps no `on_event` after the call that took it.** A caller captures the editor in it to post its writes, and a document must not hold the editor, even through the connection that it holds.
+
+**Where an event goes.** An event of a session goes to one of two places:
+
+- **During a prompt**, it goes to the `on_event` of `send_agent_prompt!`.
+- **Between two prompts**, it goes to the `AgentEventQueue` that `open_agent_session!` took as `events`, in the order that the agent sent it. This holds for every event: the options, the usage, the title and the commands of the session, and the work of a subagent or of a background task that goes on after a prompt, such as a command that ends when no prompt runs. A session that opened with no queue drops these events.
+
+`AgentEventQueue` is a list and a lock, and it holds no editor and no function. A connection puts an event with `put_agent_event!(queue, event)` on a task of its own, and the caller takes them all with `take_agent_events!(queue)`, which leaves the queue empty. The caller drains the queue on the editor task, where it applies each event; [assistant.md](../platform/assistant/assistant.md) says how the assistant does it. The two places have no order between them. A caller that must keep the order, as the assistant does, puts the events of `on_event` into the same queue.
+
+An agent can name its session just after a prompt ends, and the queue keeps the name. An agent can also start a turn of its own when a background task ends, and the events of that turn come through the queue too.
 
 `instructions` is text that the agent adds to its system prompt: what its host is, and how to use the tools of the host. An agent that has no way to take it ignores it.
 
@@ -559,13 +598,17 @@ reads it on the editor task. So every direction calls through one door:
 run_on_editor_task!(function_, target; wait = true) -> value
 ```
 
-It runs `function_()` on the task that runs the loop of `target`, in the drain of
-the next frame, and the calling task waits for the value. `run_turn!` runs each
+It runs `function_()` in the drain of the next frame of `target`, as a code unit
+that owns the documents of the editor, and the calling task waits for the value.
+The loop runs held frames meanwhile, so the window answers. `run_turn!` runs each
 tool call through it, with its fault barrier inside the call, and the MCP server
-runs the call of a client the same way. So a tool runs on the editor task for
-the assistant in the window and for an MCP client. With `wait = false` the call
-only posts, and the answer is `nothing`. The assistant posts each streamed part
-in this way.
+runs the call of a client the same way. So a tool runs as the owner of the
+documents for the assistant in the window and for an MCP client. A tool that
+reads no document (`reads_documents = false`) runs on the calling task instead.
+With `wait = false` the call only posts, and the answer is `nothing`. The
+assistant posts each streamed part in this way. A call with `wait = true` from
+work that the running unit started throws, and a call that does not start within
+`timeout` seconds throws `EditorCallTimeoutException`.
 
 The agent layer declares the function, and its default runs `function_()` at
 once, because a target that is not an editor has no loop to wait for. The editor
@@ -578,7 +621,7 @@ layer answers it for an `Editor` whose loop runs on another task;
 | --- | --- | --- |
 | `make_agent_server(:mcp, …)` | `agent/AgentInterface.jl` | `ProjecturedMCP` (`package/ProjecturedMCP`, source in `source/adapter/mcp/`) |
 | `get_agent_server_access` | `agent/AgentInterface.jl` | `ProjecturedMCP` |
-| `make_agent_connection(:acp, …)` and the six other generics of a connection | `agent/AgentConnectionInterface.jl` | `ProjecturedACP` (`package/ProjecturedACP`, source in `source/adapter/acp/`); `ScriptedAgentConnection` in `ProjecturedKernelExample` |
+| `make_agent_connection(:acp, …)` and the other generics of a connection | `agent/AgentConnectionInterface.jl` | `ProjecturedACP` (`package/ProjecturedACP`, source in `source/adapter/acp/`); `ScriptedAgentConnection` in `ProjecturedKernelExample`, which keeps the queue of each session in `sessions[k].events`, so a test puts an event between two prompts with `put_agent_event!(connection.sessions[k].events, event)`, and records `cancel_agent_subagent!` in `subagent_cancels` and `stop_agent_background_task!` in `background_task_stops` |
 | `run_on_editor_task!` | `agent/AgentInterface.jl` | the editor layer (`editor/Inbox.jl`) for an `Editor`; the default in `agent/AgentDefaults.jl` runs every other target at once |
 | `stream_turn`, `render_tool_schema`, `make_llm` | `llm/LlmInterface.jl` | `ProjecturedAnthropic`, `ProjecturedOllama`; `FakeLlm` / `ScriptedLlm` in `ProjecturedKernelExample` |
 | a `Tool`'s handler | `tool/Tool.jl` | `register_default_tools!`, and anyone else who registers one |

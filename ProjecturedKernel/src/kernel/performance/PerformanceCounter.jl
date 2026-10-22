@@ -1,16 +1,44 @@
 # Fragment of `PerformanceModule` — the counters of one scope: counts, and times.
 
-# The compile-time switch. Set PROJECTURED_PERFORMANCE_COUNTERS=true and
-# recompile to compile the counters in, for example to profile an edit or to run
-# the tests that count. The variable is read once, at precompile time. While the
-# switch is off, `@count_performance` expands to `nothing` and
-# `@measure_performance_time` to its expression, so a normal build carries no
-# instrumentation.
-const PERFORMANCE_COUNTERS_ENABLED =
-    get(ENV, "PROJECTURED_PERFORMANCE_COUNTERS", "false") == "true"
+"""
+    PERFORMANCE_COUNTERS_ENABLED
+
+Whether the counters are compiled into the kernel: the preference
+`performance_counters` of `ProjecturedKernel` when the kernel was compiled, `true`
+or `false`. It is `false` by default, and another value stops the compile of the
+kernel with an `ArgumentError`.
+
+Use it to skip work that only the counters need, such as a log of the counts of
+a frame.
+
+To turn the counters on, put the preference in the `LocalPreferences.toml` beside
+the `Project.toml` of an environment that lists `ProjecturedKernel`, and start
+Julia again. To turn them off, write `false` or delete the line.
+
+    [ProjecturedKernel]
+    performance_counters = true
+
+Each change compiles the kernel and every package above it again; only the kernel
+keeps a compiled image for each value. While the counters are off,
+`@count_performance` expands to `nothing` and `@measure_performance_time` to its
+expression, so the kernel carries no instrumentation.
+
+# Example
+
+    PERFORMANCE_COUNTERS_ENABLED && print_counts(get_performance_counters())
+
+See also [`run_with_performance_counters`](@ref) and [`@count_performance`](@ref).
+"""
+const PERFORMANCE_COUNTERS_ENABLED = let
+    value = @load_preference("performance_counters", false)
+    value isa Bool || throw(ArgumentError(
+        "the preference performance_counters of ProjecturedKernel is true or false, " *
+        "not $(repr(value))"))
+    value
+end
 
 # The counters of one scope: the counts, and the times in nanoseconds. A time
-# never goes into the counts, so a reader knows the unit of every key.
+# never goes into the counts, so the unit of every key is clear.
 struct _PerformanceCounterStore
     counts::Dict{Symbol,Int}
     times::Dict{Symbol,Int}
@@ -53,7 +81,7 @@ stages. The counters exist only when the switch compiled them in.
 # Example
 
     counters = run_with_performance_counters() do
-        run_frame!(editor)
+        work()
         get_performance_counters()
     end
 
@@ -78,11 +106,14 @@ Copies of the counters of the current scope. `counts` holds the seeded counts
 Use it inside a scope to read how much work the scope did so far: how many cells
 it read, computed, invalidated and wrote, and how long each timed stage took.
 
+A computation must not call it. The store is a collector that a computation
+writes and never reads, so no cached value depends on it.
+
 # Example
 
     reads = run_with_performance_counters() do
-        run_frame!(editor)
-        get_performance_counters().counts[:reads]
+        work()
+        get(get_performance_counters().counts, :reads, 0)
     end
 
 See also [`run_with_performance_counters`](@ref), which binds the store.
@@ -100,7 +131,8 @@ Add one to the count `key` of the current scope. Expands to `nothing` when
 counting is compiled out, so a count costs nothing in a normal build.
 
 Use it to count an event of your own in a profile, for example each call of a
-function that runs more often than you expect.
+function that runs more often than you expect. A key names a count or a time,
+never both: the frame store throws an `ArgumentError` for a name in both groups.
 
 # Example
 
@@ -120,11 +152,12 @@ scope, and return the value of `expr`. When counting is compiled out, expands to
 just `expr`.
 
 Use it to time one stage of work in a profile, for example the print or the
-paint of a frame.
+paint of a frame. A key names a time or a count, never both: the frame store
+throws an `ArgumentError` for a name in both groups.
 
 # Example
 
-    @measure_performance_time :print_time run_print_stage!(editor)
+    @measure_performance_time :parse_time parse(Int, text)
 
 See also [`@count_performance`](@ref), which adds a count and not a time.
 """

@@ -21,10 +21,22 @@ end
 @projection_template JuliaIdentifierToSyntaxLeaf JuliaIdentifier (p, v) ->
     SyntaxLeaf(TextString(() -> v.name, p.style))
 
+# The `as` of a slot whose kind of name the place gives: a bare identifier in it
+# prints in `style`, and any other value through its own projection.
+_style_identifier(style) = value -> value isa JuliaIdentifier ? JuliaIdentifierToSyntaxLeaf(; style) : nothing
+
+# The `as` of the header of a struct or an abstract type: the name that it
+# defines prints in `p.name_style`, alone or on the left of `<:`.
+_style_type_header(p) = value ->
+    value isa JuliaIdentifier ? JuliaIdentifierToSyntaxLeaf(; style = p.name_style) :
+    value isa JuliaSubtype ? JuliaSubtypeToSyntaxNode(; op_style = p.op_style, type_style = p.type_style,
+                                                      lhs_style = p.name_style) :
+    nothing
+
 # ── JuliaIntegerToSyntaxLeaf ────────────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaIntegerToSyntaxLeaf
-    style::StyleText = get_julia_style(nothing, :constant_text)
+    style::StyleText = get_julia_style(nothing, :number_text)
 end
 
 @projection_template JuliaIntegerToSyntaxLeaf JuliaInteger (p, v) ->
@@ -33,7 +45,7 @@ end
 # ── JuliaFloatToSyntaxLeaf ──────────────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaFloatToSyntaxLeaf
-    style::StyleText = get_julia_style(nothing, :constant_text)
+    style::StyleText = get_julia_style(nothing, :number_text)
 end
 
 @projection_template JuliaFloatToSyntaxLeaf JuliaFloat (p, v) ->
@@ -42,7 +54,7 @@ end
 # ── JuliaStringToSyntaxLeaf ─────────────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaStringToSyntaxLeaf
-    style::StyleText = get_julia_style(nothing, :literal_text)
+    style::StyleText = get_julia_style(nothing, :string_text)
     quote_style::StyleText = get_julia_style(nothing, :punctuation_text)
 end
 
@@ -56,7 +68,7 @@ end
 # ── JuliaBoolToSyntaxLeaf ───────────────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaBoolToSyntaxLeaf
-    style::StyleText = get_julia_style(nothing, :constant_text)
+    style::StyleText = get_julia_style(nothing, :bool_text)
 end
 
 # Guard the `? :` against a transient non-`Bool` value (a mid-edit `bound` read can clear
@@ -68,7 +80,7 @@ end
 # ── JuliaNothingToSyntaxLeaf ────────────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaNothingToSyntaxLeaf
-    style::StyleText = get_julia_style(nothing, :constant_text)
+    style::StyleText = get_julia_style(nothing, :nothing_text)
 end
 
 @projection_template JuliaNothingToSyntaxLeaf JuliaNothing (p, v) ->
@@ -87,7 +99,7 @@ end
 # ── JuliaCharToSyntaxLeaf ───────────────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaCharToSyntaxLeaf
-    style::StyleText = get_julia_style(nothing, :literal_text)
+    style::StyleText = get_julia_style(nothing, :char_text)
     quote_style::StyleText = get_julia_style(nothing, :punctuation_text)
 end
 
@@ -215,7 +227,7 @@ end
 # each projected via its own type dispatch.
 
 @projection UntrackedCell struct JuliaMacroCallToSyntaxNode
-    name_style::StyleText = get_julia_style(nothing, :callee_text)
+    name_style::StyleText = get_julia_style(nothing, :macro_text)
     sep_style::StyleText  = get_julia_style(nothing, :punctuation_text)
 end
 
@@ -244,33 +256,79 @@ end
 #     <text>
 #     \"\"\"
 #     <subject>
-# The `SyntaxToText` stage carries per-leaf line breaks through, so the
-# triple-quote fences and the subject land on their own lines.
+# The opening fence is the `open` of the text leaf, and the closing fence is in
+# the separator, so the breaks are text. The text is lines, and each line of the
+# docstring follows the indentation of the code around it. A text that ends in a
+# break, as `\"\"\"\n…\n\"\"\"` gives it, puts the closing fence on a line of its
+# own already; the separator breaks before the fence only when the text does not.
+# A separation can not collapse, so a fold key inside a docstring folds the code
+# around it. The text is escaped as a triple-quoted string spells it, and the
+# parser removes the escapes, so any text goes through a save and a load. A
+# person edits the text, as the text of a JSON string, in its escaped form.
 
 @projection UntrackedCell struct JuliaDocstringToSyntaxNode
-    doc_style::StyleText   = get_julia_style(nothing, :literal_text)
+    doc_style::StyleText   = get_julia_style(nothing, :string_text)
     fence_style::StyleText = get_julia_style(nothing, :punctuation_text)
 end
 
 @projection_template JuliaDocstringToSyntaxNode JuliaDocstring (p, d) ->
-    SyntaxConcatenation([
-        SyntaxLeaf(TextString("\"\"\"\n", p.fence_style)),
-        SyntaxLeaf(TextString(() -> d.text, p.doc_style)),
-        SyntaxLeaf(TextString("\n\"\"\"\n", p.fence_style)),
+    SyntaxSeparation([
+        SyntaxLeaf(bound(:text, String, make_text_block(() -> _escape_julia_docstring(d.text), p.doc_style));
+                   open=TextString("\"\"\"\n", p.fence_style)),
         project(:subject),
-    ])
+    ]; separator=make_text_block(() -> (endswith(d.text, '\n') ? "" : "\n") * "\"\"\"\n", p.fence_style))
+
+# ── JuliaCommentToSyntaxLeaf ───────────────────────────────────────────────
+# `#` and the text. The statement list that holds the comment puts it on a line
+# of its own.
+
+@projection UntrackedCell struct JuliaCommentToSyntaxLeaf
+    style::StyleText = get_julia_style(nothing, :comment_text)
+end
+
+@projection_template JuliaCommentToSyntaxLeaf JuliaComment (p, c) ->
+    SyntaxLeaf(bound(:text, String, TextString(() -> c.text, p.style));
+               open=TextString("#", p.style))
+
+# ── JuliaMultilineCommentToSyntaxLeaf ──────────────────────────────────────
+# `#=`, the text and `=#`. The text is lines, so each of its lines follows the
+# indentation of the code around it.
+
+@projection UntrackedCell struct JuliaMultilineCommentToSyntaxLeaf
+    style::StyleText = get_julia_style(nothing, :comment_text)
+end
+
+@projection_template JuliaMultilineCommentToSyntaxLeaf JuliaMultilineComment (p, c) ->
+    SyntaxLeaf(bound(:text, String, make_text_block(() -> c.text, p.style));
+               open=TextString("#=", p.style),
+               close=TextString("=#", p.style))
+
+# ── JuliaEndOfLineCommentToSyntaxNode ──────────────────────────────────────
+# The statement, two spaces, `#` and the text, on the line of the statement.
+
+@projection UntrackedCell struct JuliaEndOfLineCommentToSyntaxNode
+    style::StyleText = get_julia_style(nothing, :comment_text)
+end
+
+@projection_template JuliaEndOfLineCommentToSyntaxNode JuliaEndOfLineComment (p, c) ->
+    SyntaxConcatenation([ project(:subject),
+                          SyntaxLeaf(bound(:text, String, TextString(() -> c.text, p.style));
+                                     open=TextString("  #", p.style)) ])
 
 # ── JuliaAbstractTypeToSyntaxNode ──────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaAbstractTypeToSyntaxNode
     keyword_style::StyleText = get_julia_style(nothing, :keyword_text)
     sep_style::StyleText     = get_julia_style(nothing, :punctuation_text)
+    name_style::StyleText    = get_julia_style(nothing, :type_definition_text)
+    op_style::StyleText      = get_julia_style(nothing, :operator_text)
+    type_style::StyleText    = get_julia_style(nothing, :type_text)
 end
 
 @projection_template JuliaAbstractTypeToSyntaxNode JuliaAbstractType (p, a) ->
     SyntaxConcatenation([
         SyntaxLeaf(TextString("abstract type ", p.keyword_style)),
-        project(:header),
+        project(:header; as = _style_type_header(p)),
         SyntaxLeaf(TextString(" end", p.keyword_style)),
     ])
 
@@ -279,29 +337,31 @@ end
 @projection UntrackedCell struct JuliaStructToSyntaxNode
     keyword_style::StyleText = get_julia_style(nothing, :keyword_text)
     sep_style::StyleText     = get_julia_style(nothing, :punctuation_text)
+    name_style::StyleText    = get_julia_style(nothing, :type_definition_text)
+    op_style::StyleText      = get_julia_style(nothing, :operator_text)
+    type_style::StyleText    = get_julia_style(nothing, :type_text)
 end
 
 @projection_template JuliaStructToSyntaxNode JuliaStruct (p, s) ->
     SyntaxConcatenation([
         SyntaxLeaf(TextString(() -> s.mutable ? "mutable struct " : "struct ", p.keyword_style)),
-        project(:header),
-        SyntaxLeaf(TextString("\n", p.sep_style)),
+        project(:header; as = _style_type_header(p)),
+        # `body` is a `JuliaBlock`, whose texts put each field on a line of its
+        # own and `end` on the line after the last one.
         project(:body),
-        # `body` is a `JuliaBlock` whose own trailing chrome already
-        # emits a "\n" after the last field; no leading "\n" here or
-        # a blank line opens up before `end`.
         SyntaxLeaf(TextString("end", p.keyword_style)),
     ])
 
 # ── JuliaModuleDefinitionToSyntaxNode ─────────────────────────────────────────────
 #
-# The body is a `JuliaBlock`, so it indents and supplies its own surrounding
-# newlines — the same shape `JuliaStructToSyntaxNode` relies on, and the reason
-# neither node writes a newline before `end`.
+# The body is a `JuliaBlock`, so its texts hold the breaks around its statements —
+# the same shape `JuliaStructToSyntaxNode` relies on, and the reason neither node
+# writes a break before `end`. The node writes no comment after `end`: a
+# `# module Name` that a file holds is an end-of-line comment of the module.
 
 @projection UntrackedCell struct JuliaModuleDefinitionToSyntaxNode
     keyword_style::StyleText = get_julia_style(nothing, :keyword_text)
-    name_style::StyleText    = get_julia_style(nothing, :name_text)
+    name_style::StyleText    = get_julia_style(nothing, :module_text)
     sep_style::StyleText     = get_julia_style(nothing, :punctuation_text)
 end
 
@@ -313,33 +373,38 @@ end
                                           placeholder = "enter module name",
                                           style = p.name_style))),
         project(:body),
-        SyntaxLeaf(TextString(() -> "end # module " * m.name, p.keyword_style)),
+        SyntaxLeaf(TextString("end", p.keyword_style)),
     ])
 
 # ── JuliaSubtypeToSyntaxNode ───────────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaSubtypeToSyntaxNode
-    op_style::StyleText = get_julia_style(nothing, :symbol_text)
+    op_style::StyleText = get_julia_style(nothing, :operator_text)
+    type_style::StyleText = get_julia_style(nothing, :type_text)
+    # The style of a name on the left, when the place gives its kind, such as the
+    # name that the header of a struct defines; `nothing` prints it as it is.
+    lhs_style::Union{StyleText,Nothing} = nothing
 end
 
 # `A <: B`, and `<:B` for the anonymous bound — where there is nothing on the
 # left there is no space either.
 @projection_template JuliaSubtypeToSyntaxNode JuliaSubtype (p, s) ->
     SyntaxConcatenation([
-        project(:lhs),
+        project(:lhs; as = p.lhs_style === nothing ? nothing : _style_identifier(p.lhs_style)),
         SyntaxLeaf(TextString(() -> s.lhs isa JuliaEmpty ? "<:" : " <: ", p.op_style)),
-        project(:rhs),
+        project(:rhs; as = _style_identifier(p.type_style)),
     ])
 
 # ── JuliaCurlyToSyntaxNode ─────────────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaCurlyToSyntaxNode
     brace_style::StyleText = get_julia_style(nothing, :punctuation_text)
+    type_style::StyleText  = get_julia_style(nothing, :type_text)
 end
 
 @projection_template JuliaCurlyToSyntaxNode JuliaCurly (p, c) ->
     SyntaxConcatenation([
-        project(:callee),
+        project(:callee; as = _style_identifier(p.type_style)),
         SyntaxNode(collection(:params);
                    open=TextString("{", p.brace_style),
                    close=TextString("}", p.brace_style),
@@ -379,13 +444,14 @@ end
 # ── JuliaFieldAccessToSyntaxNode ────────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaFieldAccessToSyntaxNode
-    dot::StyleText = get_julia_style(nothing, :operator_text)
+    dot::StyleText   = get_julia_style(nothing, :operator_text)
+    field::StyleText = get_julia_style(nothing, :field_text)
 end
 
 @projection_template JuliaFieldAccessToSyntaxNode JuliaFieldAccess (p, f) ->
     SyntaxConcatenation([ project(:object),
                           SyntaxLeaf(TextString(".", p.dot)),
-                          project(:field) ])
+                          project(:field; as = _style_identifier(p.field)) ])
 
 # ── JuliaTupleToSyntaxNode ──────────────────────────────────────────────────
 
@@ -427,23 +493,25 @@ end
 # ── JuliaTypeAnnotationToSyntaxNode ─────────────────────────────────────────
 
 @projection UntrackedCell struct JuliaTypeAnnotationToSyntaxNode
-    op::StyleText = get_julia_style(nothing, :operator_text)
+    op::StyleText   = get_julia_style(nothing, :operator_text)
+    type::StyleText = get_julia_style(nothing, :type_text)
 end
 
 @projection_template JuliaTypeAnnotationToSyntaxNode JuliaTypeAnnotation (p, t) ->
     SyntaxConcatenation([ project(:value),
                           SyntaxLeaf(TextString("::", p.op)),
-                          project(:type) ])
+                          project(:type; as = _style_identifier(p.type)) ])
 
 # The anonymous `::T` form — nothing before the `::`, just the type.
 
 @projection UntrackedCell struct JuliaAnonymousTypeAnnotationToSyntaxNode
-    op::StyleText = get_julia_style(nothing, :operator_text)
+    op::StyleText   = get_julia_style(nothing, :operator_text)
+    type::StyleText = get_julia_style(nothing, :type_text)
 end
 
 @projection_template JuliaAnonymousTypeAnnotationToSyntaxNode JuliaAnonymousTypeAnnotation (p, t) ->
     SyntaxConcatenation([ SyntaxLeaf(TextString("::", p.op)),
-                          project(:type) ])
+                          project(:type; as = _style_identifier(p.type)) ])
 
 # ── JuliaEmptyToSyntaxLeaf ─────────────────────────────────────────────────
 # Renders JuliaEmpty as literally nothing — the empty concatenation is
@@ -526,7 +594,7 @@ end
 
 @projection UntrackedCell struct JuliaLambdaToSyntaxNode
     delim::StyleText = get_julia_style(nothing, :punctuation_text)
-    arrow::StyleText = get_julia_style(nothing, :symbol_text)
+    arrow::StyleText = get_julia_style(nothing, :operator_text)
 end
 
 @projection_template JuliaLambdaToSyntaxNode JuliaLambda (p, l) ->
@@ -570,7 +638,7 @@ end
 # else inside a dollar-brace. The quotes belong to the whole thing, not to the chunks,
 # which is why this is a node and not a leaf.
 @projection UntrackedCell struct JuliaStringInterpolationToSyntaxNode
-    delim::StyleText = get_julia_style(nothing, :literal_text)
+    delim::StyleText = get_julia_style(nothing, :string_text)
 end
 
 @projection_template JuliaStringInterpolationToSyntaxNode JuliaStringInterpolation (p, s) ->
@@ -580,14 +648,14 @@ end
 
 # A literal run inside an interpolated string: its text, and nothing around it.
 @projection UntrackedCell struct JuliaStringChunkToSyntaxLeaf
-    style::StyleText = get_julia_style(nothing, :literal_text)
+    style::StyleText = get_julia_style(nothing, :string_text)
 end
 
 @projection_template JuliaStringChunkToSyntaxLeaf JuliaStringChunk (p, c) ->
     SyntaxLeaf(TextString(() -> c.text, p.style))
 
 @projection UntrackedCell struct JuliaInterpolationToSyntaxNode
-    delim::StyleText = get_julia_style(nothing, :symbol_text)
+    delim::StyleText = get_julia_style(nothing, :operator_text)
 end
 
 @projection_template JuliaInterpolationToSyntaxNode JuliaInterpolation (p, i) ->
@@ -741,7 +809,7 @@ end
 end
 
 @projection_template JuliaBlockToSyntaxNode JuliaBlock (p, b) ->
-    SyntaxNode(collection(:statements); indentation=p.indentation)
+    SyntaxNode(collection(:statements); open="\n", sep="\n", close="\n", indentation=p.indentation)
 
 # ── JuliaToplevelToSyntaxNode ───────────────────────────────────────────────
 
@@ -777,18 +845,17 @@ end
         SyntaxLeaf(TextString(() -> _if_end_line(m.else_branch), p.keyword)),
     ])
 
-# The keyword that leads the else-branch. `JuliaBlock` already emits
-# both a leading AND a trailing "\n" (line-chrome around every
-# statement plus one before the close). So the prefix is a plain
-# `else` — the block on either side supplies the newlines, and any
-# extra "\n" here would double-space.
+# The keyword that leads the else-branch. The texts of `JuliaBlock`
+# hold a break before each statement and one after the last. So the
+# prefix is a plain `else` — the block on either side supplies the
+# breaks, and any extra "\n" here would double-space.
 #   empty   → ""     (no else clause)
 #   JuliaIf → "else" (nested child prints its own `if` → `elseif`)
 #   other   → "else"
 _if_else_prefix(else_branch) = _is_empty_else(else_branch) ? "" : "else"
 
-# The closing `end` line. The then/else block's own trailing chrome
-# supplies the leading newline. Nested JuliaIf else-branches print
+# The closing `end` line. The closing break of the then/else block
+# puts it on a line of its own. Nested JuliaIf else-branches print
 # their own `end`, so suppress ours.
 _if_end_line(else_branch) = else_branch isa JuliaIf ? "" : "end"
 
@@ -805,6 +872,8 @@ _is_empty_else(x) =
 @projection UntrackedCell struct JuliaFunctionToSyntaxNode
     keyword::StyleText = get_julia_style(nothing, :keyword_text)
     delim::StyleText = get_julia_style(nothing, :punctuation_text)
+    name::StyleText = get_julia_style(nothing, :function_definition_text)
+    type::StyleText = get_julia_style(nothing, :type_text)
 end
 
 # The result type prints after the parameter list; `JuliaEmpty` prints nothing,
@@ -812,12 +881,12 @@ end
 @projection_template JuliaFunctionToSyntaxNode JuliaFunction (p, f) ->
     SyntaxConcatenation([ SyntaxConcatenation([ SyntaxLeaf(TextString("function", p.keyword);
                                                            close=TextString(" ", p.keyword.font)),
-                                                project(:name),
+                                                project(:name; as = _style_identifier(p.name)),
                                                 SyntaxNode(collection(:params);
                                                            open=TextString("(", p.delim),
                                                            close=TextString(")", p.delim),
                                                            sep=TextString(", ", p.delim)),
-                                                SyntaxNode([project(:result_type)];
+                                                SyntaxNode([project(:result_type; as = _style_identifier(p.type))];
                                                            open=TextString(() -> f.result_type isa JuliaEmpty ? "" : "::",
                                                                            p.delim)),
                                                 project(:where_clause) ]),
@@ -841,10 +910,11 @@ end
 
 @projection UntrackedCell struct JuliaFunctionDeclarationToSyntaxNode
     keyword::StyleText = get_julia_style(nothing, :keyword_text)
+    name::StyleText    = get_julia_style(nothing, :function_definition_text)
 end
 
 @projection_template JuliaFunctionDeclarationToSyntaxNode JuliaFunctionDeclaration (p, f) ->
-    SyntaxNode([project(:name)];
+    SyntaxNode([project(:name; as = _style_identifier(p.name))];
                open=TextString("function ", p.keyword),
                close=TextString(" end", p.keyword))
 
@@ -875,10 +945,11 @@ end
 """
     JuliaObjectToSyntaxLeaf()
 
-An object that stands in Julia code, a document that is not Julia, such as a
+An object that stands in Julia code, the value of a `JuliaObject`, such as a
 widget a person pasted into a form, as one leaf: its title in angle marks,
 `⟨Table⟩`, or its type name when it has no title. A line of syntax holds only
-text, so the object can not draw as itself here.
+text, so the object can not draw as itself here. A document that is not Julia,
+printed through the Julia table at the root, draws the same way.
 
 The leaf takes no key, so a key never reaches the object's own table: the
 object is selected, copied and replaced whole. It shows a selection only when
@@ -896,6 +967,7 @@ end
 
 _get_julia_object_label(object) =
     "⟨" * string(something(get_document_title(object), nameof(typeof(object)))) * "⟩"
+_get_julia_object_label(object::JuliaObject) = _get_julia_object_label(object.value)
 
 map_reference_forward(::JuliaObjectToSyntaxLeaf, iomap, reference) =
     reference isa EmptyReference ? EmptyReference() : nothing
@@ -928,57 +1000,67 @@ through, for an entry of its own that styles through `SyntaxModule`.
 """
 function JuliaToSyntax(entries::Pair...; theme = nothing, syntax_theme = nothing)
     get_style(name) = get_julia_style(theme, name)
-    literal_style       = (style = get_style(:literal_text),)
-    constant_style      = (style = get_style(:constant_text),)
-    literal_quote_style = (style = get_style(:literal_text), quote_style = get_style(:punctuation_text))
+    string_style        = (style = get_style(:string_text),)
+    number_style        = (style = get_style(:number_text),)
     op_delimiter_style  = (op = get_style(:operator_text), delimiter = get_style(:punctuation_text))
     delim_callee_style  = (delim = get_style(:punctuation_text), callee = get_style(:callee_text))
     keyword_sep_style   = (keyword_style = get_style(:keyword_text), sep_style = get_style(:punctuation_text))
     op_only_style       = (op = get_style(:operator_text),)
+    type_header_style   = (name_style = get_style(:type_definition_text), op_style = get_style(:operator_text),
+                           type_style = get_style(:type_text))
     delim_only_style    = (delim = get_style(:punctuation_text),)
     keyword_only_style  = (keyword = get_style(:keyword_text),)
     keyword_delim_style = (keyword = get_style(:keyword_text), delim = get_style(:punctuation_text))
     TypeDispatchingProjection(
         JuliaInsertion       => JuliaInsertionToSyntaxLeaf(; theme),
         JuliaIdentifier      => JuliaIdentifierToSyntaxLeaf(; style = get_style(:identifier_text)),
-        JuliaInteger         => JuliaIntegerToSyntaxLeaf(; constant_style...),
-        JuliaFloat           => JuliaFloatToSyntaxLeaf(; constant_style...),
-        JuliaString          => JuliaStringToSyntaxLeaf(; literal_quote_style...),
-        JuliaBool            => JuliaBoolToSyntaxLeaf(; constant_style...),
-        JuliaNothing         => JuliaNothingToSyntaxLeaf(; constant_style...),
+        JuliaInteger         => JuliaIntegerToSyntaxLeaf(; number_style...),
+        JuliaFloat           => JuliaFloatToSyntaxLeaf(; number_style...),
+        JuliaString          => JuliaStringToSyntaxLeaf(; string_style...,
+                                                        quote_style = get_style(:punctuation_text)),
+        JuliaBool            => JuliaBoolToSyntaxLeaf(; style = get_style(:bool_text)),
+        JuliaNothing         => JuliaNothingToSyntaxLeaf(; style = get_style(:nothing_text)),
         JuliaSymbol          => JuliaSymbolToSyntaxLeaf(; style = get_style(:symbol_text)),
-        JuliaChar            => JuliaCharToSyntaxLeaf(; literal_quote_style...),
+        JuliaChar            => JuliaCharToSyntaxLeaf(; style = get_style(:char_text),
+                                                      quote_style = get_style(:punctuation_text)),
         JuliaBinaryOperation        => JuliaBinaryOperationToSyntaxNode(; op_delimiter_style...),
         JuliaUnaryOperation         => JuliaUnaryOperationToSyntaxNode(; op_delimiter_style...),
         JuliaCall            => JuliaCallToSyntaxNode(; delim_callee_style...),
         JuliaSplat           => JuliaSplatToSyntaxNode(; delim_only_style...),
         JuliaBroadcast       => JuliaBroadcastToSyntaxNode(; delim_callee_style...),
-        JuliaStringInterpolation => JuliaStringInterpolationToSyntaxNode(; delim = get_style(:literal_text)),
-        JuliaStringChunk     => JuliaStringChunkToSyntaxLeaf(; literal_style...),
-        JuliaInterpolation   => JuliaInterpolationToSyntaxNode(; delim = get_style(:symbol_text)),
+        JuliaStringInterpolation => JuliaStringInterpolationToSyntaxNode(; delim = get_style(:string_text)),
+        JuliaStringChunk     => JuliaStringChunkToSyntaxLeaf(; string_style...),
+        JuliaInterpolation   => JuliaInterpolationToSyntaxNode(; delim = get_style(:operator_text)),
         JuliaWhere           => JuliaWhereToSyntaxNode(; keyword_delim_style...),
         JuliaComprehension   => JuliaComprehensionToSyntaxNode(; keyword_delim_style...),
         JuliaDo              => JuliaDoToSyntaxNode(; keyword_only_style...),
         JuliaLet             => JuliaLetToSyntaxNode(; keyword_delim_style...),
         JuliaNamedTuple      => JuliaNamedTupleToSyntaxNode(; delim_only_style...),
-        JuliaMacroCall       => JuliaMacroCallToSyntaxNode(; name_style = get_style(:callee_text),
+        JuliaMacroCall       => JuliaMacroCallToSyntaxNode(; name_style = get_style(:macro_text),
                                                              sep_style = get_style(:punctuation_text)),
         JuliaConst           => JuliaConstToSyntaxNode(; keyword_style = get_style(:keyword_text)),
-        JuliaDocstring       => JuliaDocstringToSyntaxNode(; doc_style = get_style(:literal_text),
+        JuliaDocstring       => JuliaDocstringToSyntaxNode(; doc_style = get_style(:string_text),
                                                              fence_style = get_style(:punctuation_text)),
-        JuliaAbstractType    => JuliaAbstractTypeToSyntaxNode(; keyword_sep_style...),
-        JuliaStruct          => JuliaStructToSyntaxNode(; keyword_sep_style...),
-        JuliaSubtype         => JuliaSubtypeToSyntaxNode(; op_style = get_style(:symbol_text)),
-        JuliaCurly           => JuliaCurlyToSyntaxNode(; brace_style = get_style(:punctuation_text)),
-        JuliaAnonymousTypeAnnotation => JuliaAnonymousTypeAnnotationToSyntaxNode(; op_only_style...),
+        JuliaComment          => JuliaCommentToSyntaxLeaf(; style = get_style(:comment_text)),
+        JuliaMultilineComment => JuliaMultilineCommentToSyntaxLeaf(; style = get_style(:comment_text)),
+        JuliaEndOfLineComment => JuliaEndOfLineCommentToSyntaxNode(; style = get_style(:comment_text)),
+        JuliaAbstractType    => JuliaAbstractTypeToSyntaxNode(; keyword_sep_style..., type_header_style...),
+        JuliaStruct          => JuliaStructToSyntaxNode(; keyword_sep_style..., type_header_style...),
+        JuliaSubtype         => JuliaSubtypeToSyntaxNode(; op_style = get_style(:operator_text),
+                                                         type_style = get_style(:type_text)),
+        JuliaCurly           => JuliaCurlyToSyntaxNode(; brace_style = get_style(:punctuation_text),
+                                                       type_style = get_style(:type_text)),
+        JuliaAnonymousTypeAnnotation => JuliaAnonymousTypeAnnotationToSyntaxNode(; op_only_style...,
+                                                                                 type = get_style(:type_text)),
         JuliaEmpty                   => JuliaEmptyToSyntaxLeaf(),
         JuliaTernary         => JuliaTernaryToSyntaxNode(; op_only_style...),
         JuliaIndex           => JuliaIndexToSyntaxNode(; delim_only_style...),
-        JuliaFieldAccess     => JuliaFieldAccessToSyntaxNode(; dot = get_style(:operator_text)),
+        JuliaFieldAccess     => JuliaFieldAccessToSyntaxNode(; dot = get_style(:operator_text),
+                                                             field = get_style(:field_text)),
         JuliaTuple           => JuliaTupleToSyntaxNode(; delim_only_style...),
         JuliaArray           => JuliaArrayToSyntaxNode(; delim_only_style...),
         JuliaRange           => JuliaRangeToSyntaxNode(; op_only_style...),
-        JuliaTypeAnnotation  => JuliaTypeAnnotationToSyntaxNode(; op_only_style...),
+        JuliaTypeAnnotation  => JuliaTypeAnnotationToSyntaxNode(; op_only_style..., type = get_style(:type_text)),
         JuliaAssignment      => JuliaAssignmentToSyntaxNode(; op_only_style...),
         JuliaForIterator     => JuliaForIteratorToSyntaxNode(; keyword_only_style...),
         JuliaFor             => JuliaForToSyntaxNode(; keyword_delim_style...),
@@ -991,20 +1073,24 @@ function JuliaToSyntax(entries::Pair...; theme = nothing, syntax_theme = nothing
         JuliaBlock           => JuliaBlockToSyntaxNode(),
         JuliaToplevel        => JuliaToplevelToSyntaxNode(; delim_only_style...),
         JuliaIf              => JuliaIfToSyntaxNode(; keyword_only_style...),
-        JuliaFunction        => JuliaFunctionToSyntaxNode(; keyword_delim_style...),
-        JuliaFunctionDeclaration => JuliaFunctionDeclarationToSyntaxNode(; keyword_only_style...),
+        JuliaFunction        => JuliaFunctionToSyntaxNode(; keyword_delim_style...,
+                                                          name = get_style(:function_definition_text),
+                                                          type = get_style(:type_text)),
+        JuliaFunctionDeclaration => JuliaFunctionDeclarationToSyntaxNode(; keyword_only_style...,
+                                                                         name = get_style(:function_definition_text)),
         JuliaWhereParameters => JuliaWhereParametersToSyntaxNode(; keyword_delim_style...),
         JuliaUsing           => JuliaUsingToSyntaxNode(; keyword = get_style(:keyword_text),
                                                           path = get_style(:plain_text)),
         JuliaModuleDefinition       => JuliaModuleDefinitionToSyntaxNode(; keyword_style = get_style(:keyword_text),
-                                                                           name_style = get_style(:name_text),
+                                                                           name_style = get_style(:module_text),
                                                                            sep_style = get_style(:punctuation_text)),
         JuliaLambda          => JuliaLambdaToSyntaxNode(; delim = get_style(:punctuation_text),
-                                                           arrow = get_style(:symbol_text)),
+                                                           arrow = get_style(:operator_text)),
         # The types of a domain that embeds Julia code.
+        JuliaObject          => JuliaObjectToSyntaxLeaf(; label = get_style(:identifier_text)),
         entries...,
-        # Last, because the first entry that matches is the one used: a node that
-        # is not Julia is an object that stands in the code.
+        # Last, because the first entry that matches is the one used: a document
+        # that is not Julia, printed through this table, draws as an object.
         Document             => JuliaObjectToSyntaxLeaf(; label = get_style(:identifier_text)),
     )
 end
@@ -1020,6 +1106,22 @@ function _julia_string_escape(s::AbstractString)
                      write(buf, ch)
     end
     String(take!(buf))
+end
+
+# The text of a docstring as a triple-quoted string spells it: a `\` and a `$`
+# are escaped, and so is the third quote of each run of three, so that no `"""`
+# in the text closes the docstring. A line break stays a break.
+function _escape_julia_docstring(text::AbstractString)
+    buffer = IOBuffer()
+    quotes = 0
+    for character in text
+        quotes = character == '"' ? quotes + 1 : 0
+        character == '\\' ? write(buffer, "\\\\") :
+        character == '$'  ? write(buffer, "\\\$") :
+        quotes == 3       ? (write(buffer, "\\\""); quotes = 0) :
+                            write(buffer, character)
+    end
+    String(take!(buffer))
 end
 
 # ── Natural-format registration ─────────────────────────────────────────────

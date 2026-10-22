@@ -1,5 +1,5 @@
 """
-`UntrackedCell` and `run_untracked`: a cell that computes at each read and records
+`UntrackedCell` and `run_without_cell_tracking`: a cell that computes at each read and records
 no reader, and a struct of cells of that kind. The tests need only the cell layer
 and the struct layer.
 """
@@ -21,7 +21,7 @@ function test_untracked_cell()
     c = UntrackedCell{Int}(3)
     @test c[] == 3
     @test peek(c) == 3
-    @test is_cell_up_to_date(c)
+    @test is_cell_valid(c)
     @test !is_computed_cell(c)
     @test get_cell_value_type(c) === Int
     @test UntrackedCell(4) isa UntrackedCell{Int}
@@ -47,7 +47,7 @@ end
     @test reader[] == 11
     @test !has_dependent_cells(source)
     source[] = 2
-    @test is_cell_up_to_date(reader)
+    @test is_cell_valid(reader)
     @test reader[] == 11                    # the reader keeps its value
     @test untracked[] == 20                 # the untracked cell reads the new one
 end
@@ -70,8 +70,8 @@ end
     @test has_dependent_cells(source)       # `inner` read it
     @test !has_dependent_cells(inner)       # `reader` did not
     source[] = 5
-    @test !is_cell_up_to_date(inner)
-    @test is_cell_up_to_date(reader)
+    @test !is_cell_valid(inner)
+    @test is_cell_valid(reader)
     @test untracked[] == 105
 end
 
@@ -91,13 +91,13 @@ end
     @test reader[] == 1
     @test has_dependent_cells(source)       # the read after the error recorded
     source[] = 2
-    @test !is_cell_up_to_date(reader)
+    @test !is_cell_valid(reader)
     @test reader[] == 2
 end
 
-@testset "run_untracked outside a computation" begin
+@testset "run_without_cell_tracking outside a computation" begin
     source = Cell(3)
-    @test CellModule.run_untracked(() -> source[] + 1) == 4
+    @test CellModule.run_without_cell_tracking(() -> source[] + 1) == 4
     @test !has_dependent_cells(source)
 end
 
@@ -118,6 +118,15 @@ end
     source[] = 8
     @test one.a == 8
     @test other.a == 8
+end
+
+@testset "an untracked cell shows its kind, and its answers" begin
+    @test repr(UntrackedCell{Int}(3)) == "UntrackedCell{$(Int)}(3)"
+    @test repr(UntrackedCell{Int}(@computation 3)) == "UntrackedCell{$(Int)}(computation)"
+    @test is_cell_valid(UntrackedCell{Int}(@computation 3))
+    @test UntrackedCell(@computation 1) isa UntrackedCell{Any}
+    @test UntrackedCell{Float64}(1)[] === 1.0
+    @test !has_dependent_cells(UntrackedCell{Int}(3))
 end
 
 end

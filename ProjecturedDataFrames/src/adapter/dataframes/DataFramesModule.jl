@@ -31,12 +31,14 @@ import ..CollectionModule: is_table, get_table_row_count, get_table_column_names
                            get_table_value, find_table_column, make_table_part, make_table_document
 
 export DataFrameColumnFilter, DataFrameSortKey, DataFrameQuery
-export DataFrameView, jump_to_row, make_data_frame_cell
-export DataFrameViewRows, DataFrameViewRow, DataFrameViewColumns, DataFrameColumn
-export RefreshDataFrameViewOperation, SetDataFrameValueOperation, DataFrameCellEdit,
-       OpenDataFrameCellOperation, CloseDataFrameCellOperation,
-       InsertDataFrameRowOperation, DeleteDataFrameRowOperation,
-       InsertDataFrameColumnOperation, DeleteDataFrameColumnOperation, MoveDataFrameColumnOperation
+export DataFrameView, DataFrameCellEdit, DataFrameViewRows, DataFrameViewRow,
+       DataFrameViewColumns, jump_to_row, make_data_frame_cell
+export DataFrameColumn
+export SetDataFrameValueOperation, OpenDataFrameCellOperation, CloseDataFrameCellOperation
+export InsertDataFrameRowOperation, DeleteDataFrameRowOperation
+export InsertDataFrameColumnOperation, DeleteDataFrameColumnOperation,
+       MoveDataFrameColumnOperation
+export RefreshDataFrameViewOperation
 export DataFrameTheme, ScaledDataFrameTheme
 export DataFrameViewToWidget, make_data_frame_view_projection
 export DataFrameViewRowToWidget, make_data_frame_row_projection
@@ -69,5 +71,20 @@ make_graphics_projection(::Type{DataFrameView}; measure, appearance) =
 make_graphics_projection(::Type{DataFrameViewRow}; measure, appearance) =
     ChainingProjection(make_data_frame_row_projection(; widget_theme = get_scaled_theme!(appearance, WidgetTheme)),
                        GridLayoutToGraphicsCanvas())
+
+# The names of DataFrames that a model makes, transforms and counts a frame with:
+# a frame that a verb answers has to be grouped, narrowed to its columns and
+# counted. `describe` arrives as `summarize_frame`, because `describe_document` is
+# the sentence that a document says about itself, and one model holds one name.
+# The registry is runtime state, so the names are added here and not at the top
+# level.
+function __init__()
+    register_assistant_api!(DataFrames => (:DataFrame, :select, :transform, :combine,
+                                           :groupby, :subset, :ByRow, :Not, :nrow,
+                                           :describe => :summarize_frame);
+        description = "A data frame is made, narrowed, grouped and counted with " *
+                      "`DataFrame`, `select`, `transform`, `combine`, `groupby`, `subset` " *
+                      "and `nrow`, and `summarize_frame` gives the statistics of each column.")
+end
 
 end # module DataFramesModule

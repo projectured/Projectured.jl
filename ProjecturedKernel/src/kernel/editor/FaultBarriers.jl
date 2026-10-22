@@ -4,9 +4,9 @@
 #
 # One barrier per stage of the frame. Each one answers its fallback rather than
 # the exception, so a stage that fails costs that stage and not the editor.
-# `editor.fault_policy` decides whether any of them catches at all. An editor that
-# `Editor(…)` builds starts strict, `make_editor` turns the barriers on, and
-# `run_editor!` keeps the policy of its editor.
+# `editor.fault_policy` decides whether any of them catches at all. Every form
+# that makes an editor starts strict, a program that a person starts passes
+# `FaultPolicy()`, and `run_editor!` keeps the policy of its editor.
 
 # What a barrier answers when it caught. A sentinel rather than `nothing`,
 # because `nothing` is a value a stage may answer for itself.
@@ -25,10 +25,14 @@ _run_barrier(body, editor::Editor, site::Symbol; counter::Symbol = site,
 Hand every fault the last frame collected to whatever shows it, and answer how
 many there were.
 
-Call it once per frame, before anything reads the projection. This is the one
-place a fault is reported on the console, because it is the one place that knows
-which records are new — a printer's fault arrives here too, recorded from inside
-a computation that could not report anything itself.
+Call it once per frame, before anything reads the projection. The drain of the
+store hands each new record to the targets of the store, and reports on the
+console the records that no target took. A printer's fault arrives here too,
+recorded from inside a computation that could not report anything itself.
+
+It first records each write that a task which does not own the cells made to a
+cell that a computation reads ([`take_foreign_cell_writes!`](@ref)), as a fault
+whose message names that task.
 
 It also shows the mark of each fault barrier that took a fault since the last
 frame ([`show_barrier_mark!`](@ref)). A barrier writes its output cell for it,
@@ -36,11 +40,11 @@ which a computation must not do, and this is the one point of a frame that runs
 outside every computation.
 """
 function report_frame_faults!(editor::Editor)
-    records = drain_faults!(editor.faults; policy = editor.fault_policy)
-    for record in records
-        report_fault!(editor.faults, record; policy = editor.fault_policy,
-                      backend = editor.backend)
+    for write in take_foreign_cell_writes!()
+        record_fault!(editor.faults, :evaluate; origin = :cell_writer, exception = write)
     end
+    records = drain_faults!(editor.faults; policy = editor.fault_policy,
+                            backend = editor.backend)
     _show_noted_marks!(editor)
     length(records)
 end
@@ -58,10 +62,10 @@ the rest.
 A renderer calls it inside its catch around one element, with the type of the
 element as `origin`. While an editor with its barriers on paints, the answer is
 `true`: the editor records the fault as a fault of a printer, unless it is a
-`RecordedFaultException`, which a fault barrier recorded already and whose mark
+`RecordedCellFaultException`, which a fault barrier recorded already and whose mark
 the next frame draws. Outside a paint of an editor, under the strict policy and
-for an exception that `is_passthrough_exception` names, the answer is `false`,
-and the renderer throws the exception again.
+for an exception that is not a fault (`is_fault_exception`), the answer is
+`false`, and the renderer throws the exception again.
 
 # Example
 
@@ -75,8 +79,8 @@ function record_paint_fault!(exception; origin)
     editor = _PAINTING_EDITOR[]
     editor === nothing && return false
     editor.fault_policy.is_barrier_enabled || return false
-    is_passthrough_exception(exception) && return false
-    exception isa RecordedFaultException && return true
+    is_fault_exception(exception) || return false
+    exception isa RecordedCellFaultException && return true
     record_fault!(editor.faults, :print; origin, exception, traceback = catch_backtrace())
     true
 end
@@ -151,9 +155,11 @@ function _read_from_devices_guarded(editor::Editor)
     is_editor_degraded(editor, :device_read) && return nothing
     _run_barrier(editor, :device; counter = :device_read,
                  origin = typeof(editor.backend)) do
-        # Through `invokelatest`: each backend package adds a method, and a call
-        # that inference resolves would be invalidated when such a package loads.
-        Base.invokelatest(take_from_devices!, editor.backend, editor.devices)
+        _measure_frame_part(editor, :input) do
+            # Through `invokelatest`: each backend package adds a method, and a call
+            # that inference resolves would be invalidated when such a package loads.
+            Base.invokelatest(take_from_devices!, editor.backend, editor.devices)
+        end
     end
 end
 
@@ -185,7 +191,7 @@ function _make_operation_inverse(editor::Editor, operation)
     try
         make_inverse_operation(editor.document, operation)
     catch exception
-        is_passthrough_exception(exception) && rethrow()
+        is_fault_exception(exception) || rethrow()
         record_fault!(editor.faults, :evaluate; origin = typeof(operation), exception,
                       traceback = catch_backtrace())
         nothing
@@ -201,7 +207,7 @@ function _repair_after_operation_fault!(editor::Editor, inverse)
         try
             evaluate_operation(editor, inverse)
         catch exception
-            is_passthrough_exception(exception) && rethrow()
+            is_fault_exception(exception) || rethrow()
             # The way back failed too. The document stands as it is, and the
             # two repairs below still run.
             record_fault!(editor.faults, :evaluate; origin = typeof(inverse), exception,
@@ -225,7 +231,7 @@ function _repair_selection!(editor::Editor)
         clear_selection!(editor.document)
         @warn "[fault] the selection did not survive a failed operation and was cleared"
     catch exception
-        is_passthrough_exception(exception) && rethrow()
+        is_fault_exception(exception) || rethrow()
         # A document that can not even be asked where its selection is has
         # nothing this repair can do for it.
         record_fault!(editor.faults, :evaluate; origin = :_repair_selection!, exception,

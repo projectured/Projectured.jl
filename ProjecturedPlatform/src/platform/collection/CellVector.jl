@@ -10,9 +10,23 @@
 # declared type is therefore the loose `Vector`; accessors branch on the storage
 # with a fully-typed fast path for the reactive convention.
 """
-    CellVector(items)
+    ListDocument
 
-A sequence of values, each in a cell of its own.
+A document that is a sequence of documents: a `CellVector`, which holds every
+element, or a `ListNode`, a chain that a reader reads from the middle. A field that
+holds either declares `ListDocument`, and a plain vector given to such a field
+becomes a `CellVector` (`ListDocument(items)`).
+"""
+abstract type ListDocument <: Document end
+
+"""
+    CellVector(items)
+    CellVector{T}(items)
+
+A sequence of values, each in a cell of its own. `T` is the type of each element,
+and `Any` for the bare `CellVector(items)`: a write of an element meets the check
+of a declared type against `T`, as a write of a field meets it against the
+declared type of the field.
 
 Use it for the children of a document: the rows of a table, the panes of a
 window, the parts of a page. A write to one element tells what read that
@@ -30,9 +44,77 @@ See also `CellTable` and `CellMatrix` for two dimensions, `ListNode` for a
 sequence read from the middle, and `get_cell_at`, which answers the cell rather
 than the value.
 """
-@document struct CellVector
+@document struct CellVector{T} <: ListDocument
     elements::Vector = Cell[]
 end
+
+# The bare name makes a list whose elements may be anything. The macro emits the
+# positional constructors with the element type only, as `CellVector{T}(…)`, because
+# no field binds `T`; these forward the bare forms, which the keyword constructor
+# and most callers use.
+CellVector(elements, selection) = CellVector{Any}(elements, selection)
+CellVector(elements, selection, mouse_target::Union{Nothing, AbstractCell}) =
+    CellVector{Any}(elements, selection, mouse_target)
+ICCellVector(elements, selection) = ICCellVector{Any}(elements, selection)
+ICCellVector(elements, selection, mouse_target::Union{Nothing, AbstractCell}) =
+    ICCellVector{Any}(elements, selection, mouse_target)
+MCCellVector(elements, selection) = MCCellVector{Any}(elements, selection)
+MCCellVector(elements, selection, mouse_target::Union{Nothing, AbstractCell}) =
+    MCCellVector{Any}(elements, selection, mouse_target)
+
+# A list of a stated element type. Each element meets the check of the type.
+CellVector{T}() where {T} = CellVector{T}(Cell(Cell[]), Cell(nothing))
+CellVector{T}(cells::Vector{Cell}) where {T} =
+    CellVector{T}(Cell(Cell[_check_element_cell(T, c, i) for (i, c) in enumerate(cells)]),
+                  Cell(nothing))
+CellVector{T}(items::AbstractVector) where {T} =
+    CellVector{T}(Cell(Cell[Cell(_check_element(T, x, i)) for (i, x) in enumerate(items)]),
+                  Cell(nothing))
+
+# The value that an element write puts at index `i` of a list of element type `T`:
+# the value, or the value that the check converts it to.
+_check_element(::Type{Any}, x, i) = x
+_check_element(::Type{T}, x, i) where {T} =
+    convert_assigned_value(CellVector{T}, T, x; name = "[$i]")
+
+# An element write through a cell checks the value in the cell. A value converted
+# with no loss goes into the cell when no other cell depends on it.
+function _check_element_cell(::Type{T}, cell::AbstractCell, i) where {T}
+    T === Any && return cell
+    value = peek(cell)
+    checked = _check_element(T, value, i)
+    checked === value || has_dependent_cells(cell) || (cell[] = checked)
+    cell
+end
+
+find_declared_element_type(::CellVector{T}) where {T} = T
+
+# A list reads as a vector of its element type where code uses it as one: `collect`
+# gives a `Vector{T}`, and a list equals a vector that has the same elements.
+Base.eltype(::Type{<:CellVector{T}}) where {T} = T
+Base.:(==)(list::CellVector, vector::AbstractVector) =
+    length(list) == length(vector) && all(i -> list[i] == vector[i], eachindex(vector))
+Base.:(==)(vector::AbstractVector, list::CellVector) = list == vector
+Base.:(==)(a::CellVector, b::CellVector) =
+    length(a) == length(b) && all(i -> a[i] == b[i], 1:length(a))
+# A list that equals a vector hashes as that vector, so equal values hash equal.
+Base.hash(list::CellVector, h::UInt) = hash(collect(list), h)
+# `vcat` and `filter` of a list answer a plain vector of its elements, as they do
+# for a vector; `vcat` would otherwise take the whole list as one element.
+Base.vcat(list::CellVector, rest...) = vcat(collect(list), rest...)
+Base.filter(f, list::CellVector) = filter(f, collect(list))
+# A range or a vector of indices takes those elements as a vector, as of a vector.
+Base.getindex(list::CellVector, indices::AbstractVector{<:Integer}) =
+    eltype(list)[list[i] for i in indices]
+# A list converts to a vector of its elements, so a field or a container of a vector
+# type, such as a field of a native layout, takes a list as a plain vector.
+Base.convert(::Type{V}, list::CellVector) where {V<:AbstractVector} = convert(V, collect(list))
+# The keys of a list are its indices, so `findfirst`, `findall` and `pairs` read it.
+Base.keys(list::CellVector) = Base.OneTo(length(list))
+
+# A plain vector given to a field declared `ListDocument` becomes a `CellVector`.
+ListDocument(items::AbstractVector) = CellVector(items)
+is_collection_field_type(::Val{:ListDocument}) = true
 
 # `CellVector` is the canonical 1-D positional collection: its children are
 # addressed by `ElementReferenceStep` (`[i]`). Opt into the document-layer trait so
@@ -120,7 +202,7 @@ MCCellVector(items::AbstractVector) = MCCellVector(collect(Any, items), nothing)
 # the reactive read path ~2×). The non-reactive instantiations take the generic
 # plain-storage methods below. Convention: a reactive elements field always holds
 # `Vector{Cell}` slots; hand-built exceptions are unsupported.
-const ReactiveCellVector = CellVector{<:ReactiveCell}
+const ReactiveCellVector = CellVector{<:Any, <:ReactiveCell}
 
 _elems(cv::ReactiveCellVector) = cv.elements::Vector{Cell}
 _plain(cv::CellVector) = cv.elements::Vector
@@ -182,19 +264,19 @@ get_slot_at(cv::ReactiveCellVector, i::Integer) = get_cell_at(cv, i)
 
 function Base.setindex!(cv::ReactiveCellVector, val, i::Integer)
     elems = _elems(cv)
-    elems[i][] = val                # value change inside the slot Cell
+    elems[i][] = _check_element(_element_type(cv), val, i)   # value change inside the slot Cell
     return val
 end
 function Base.setindex!(cv::CellVector, val, i::Integer)
     elems = _mutable_plain(cv)
-    elems[i] = val
+    elems[i] = _check_element(_element_type(cv), val, i)
     cv.elements = elems             # write-through (MutableCell field)
     return val
 end
 
 function Base.setindex!(cv::ReactiveCellVector, cell::Cell, i::Integer)
     elems = _elems(cv)
-    elems[i] = cell                 # replace the slot Cell (structural change)
+    elems[i] = _check_element_cell(_element_type(cv), cell, i)   # replace the slot Cell (structural change)
     cv.elements = elems
     return cell
 end
@@ -204,15 +286,23 @@ end
 # codebase, so the single method is unambiguous.
 _wrap_cell(x) = x isa AbstractCell ? x : Cell(x)
 
+_element_type(::CellVector{T}) where {T} = T
+
+# The slot of an element at index `i`, after the check of the element type.
+_make_checked_slot(::Type{T}, x, i) where {T} =
+    x isa AbstractCell ? _check_element_cell(T, x, i) : Cell(_check_element(T, x, i))
+
 function Base.push!(cv::ReactiveCellVector, xs...)
     elems = _elems(cv)
-    for x in xs; push!(elems, _wrap_cell(x)) end
+    T = _element_type(cv)
+    for x in xs; push!(elems, _make_checked_slot(T, x, length(elems) + 1)) end
     cv.elements = elems
     return cv
 end
 function Base.push!(cv::CellVector, xs...)
     elems = _mutable_plain(cv)
-    for x in xs; push!(elems, x) end
+    T = _element_type(cv)
+    for x in xs; push!(elems, _check_element(T, x, length(elems) + 1)) end
     cv.elements = elems
     return cv
 end
@@ -232,13 +322,13 @@ end
 
 function Base.insert!(cv::ReactiveCellVector, i::Integer, x)
     elems = _elems(cv)
-    insert!(elems, i, _wrap_cell(x))
+    insert!(elems, i, _make_checked_slot(_element_type(cv), x, i))
     cv.elements = elems
     return cv
 end
 function Base.insert!(cv::CellVector, i::Integer, x)
     elems = _mutable_plain(cv)
-    insert!(elems, i, x)
+    insert!(elems, i, _check_element(_element_type(cv), x, i))
     cv.elements = elems
     return cv
 end
@@ -258,9 +348,9 @@ end
 
 # Fresh CellVector with the same field-cell kinds as `cv`, holding `slots`
 # (already in cv's storage convention); selection reset.
-_rebuild_with(cv::CellVector, slots::Vector) =
-    CellVector(make_similar_cell(getfield(cv, :elements), slots),
-               make_similar_cell(getfield(cv, :selection), nothing))
+_rebuild_with(cv::CellVector{T}, slots::Vector) where {T} =
+    CellVector{T}(make_similar_cell(getfield(cv, :elements), slots),
+                  make_similar_cell(getfield(cv, :selection), nothing))
 
 Base.sort(cv::CellVector; by=identity, lt=isless, rev=false) = begin
     n = length(cv)
@@ -294,12 +384,12 @@ copy_document(policy::PlainCopyPolicy, cv::CellVector) =
 # wrapped in an outer typed cell. It is the four-argument form, which the walk
 # calls for a child, so a list nested in a document copies by this method too. The
 # copy of the storage vector applies the bound of `policy` to the elements.
-function copy_document(::Type{K}, cv::CellVector, policy,
-                       depth::Int) where {K<:AbstractCell}
+function copy_document(::Type{K}, cv::CellVector{T}, policy,
+                       depth::Int) where {K<:AbstractCell, T}
     copied = copy_document(K, _plain(cv), policy, depth + 1)
-    K === ReactiveCell && return CellVector(copied)
-    CellVector(K{Vector}(Any[unwrap_cell(x) for x in copied]),
-               K{Union{Nothing, Reference}}(nothing))
+    K === ReactiveCell && return CellVector{T}(copied)
+    CellVector{T}(K{Vector}(Any[unwrap_cell(x) for x in copied]),
+                  K{Union{Nothing, Reference}}(nothing))
 end
 
 # The CellVector method for `child_reference_steps`:

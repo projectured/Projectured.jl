@@ -12,15 +12,16 @@
     FormulaFormulaToLayout()
 
 Printer-only projection `FormulaFormula → HorizontalLayout`: the equation and
-its value. Reads the name, the code and the result inside the printer, so a
-changed input redraws the row.
+its stored value, with a mark while a computation of it runs. Reads the name,
+the code and the stored value inside the printer, so a new value redraws the
+row; it runs no code of the formula.
 """
 struct FormulaFormulaToLayout <: Projection end
 
 function print_document(p::FormulaFormulaToLayout, recursion, formula::FormulaFormula, ctx)
     name = formula.name
     code = formula.code
-    value = _formula_value_text(get_formula_value(formula))
+    value = _format_stored_formula_value(formula)
     children = if is_math_code(code)
         Any[MathAssignment(_formula_name_tree(name), code),
             WidgetLabel( "= " * value)]
@@ -51,10 +52,6 @@ function _formula_name_tree(name::AbstractString)
     end
     MathText(String(name))
 end
-
-# A value, short enough to read beside an equation.
-_formula_value_text(value::AbstractFloat) = string(round(value; sigdigits = 6))
-_formula_value_text(value) = string(value)
 
 """
     make_formula_graphics_entry(; measure, appearance) -> Vector{Pair{Type,Any}}

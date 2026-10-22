@@ -68,26 +68,3 @@ function make_introspection_projection(projection; measure=FontFileMeasure())
         ],
     )))
 end
-
-# Wrap a Text→Text projection (TextHighlighting / TextFiltering) in a
-# ProjectionConfiguringProjection so a control bar for its parameters stacks
-# above the projected text, then render the resulting widget+text tree. The
-# combined renderer dispatches widget nodes through WidgetToGraphics and the
-# projected `TextBlock` slot through TextToGraphics — the introspection pattern.
-# Expects a TextBlock document (the text examples).
-function make_text_configuring_projection(inner_text_projection;
-                                          measure=FontFileMeasure(),
-                                          font=StyleFont("Ubuntu Mono", 20))
-    fg  = (0x22, 0x22, 0x22, 0xff)   # dark text for the light example background
-    w2g = WidgetToGraphics(font; measure=measure)
-    renderer = RecursiveProjection(TypeDispatchingProjection(vcat(
-        w2g.dispatch,
-        Pair{Type,Any}[
-            TextBlock => TextToGraphics(measure=measure),
-        ],
-    )))
-    ChainingProjection(
-        ProjectionConfiguringProjection(inner=inner_text_projection),
-        renderer,
-    )
-end

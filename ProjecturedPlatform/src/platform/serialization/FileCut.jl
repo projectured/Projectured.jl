@@ -102,34 +102,86 @@ make_marker_text(body::AbstractString) = _MARKER_OPEN * String(body) * _MARKER_C
 # walks its content through nodes of its own domain and stops at anything else:
 # a node of another domain is that domain's to own, a file document is a cut, a
 # node already owned stays with its first owner.
+#
+# A node is written at its owner path and named by a marker at every other place,
+# so the owner path must be a place that the node itself fits. An element of a
+# typed list, such as a formula of a formula sheet, fits there and a marker does
+# not; so a node that a file holds in such a slot is owned at that slot, wherever
+# the walk met it first. A second walk owns a node at its first place when the
+# file holds its typed slot nowhere.
 function _assign_owners(project::FileProject)
     owner = IdDict{Any,Tuple{Any,Reference}}()
     for file in project.files
         content = get_file_content(file)
-        if is_own_content(file)
-            # The file node is the root of its own tree, so it is what the file
-            # writes rather than a cut: claim it here, and walk what it holds.
-            haskey(owner, content) || (owner[content] = (file, EmptyReference()))
-            for (steps, child) in _child_slots(content)
-                is_written_in_file(file, content, _slot_field(steps)) || continue
-                _own_walk!(owner, file, child, extend_reference(EmptyReference(), steps...))
+        leaf_type = _find_reference_leaf_type(file)
+        fixed = IdDict{Any,Bool}()
+        leaf_type === nothing || _collect_fixed_nodes!(fixed, file, leaf_type, content, IdDict{Any,Bool}())
+        for kept in (fixed, IdDict{Any,Bool}())
+            if is_own_content(file)
+                # The file node is the root of its own tree, so it is what the file
+                # writes rather than a cut: claim it here, and walk what it holds.
+                haskey(owner, content) || (owner[content] = (file, EmptyReference()))
+                for (steps, child) in _child_slots(content)
+                    is_written_in_file(file, content, _slot_field(steps)) || continue
+                    _own_walk!(owner, file, child, extend_reference(EmptyReference(), steps...),
+                               kept, leaf_type, _is_fixed_slot(leaf_type, content, steps))
+                end
+            else
+                _own_walk!(owner, file, content, EmptyReference(), kept, leaf_type, false)
             end
-        else
-            _own_walk!(owner, file, content, EmptyReference())
         end
     end
     owner
 end
 
-function _own_walk!(owner, file, node, path::Reference)
+# `kept` holds the nodes that wait for their typed slot; `at_fixed` says whether
+# `path` is such a slot.
+function _own_walk!(owner, file, node, path::Reference, kept, leaf_type, at_fixed::Bool)
     node isa Document || return
     is_file_document(node) && return
     is_file_domain_node(file, node) || return
     haskey(owner, node) && return
+    !at_fixed && haskey(kept, node) && return
     owner[node] = (file, path)
     for (steps, child) in _child_slots(node)
         is_written_in_file(file, node, _slot_field(steps)) || continue
-        _own_walk!(owner, file, child, extend_reference(path, steps...))
+        _own_walk!(owner, file, child, extend_reference(path, steps...), kept, leaf_type,
+                   _is_fixed_slot(leaf_type, node, steps))
+    end
+end
+
+# The type of the reference leaf of `file`, or `nothing` for a file that writes no
+# reference, such as a file whose format has no place for one.
+function _find_reference_leaf_type(file)
+    try
+        typeof(make_reference_leaf(file, "file(\"x\")"))
+    catch
+        nothing
+    end
+end
+
+# Whether the slot of `node` at `steps` holds an element of a list whose declared
+# element type the reference leaf type `leaf_type` is not.
+function _is_fixed_slot(leaf_type, node, steps::Tuple)
+    leaf_type === nothing && return false
+    length(steps) == 2 || return false
+    raw = getfield(node, _slot_field(steps))
+    value = raw isa AbstractCell ? raw[] : raw
+    element_type = find_declared_element_type(value)
+    element_type === nothing && return false
+    !(leaf_type <: element_type)
+end
+
+# Every node of the file's domain that `node` reaches and that a typed slot holds.
+function _collect_fixed_nodes!(fixed, file, leaf_type, node, visited)
+    node isa Document || return
+    is_file_document(node) && return
+    haskey(visited, node) && return
+    visited[node] = true
+    for (steps, child) in _child_slots(node)
+        is_written_in_file(file, node, _slot_field(steps)) || continue
+        _is_fixed_slot(leaf_type, node, steps) && (fixed[child] = true)
+        _collect_fixed_nodes!(fixed, file, leaf_type, child, visited)
     end
 end
 
@@ -160,8 +212,10 @@ end
 
 # ── The cut ──────────────────────────────────────────────────────────────────
 
-# The five rules, for the copy of `file`. `strict` is the single-file save: every
-# cut is an error, because there is no context to refer into.
+# The five rules, for the copy of `file`. `strict` is the single-file save: a cut
+# into another file is an error, because no other file is there to refer into. A
+# node of the file is written at its owner path, and every other place names it by
+# a marker into the file itself, in both saves.
 function _cut_copy(owner, file, node, path::Reference, visited::IdDict, strict::Bool)
     node isa Document || return node
     if is_file_document(node)
@@ -176,13 +230,14 @@ function _cut_copy(owner, file, node, path::Reference, visited::IdDict, strict::
         return _cut_leaf(file, path, strict, _reference_marker(owner_file, owner_path),
                          "holds a " * string(nameof(typeof(node))) * " that " *
                          repr(get_filename(owner_file)) * " writes")
-    haskey(visited, node) &&
-        return _cut_leaf(file, path, strict, _reference_marker(file, owner_path),
-                         "holds the same " * string(nameof(typeof(node))) * " twice, at " *
-                         print_path_text(owner_path) * " and at " * print_path_text(path))
+    (haskey(visited, node) || !_is_same_path(path, owner_path)) &&
+        return make_reference_leaf(file, _reference_marker(file, owner_path))
     visited[node] = true
     _rebuild(owner, file, node, path, visited, strict)
 end
+
+_is_same_path(a::Reference, b::Reference) =
+    collect(get_reference_steps(a)) == collect(get_reference_steps(b))
 
 # A reference leaf in the file's notation, or — in the strict mode — the error
 # that says why the file cannot be saved alone.
@@ -226,7 +281,10 @@ function _cut_field(owner, file, name::Symbol, value, path::Reference, visited::
                               extend_reference(path, FieldReferenceStep(string(name)), ElementReferenceStep(index)),
                               visited, strict)
                     for (index, element) in enumerate(value)]
-        return Base.typename(typeof(value)).wrapper(items)
+        # The list keeps the type of its elements, which its field declares.
+        wrapper = Base.typename(typeof(value)).wrapper
+        element_type = find_declared_element_type(value)
+        return element_type === nothing ? wrapper(items) : wrapper{element_type}(items)
     elseif value isa AbstractVector
         return Any[_cut_copy(owner, file, element,
                              extend_reference(path, FieldReferenceStep(string(name)), ElementReferenceStep(index)),
@@ -283,26 +341,53 @@ function save_project!(project::FileProject)
 end
 
 """
+    cut_file_text(file, base_dir = ".") -> String
+
+The text that [`save_file!`](@ref) writes for `file` into `base_dir`: the graph
+cut at the file, and printed in the notation of its file type. It writes
+nothing. It throws a [`FileCutException`](@ref) where the save refuses.
+
+Use it to compare a document with its file on disk.
+"""
+function cut_file_text(file, base_dir::AbstractString = ".")
+    is_file_document(file) ||
+        error("cut_file_text: not a file document (", typeof(file), ")")
+    owner = _assign_owners(FileProject(base_dir, Any[file]))
+    String(_cut_text(owner, file, true))
+end
+
+"""
     save_file!(file, base_dir) -> Bool
 
-Write one file with no context, so no reference can be written: the content
-must be a tree of the file's domain, with no foreign node, no shared subtree
-and no cycle, or the save logs why and returns `false`. A marker that is a plain
-leaf of the domain is a plain leaf, and saves as one.
+Write one file with no other file around it, so no reference into another file
+can be written: the content must be of the file's domain, with no foreign node,
+or the save logs why and returns `false`. A node that the content holds at two
+places, and a cycle, are written once, and each other place holds a marker into
+the file itself, which [`load_file`](@ref) splices back. The node is written at
+the first place, or at the place of a typed list that a marker does not fit,
+such as the formulas of a formula sheet. A marker that is a plain leaf of the
+domain is a plain leaf, and saves as one.
 """
-function save_file!(file, base_dir::AbstractString)
+save_file!(file, base_dir::AbstractString) = save_file_text!(file, base_dir) !== nothing
+
+"""
+    save_file_text!(file, base_dir) -> String or nothing
+
+Write one file as [`save_file!`](@ref) does, and answer the text that the file
+holds now, or `nothing` when the save refused and wrote nothing.
+"""
+function save_file_text!(file, base_dir::AbstractString)
     is_file_document(file) ||
         error("save_file!: not a file document (", typeof(file), ")")
-    owner = _assign_owners(FileProject(base_dir, Any[file]))
     text = try
-        _cut_text(owner, file, true)
+        cut_file_text(file, base_dir)
     catch e
         e isa FileCutException || rethrow()
         @error e.message
-        return false
+        return nothing
     end
     _write_texts!(base_dir, Any[(file, text)])
-    true
+    String(text)
 end
 
 # One file's text: cut the graph, then print the copy in the file's own

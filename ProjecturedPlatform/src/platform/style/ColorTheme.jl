@@ -20,138 +20,168 @@ The roles are in groups: the surfaces, the texts, the lines, the accent, the
 layers of a state, the status, the tokens of a language, the series of a chart
 and the overlays. A text role of a token reaches a contrast of 4.5 against the
 backgrounds, and 7 in a high contrast theme.
+
+Each kind of value and each kind of name has a role of its own, the same in
+every view: a string, a number, a boolean, a symbol; a function, a type, a
+module, a parameter, a variable, a field. A role can name another role: a
+character takes the colour of a string, a null the colour of a boolean, and a
+macro the colour of a function, until a person gives it a step of its own. A
+name at its definition takes the role of its kind, and its theme makes it
+bold.
 """
 @theme struct ColorTheme
     # ── Surfaces ──
     "The background of a window and of an editor."
-    background::StyleColor = PaletteColor(:neutral, 2)
+    background::ThemeColor = PaletteColor(:neutral, 2)
     "A raised surface: a card, a menu, a popup, a panel. It is lighter than the background in both modes."
-    surface::StyleColor = PaletteColor(:neutral, 1)
+    surface::ThemeColor = PaletteColor(:neutral, 1)
     "A quiet surface: a track, a gutter, a disabled control, a sunken field."
-    surface_sunken::StyleColor = PaletteColor(:neutral, 3)
+    surface_sunken::ThemeColor = PaletteColor(:neutral, 3)
     "A panel over the content of a window, such as the fault log: dark in the light mode, light in the dark mode."
-    surface_inverse::StyleColor = PaletteColor(:neutral, 12; alpha = 0.92)
+    surface_inverse::ThemeColor = PaletteColor(:neutral, 12; alpha = 0.92)
     # ── Texts ──
     "The text: prose, a label, a value, a plain name."
-    text::StyleColor = PaletteColor(:neutral, 12)
+    text::ThemeColor = PaletteColor(:neutral, 12)
     "A quiet text: a caption, a detail, a number of a line."
-    text_muted::StyleColor = PaletteColor(:neutral, 11; minimum_contrast = 4.5)
+    text_muted::ThemeColor = PaletteColor(:neutral, 11; minimum_contrast = 4.5)
     "A faint text: a placeholder, a hint, a disabled label."
-    text_faint::StyleColor = PaletteColor(:neutral, 10; minimum_contrast = 3.0)
+    text_faint::ThemeColor = PaletteColor(:neutral, 10; minimum_contrast = 3.0)
     "A text on a solid fill of the accent or of a status."
     text_on_accent::StyleColor = color_white
     "A text on the inverse surface."
-    text_inverse::StyleColor = PaletteColor(:neutral, 1)
+    text_inverse::ThemeColor = PaletteColor(:neutral, 1)
     "A quiet text on the inverse surface."
-    text_inverse_muted::StyleColor = PaletteColor(:neutral, 8)
+    text_inverse_muted::ThemeColor = PaletteColor(:neutral, 8)
     # ── Lines ──
     "A faint line: the border of a card and of a pane, a separator."
-    border::StyleColor = PaletteColor(:neutral, 6)
+    border::ThemeColor = PaletteColor(:neutral, 6)
     "A strong line: the border of a control that takes a value, an axis."
-    border_strong::StyleColor = PaletteColor(:neutral, 8; minimum_contrast = 3.0)
+    border_strong::ThemeColor = PaletteColor(:neutral, 8; minimum_contrast = 3.0)
     "A grid line and a hairline of a chart."
-    grid::StyleColor = PaletteColor(:neutral, 4)
+    grid::ThemeColor = PaletteColor(:neutral, 4)
     # ── Accent ──
     "A solid fill of the accent: a default button, a checked box, a progress bar; white text reads on it."
-    accent::StyleColor = PaletteColor(:accent, 9; minimum_contrast = 4.5, against = color_white)
+    accent::ThemeColor = PaletteColor(:accent, 9; minimum_contrast = 4.5, against = color_white)
     "The solid fill of the accent under the pointer."
-    accent_hover::StyleColor = PaletteColor(:accent, 10; minimum_contrast = 4.5, against = color_white)
+    accent_hover::ThemeColor = PaletteColor(:accent, 10; minimum_contrast = 4.5, against = color_white)
     "A text in the accent: a link, the current item."
-    accent_text::StyleColor = PaletteColor(:accent, 11; minimum_contrast = 4.5)
+    accent_text::ThemeColor = PaletteColor(:accent, 11; minimum_contrast = 4.5)
     "A tint of the accent: the fill of a hovered or a chosen item of a list or a menu."
-    accent_tint::StyleColor = PaletteColor(:accent, 3)
+    accent_tint::ThemeColor = PaletteColor(:accent, 3)
     "The ring around the control that holds the keyboard. It differs from the selection ring, so a control selected as a whole and a control with the caret look different."
-    focus_ring::StyleColor = PaletteColor(:accent, 8; minimum_contrast = 3.0)
+    focus_ring::ThemeColor = PaletteColor(:accent, 8; minimum_contrast = 3.0)
     # ── Layers of a state ──
     "The layer over a part under the pointer."
-    hover::StyleColor = PaletteColor(:neutral, 12; alpha = 0.06)
+    hover::ThemeColor = PaletteColor(:neutral, 12; alpha = 0.06)
     "The layer over a pressed part."
-    pressed::StyleColor = PaletteColor(:neutral, 12; alpha = 0.12)
+    pressed::ThemeColor = PaletteColor(:neutral, 12; alpha = 0.12)
     "The band under a selected text and a selected row, while it holds the keyboard."
-    selection_band::StyleColor = PaletteColor(:accent, 9; alpha = 0.25)
+    selection_band::ThemeColor = PaletteColor(:accent, 9; alpha = 0.25)
     "The band under a selected text, while another part holds the keyboard."
-    selection_band_dormant::StyleColor = PaletteColor(:neutral, 9; alpha = 0.2)
+    selection_band_dormant::ThemeColor = PaletteColor(:neutral, 9; alpha = 0.2)
     "The ring around a part that is selected as a whole."
-    selection_ring::StyleColor = PaletteColor(:accent, 9; minimum_contrast = 3.0)
+    selection_ring::ThemeColor = PaletteColor(:accent, 9; minimum_contrast = 3.0)
     "The band under a match of a search."
-    search_match::StyleColor = PaletteColor(:amber, 9; alpha = 0.45)
+    search_match::ThemeColor = PaletteColor(:amber, 9; alpha = 0.45)
     "The caret of the text that holds the keyboard."
-    caret::StyleColor = PaletteColor(:neutral, 12)
+    caret::ThemeColor = PaletteColor(:neutral, 12)
     "The caret of a text that keeps its place while another holds the keyboard."
-    caret_dormant::StyleColor = PaletteColor(:neutral, 9)
+    caret_dormant::ThemeColor = PaletteColor(:neutral, 9)
     # ── Status ──
     "A solid mark of an error, and the fill of an action that deletes; white text reads on it."
-    error_fill::StyleColor = PaletteColor(:red, 9; minimum_contrast = 4.5, against = color_white)
+    error_fill::ThemeColor = PaletteColor(:red, 9; minimum_contrast = 4.5, against = color_white)
     "The text of an error: a message, a value that does not parse, a fault."
-    error_text::StyleColor = PaletteColor(:red, 11; minimum_contrast = 4.5)
+    error_text::ThemeColor = PaletteColor(:red, 11; minimum_contrast = 4.5)
     "A tint of an error: the fill behind a field that does not parse."
-    error_tint::StyleColor = PaletteColor(:red, 3)
+    error_tint::ThemeColor = PaletteColor(:red, 3)
     "A solid mark of a warning."
-    warning_fill::StyleColor = PaletteColor(:amber, 9)
+    warning_fill::ThemeColor = PaletteColor(:amber, 9)
     "The text of a warning, and of a step where a run stops."
-    warning_text::StyleColor = PaletteColor(:amber, 11; minimum_contrast = 4.5)
+    warning_text::ThemeColor = PaletteColor(:amber, 11; minimum_contrast = 4.5)
     "A tint of a warning."
-    warning_tint::StyleColor = PaletteColor(:amber, 3)
+    warning_tint::ThemeColor = PaletteColor(:amber, 3)
     "A solid mark of a success; white text reads on it."
-    success_fill::StyleColor = PaletteColor(:green, 9; minimum_contrast = 4.5, against = color_white)
+    success_fill::ThemeColor = PaletteColor(:green, 9; minimum_contrast = 4.5, against = color_white)
     "The text of a success: a value that names a known thing."
-    success_text::StyleColor = PaletteColor(:green, 11; minimum_contrast = 4.5)
+    success_text::ThemeColor = PaletteColor(:green, 11; minimum_contrast = 4.5)
     "A tint of a success."
-    success_tint::StyleColor = PaletteColor(:green, 3)
+    success_tint::ThemeColor = PaletteColor(:green, 3)
     "A solid mark of an information."
-    info_fill::StyleColor = PaletteColor(:blue, 9)
+    info_fill::ThemeColor = PaletteColor(:blue, 9)
     "The text of an information, such as the level of a message."
-    info_text::StyleColor = PaletteColor(:blue, 11; minimum_contrast = 4.5)
+    info_text::ThemeColor = PaletteColor(:blue, 11; minimum_contrast = 4.5)
     "A tint of an information."
-    info_tint::StyleColor = PaletteColor(:blue, 3)
+    info_tint::ThemeColor = PaletteColor(:blue, 3)
     # ── Tokens ──
-    "A keyword of a language, a tag, a directive."
-    keyword::StyleColor = PaletteColor(:violet, 11; minimum_contrast = 4.5)
-    "The name of a declared thing: a function, a module, a table, a state, a formula."
-    definition::StyleColor = PaletteColor(:blue, 11; minimum_contrast = 4.5)
-    "A called function, a macro."
-    function_name::StyleColor = PaletteColor(:blue, 11; minimum_contrast = 4.5)
-    "A key, a field name, the name of an attribute."
-    field::StyleColor = PaletteColor(:blue, 11; minimum_contrast = 4.5)
-    "A string, a character, a code span, a literal block."
-    string_literal::StyleColor = PaletteColor(:green, 11; minimum_contrast = 4.5)
-    "A number, a boolean, a null, a symbol, an index."
-    constant::StyleColor = PaletteColor(:orange, 11; minimum_contrast = 4.5)
-    "The name of a type."
-    type_name::StyleColor = PaletteColor(:amber, 11; minimum_contrast = 4.5)
-    "A use of a name: a variable, a reference to another part."
-    reference::StyleColor = PaletteColor(:neutral, 12)
+    "A keyword of a language, a directive."
+    keyword::ThemeColor = PaletteColor(:violet, 11; minimum_contrast = 4.5)
+    "A function, at its definition and at a call, a function of mathematics, a process."
+    function_name::ThemeColor = PaletteColor(:blue, 11; minimum_contrast = 4.5)
+    "A macro. It takes the colour of a function."
+    macro_name::ThemeColor = ColorRole(:function_name)
+    "An event and a timer of a machine. It takes the colour of a function."
+    event::ThemeColor = ColorRole(:function_name)
+    "A field, a field after a dot, a key, an attribute, a column."
+    field::ThemeColor = PaletteColor(:blue, 11; minimum_contrast = 4.5)
+    "A string, a code span, a literal block."
+    string_literal::ThemeColor = PaletteColor(:green, 11; minimum_contrast = 4.5)
+    "A character. It takes the colour of a string."
+    character_literal::ThemeColor = ColorRole(:string_literal)
+    "A number: an integer, a float, an index."
+    number_literal::ThemeColor = PaletteColor(:orange, 11; minimum_contrast = 4.5)
+    "A boolean: `true` and `false`."
+    boolean_literal::ThemeColor = PaletteColor(:pink, 11; minimum_contrast = 4.5)
+    "A null: `null`, `nothing`, `missing`. It takes the colour of a boolean."
+    null_literal::ThemeColor = ColorRole(:boolean_literal)
+    "A symbol, such as `:name`."
+    symbol_literal::ThemeColor = PaletteColor(:teal, 11; minimum_contrast = 4.5)
+    "A named constant that is no literal: a constant of mathematics, a substitution, the value of a field of a packet."
+    constant::ThemeColor = PaletteColor(:orange, 11; minimum_contrast = 4.5)
+    "A type, a struct, a SQL table, a data type, a machine and a component of an FSM."
+    type_name::ThemeColor = PaletteColor(:amber, 11; minimum_contrast = 4.5)
+    "A parameter of a type, such as a variable of `where`. It takes the colour of a type."
+    type_parameter::ThemeColor = ColorRole(:type_name)
+    "A module, a schema, a database, a folder. It takes the colour of a type."
+    module_name::ThemeColor = ColorRole(:type_name)
+    "A variable, and a name of a kind that the view does not know."
+    variable::ThemeColor = PaletteColor(:neutral, 12)
+    "A parameter of a function, the name of a keyword argument, the name of an option. It takes the colour of a variable."
+    parameter::ThemeColor = ColorRole(:variable)
+    "A member of a fixed set of named values, such as a state of a machine. It takes the colour of a symbol."
+    enum_member::ThemeColor = ColorRole(:symbol_literal)
+    "A tag of a markup, such as an XML element. It takes the colour of a keyword."
+    tag::ThemeColor = ColorRole(:keyword)
     "A link, a URL, a cross-reference."
-    link::StyleColor = PaletteColor(:accent, 11; minimum_contrast = 4.5)
+    link::ThemeColor = PaletteColor(:accent, 11; minimum_contrast = 4.5)
     "An operator."
-    operator::StyleColor = PaletteColor(:neutral, 11; minimum_contrast = 4.5)
+    operator::ThemeColor = PaletteColor(:neutral, 11; minimum_contrast = 4.5)
     "A bracket, a comma, a colon, a quote."
-    punctuation::StyleColor = PaletteColor(:neutral, 11; minimum_contrast = 4.5)
+    punctuation::ThemeColor = PaletteColor(:neutral, 11; minimum_contrast = 4.5)
     "The brackets around the part under the pointer."
-    punctuation_lit::StyleColor = PaletteColor(:neutral, 12)
+    punctuation_lit::ThemeColor = PaletteColor(:neutral, 12)
     "A comment."
-    comment::StyleColor = PaletteColor(:neutral, 11; minimum_contrast = 4.5)
+    comment::ThemeColor = PaletteColor(:neutral, 11; minimum_contrast = 4.5)
     "A mark of a markup: a heading mark, a bullet, an emphasis mark, a fence."
-    markup::StyleColor = PaletteColor(:neutral, 11; minimum_contrast = 4.5)
+    markup::ThemeColor = PaletteColor(:neutral, 11; minimum_contrast = 4.5)
     "A heading and a title."
-    heading::StyleColor = PaletteColor(:neutral, 12)
+    heading::ThemeColor = PaletteColor(:neutral, 12)
     # ── Series of a chart ──
     "The first series of a chart."
-    series_1::StyleColor = PaletteColor(:blue, 9)
+    series_1::ThemeColor = PaletteColor(:blue, 9)
     "The second series of a chart."
-    series_2::StyleColor = PaletteColor(:orange, 9)
+    series_2::ThemeColor = PaletteColor(:orange, 9)
     "The third series of a chart."
-    series_3::StyleColor = PaletteColor(:green, 9)
+    series_3::ThemeColor = PaletteColor(:green, 9)
     "The fourth series of a chart."
-    series_4::StyleColor = PaletteColor(:pink, 9)
+    series_4::ThemeColor = PaletteColor(:pink, 9)
     "The fifth series of a chart."
-    series_5::StyleColor = PaletteColor(:teal, 9)
+    series_5::ThemeColor = PaletteColor(:teal, 9)
     "The sixth series of a chart."
-    series_6::StyleColor = PaletteColor(:violet, 9)
+    series_6::ThemeColor = PaletteColor(:violet, 9)
     "The seventh series of a chart."
-    series_7::StyleColor = PaletteColor(:amber, 9)
+    series_7::ThemeColor = PaletteColor(:amber, 9)
     "The eighth series of a chart."
-    series_8::StyleColor = PaletteColor(:red, 9)
+    series_8::ThemeColor = PaletteColor(:red, 9)
     # ── Overlays ──
     "The shadow under a raised part."
     shadow::StyleColor = StyleColor(0.0, 0.0, 0.0, 0.08)
@@ -225,10 +255,12 @@ function make_color_theme(variant::Symbol)
         success_text = PaletteColor(:green, 11; minimum_contrast = 7.0),
         info_text = PaletteColor(:blue, 11; minimum_contrast = 7.0),
         keyword = PaletteColor(:violet, 11; minimum_contrast = 7.0),
-        definition = PaletteColor(:blue, 11; minimum_contrast = 7.0),
         function_name = PaletteColor(:blue, 11; minimum_contrast = 7.0),
         field = PaletteColor(:blue, 11; minimum_contrast = 7.0),
         string_literal = PaletteColor(:green, 11; minimum_contrast = 7.0),
+        number_literal = PaletteColor(:orange, 11; minimum_contrast = 7.0),
+        boolean_literal = PaletteColor(:pink, 11; minimum_contrast = 7.0),
+        symbol_literal = PaletteColor(:teal, 11; minimum_contrast = 7.0),
         constant = PaletteColor(:orange, 11; minimum_contrast = 7.0),
         type_name = PaletteColor(:amber, 11; minimum_contrast = 7.0),
         link = PaletteColor(:accent, 11; minimum_contrast = 7.0),
@@ -370,3 +402,8 @@ scale_theme_value(color::Union{PaletteColor, ColorRole}, appearance::Appearance)
     resolve_theme_color(color, appearance)
 scale_theme_value(colors::AbstractVector{<:ThemeColor}, appearance::Appearance) =
     StyleColor[resolve_theme_color(color, appearance) for color in colors]
+# A list document of colours, which the reactive layout holds for a field declared
+# `Vector{ThemeColor}`, takes the colour of each as a vector does.
+scale_theme_value(colors::Document, appearance::Appearance) =
+    is_element_collection(colors) && eltype(colors) <: ThemeColor ?
+        StyleColor[resolve_theme_color(color, appearance) for color in colors] : colors

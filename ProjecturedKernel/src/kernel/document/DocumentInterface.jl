@@ -127,6 +127,27 @@ than added to.
 function get_document_title end
 
 """
+    get_document(x) -> document
+
+The document that `x` stands for: for a referenced document, the document that
+it references, as it was when a read found it; for any other value, the value
+itself. So code that unwraps works on a referenced document and on a plain one
+alike. A document keeps `get_document` of each value that its constructor or a
+write of a field gives it, so a document never holds a referenced document.
+
+Use it to get the document itself, to check its type or to hand it to a
+function that has no method for a referenced document.
+
+# Example
+
+    tab_1 = find_pane("items.json")
+    items_1 = get_document(get_edited_document(tab_1))   # the data, without its reference
+
+See also `get_reference` and `get_edited_document`.
+"""
+function get_document end
+
+"""
     is_walk_opaque(document) -> Bool
 
 `true` when a document is **opaque** to the reflection walk: its internals are
@@ -346,7 +367,11 @@ writable kind (`ReactiveCell` or `MutableCell`); `source` may be any kind.
 
 Both shapes are handled: a **record** (children are named fields) syncs
 field-by-field, and a **positional collection** (`is_element_collection`) syncs
-its elements by index through the vector protocol.
+its elements by index through the vector protocol. A child that a record needs
+again is built in the kind of the cell of its own field, so the fields of a record
+can have different kinds. An element is built in the kind of the first field of
+the collection, which `get_cell_struct_kind` reads: a collection keeps one kind
+for all its elements.
 
 The shadow must be a **cell layout**, and the source may be either layout. A
 native tree holds no cells, so nothing in it can invalidate a reader and it is
@@ -397,8 +422,8 @@ function make_unsynced_placeholder end
 
 The document that `node` stands for.
 
-Use it where code needs the document itself and may have been handed a
-transparent wrapper around it: a history, a version list, a clipboard slice. The
+Use it to get the document itself when the code can hold a transparent wrapper
+around it: a history, a version list, a clipboard slice. The
 default answers `node`, so a caller that names this asks a question every
 document can answer, and a wrapper adds one method.
 
@@ -454,9 +479,9 @@ edits.
 function get_edited_field end
 
 """
-    search_documents(obj, predicate; include_selection=false, maxdepth=64, raw=false,
-                     descend=(parent, child) -> true) -> Vector
-    search_documents(obj, query::Union{AbstractString,Regex}; …)                      -> Vector
+    search_documents(obj, predicate; include_selection=false, maxdepth=64, limit=100, raw=false,
+                     descend=(parent, child) -> true, background=false) -> DocumentMatches
+    search_documents(obj, query::Union{AbstractString,Regex}; …)  -> DocumentMatches
 
 Walk any object and return the matching nodes, **each at most once** even when a
 node is shared. A `String` (substring) or `Regex` matches leaf nodes by their
@@ -464,5 +489,21 @@ string form. By default the result is **document-scoped**: a scalar match folds
 up to the nearest enclosing `Document`; pass `raw=true` to return the exact
 matched value. `descend(parent, child)` returns whether the walk enters `child`;
 see `walk_document`.
+
+The search has three limits, each with a default that keeps a search of a large
+document small: at most `limit = 100` matches, no deeper than `maxdepth = 64`, and
+no background work, so a value that a task still computes is taken as it is. The
+answer is a [`DocumentMatches`](@ref), a vector of the matches, whose summary says
+which limit stopped the search and the keyword that lifts it: `limit = nothing`
+finds every match, and `background = true` waits for the values still to come.
+`is_search_complete` answers whether no limit left a match out.
+
+Use it to list the documents that hold a text, or that a test accepts, anywhere in a document.
+
+# Example
+
+    matches_1 = search_documents(editor.document, "temperature")
+
+See also `get_edited_document` and `get_wrapped_document`.
 """
 function search_documents end

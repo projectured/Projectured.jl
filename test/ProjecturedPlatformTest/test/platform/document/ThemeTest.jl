@@ -37,15 +37,15 @@ end
 @theme struct ThRoles
     font::StyleFont = StyleFont("Ubuntu", 20)
     code_font::StyleFont = StyleFont("Ubuntu Mono", 14)
-    title::FontRole = FontRole(weight = 700, relative_size = 1.8)
-    keyword::TextRole = TextRole(color_solarized_blue; base = :code_font, weight = 700)
-    marker::TextRole = TextRole(color_black; base = :code_font, family = "DejaVu Sans Mono")
+    title::ThemeFont = FontRole(weight = 700, relative_size = 1.8)
+    keyword::ThemeText = TextRole(color_solarized_blue; base = :code_font, weight = 700)
+    marker::ThemeText = TextRole(color_black; base = :code_font, family = "DejaVu Sans Mono")
 end
 
 @theme struct ThRoleOverRole
     font::StyleFont = StyleFont("Ubuntu", 20)
-    title::FontRole = FontRole(weight = 700)
-    wrong::FontRole = FontRole(base = :title)
+    title::ThemeFont = FontRole(weight = 700)
+    wrong::ThemeFont = FontRole(base = :title)
 end
 
 @theme struct ThUndocumented
@@ -150,7 +150,7 @@ end
     reader = Cell(@computation gap[] + 1)
     @test reader[] == 5
     appearance.spacing_scale = 2.0
-    @test is_cell_up_to_date(reader)       # no edge: the reader keeps its value
+    @test is_cell_valid(reader)       # no edge: the reader keeps its value
     @test gap[] == 8                       # a new read sees the new scale
 end
 

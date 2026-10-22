@@ -808,6 +808,8 @@ WidgetTabbedPaneToGraphicsCanvas(theme; graphics_theme = nothing, measure,
     content_color::StyleColor        # viewport fill; color_transparent paints none
     font::StyleFont                  # measures the scroll step
     scroll_bar_thickness::Int        # across each bar that the pane draws
+    lines_per_notch::Int             # lines that one notch of the wheel scrolls
+    wheel_growth::Float64            # factor of each fast notch of a run of the wheel; 1 is no speed-up
 end
 
 WidgetScrollPaneToGraphicsCanvas(theme; measure,
@@ -816,9 +818,11 @@ WidgetScrollPaneToGraphicsCanvas(theme; measure,
                                  margin_color = color_transparent, border_color = color_transparent,
                                  padding_color = color_transparent,
                                  content_color = _themed(StyleColor, theme, t -> t.background),
-                                 scroll_bar_thickness = _themed(Int, theme, t -> t.scroll_bar_thickness)) =
+                                 scroll_bar_thickness = _themed(Int, theme, t -> t.scroll_bar_thickness),
+                                 lines_per_notch = 3, wheel_growth = 1.25) =
     WidgetScrollPaneToGraphicsCanvas(measure, margin, border, padding, margin_color, border_color, padding_color,
-                                     content_color, font, scroll_bar_thickness)
+                                     content_color, font, scroll_bar_thickness, lines_per_notch,
+                                     Float64(wheel_growth))
 
 @projection UntrackedCell struct WidgetTransformPaneToGraphicsCanvas
     measure::TextMeasure
@@ -830,6 +834,8 @@ WidgetScrollPaneToGraphicsCanvas(theme; measure,
     padding_color::StyleColor
     content_color::StyleColor         # default viewport fill
     font::StyleFont                   # measures the pan step
+    lines_per_notch::Int              # lines that one notch of the wheel pans
+    wheel_growth::Float64             # factor of each fast notch of a run of the wheel; 1 is no speed-up
 end
 
 WidgetTransformPaneToGraphicsCanvas(theme; measure,
@@ -837,9 +843,10 @@ WidgetTransformPaneToGraphicsCanvas(theme; measure,
                                     margin = inset_default, border = inset_default, padding = inset_default,
                                     margin_color = color_transparent, border_color = color_transparent,
                                     padding_color = color_transparent,
-                                    content_color = _themed(StyleColor, theme, t -> t.background)) =
+                                    content_color = _themed(StyleColor, theme, t -> t.background),
+                                    lines_per_notch = 3, wheel_growth = 1.25) =
     WidgetTransformPaneToGraphicsCanvas(measure, margin, border, padding, margin_color, border_color, padding_color,
-                                        content_color, font)
+                                        content_color, font, lines_per_notch, Float64(wheel_growth))
 
 @projection UntrackedCell struct WidgetToolbarToGraphicsCanvas
     measure::TextMeasure
@@ -876,25 +883,34 @@ WidgetToolbarToGraphicsCanvas(theme; measure,
     track_hovered_color::StyleColor   # rail fill while the pointer is on the bar or the thumb is dragged
     thumb_color::StyleColor           # thumb fill at rest
     thumb_hovered_color::StyleColor   # thumb fill while the pointer is on the bar or the thumb is dragged
+    thumb_scrolled_color::StyleColor  # thumb fill for `show_duration` after a scroll
     minimum_thumb_length::Int
     thickness::Int                    # across the bar, where nothing sizes it
+    show_duration::Float64            # seconds that the thumb shows after a scroll
+    fade_duration::Float64            # seconds that the thumb takes to fade out
 end
 
-# A bar lies over the content that it scrolls, so its rail is transparent at
-# rest and only the thumb covers the content.
+# A bar lies over the content that it scrolls, so it shows nothing at rest and
+# covers no content. It shows at once while the pointer is on it or its thumb is
+# dragged, and its thumb shows for `show_duration` seconds after a scroll. Then
+# the thumb fades out over `fade_duration` seconds. A maker that wants a bar at
+# rest gives `thumb_color`.
 WidgetScrollBarToGraphicsCanvas(theme;
                                 margin = inset_default, border = inset_default, padding = inset_default,
                                 margin_color = color_transparent, border_color = color_transparent,
                                 padding_color = color_transparent, content_color = color_transparent,
                                 track_color = color_transparent,
                                 track_hovered_color = _themed(StyleColor, theme, t -> t.muted),
-                                thumb_color = _themed(StyleColor, theme, t -> t.border),
+                                thumb_color = color_transparent,
                                 thumb_hovered_color = _themed(StyleColor, theme, t -> t.input),
+                                thumb_scrolled_color = _themed(StyleColor, theme, t -> t.border),
                                 minimum_thumb_length = _themed(Int, theme, t -> t.scroll_thumb_minimum),
-                                thickness = _themed(Int, theme, t -> t.scroll_bar_thickness)) =
+                                thickness = _themed(Int, theme, t -> t.scroll_bar_thickness),
+                                show_duration = 1.0, fade_duration = 0.15) =
     WidgetScrollBarToGraphicsCanvas(margin, border, padding, margin_color, border_color, padding_color,
                                     content_color, track_color, track_hovered_color, thumb_color,
-                                    thumb_hovered_color, minimum_thumb_length, thickness)
+                                    thumb_hovered_color, thumb_scrolled_color, minimum_thumb_length,
+                                    thickness, Float64(show_duration), Float64(fade_duration))
 
 # ── IoMap for WidgetScrollPane ─────────────────────────────────────────────
 
@@ -1418,7 +1434,9 @@ function _map_child_forward(iomap, reference)
         for child in children
             child === nothing && continue
             unwrap_cell(get_iomap_input(child)) === node || continue
-            inner = map_reference_forward(get_iomap_projection(child), child, rest)
+            # The child reads its part with the types of its own nodes, so the
+            # rest is typed again against its input.
+            inner = map_reference_forward(get_iomap_projection(child), child, annotate_reference_types(node, rest))
             inner === nothing && return nothing
             outer = find_node_reference(get_iomap_output(iomap), unwrap_cell(get_iomap_output(child));
                                         depth = 6)
@@ -1435,7 +1453,7 @@ _map_self_forward(reference) = reference isa EmptyReference ? EmptyReference() :
 
 _route_scroll_to_children(child_entries::Vector, evt::MouseScroll) =
     _route_to_children(child_entries, evt,
-        (x, y) -> MouseScroll(evt.dx, evt.dy, x, y; time = evt.time))
+        (x, y) -> shift_event_position(evt, x - evt.x, y - evt.y))
 
 _route_click_to_children(child_entries::Vector, evt::MouseClick) =
     _route_to_children(child_entries, evt,
@@ -1469,6 +1487,14 @@ function _retarget_op(p, iomap, op)
     elseif op isa ReplaceNumberRangeOperation
         new_ref = map_reference_backward(p, iomap, op.reference)
         return new_ref === nothing ? nothing : ReplaceNumberRangeOperation(new_ref, op.replacement)
+    elseif op isa ReplaceTextRangeOperation
+        # A flat edit of the lines of a text: under a document it stays flat; in the
+        # text of a plain value it is a range of that string.
+        new_ref = map_reference_backward(p, iomap, op.reference)
+        new_ref === nothing && return nothing
+        last(get_reference_steps(strip_reference_types(new_ref))) isa TextRangeReferenceStep &&
+            return ReplaceTextRangeOperation(new_ref, op.replacement)
+        return ReplaceStringRangeOperation(new_ref, op.replacement)
     elseif op isa ReplaceReferencedValueOperation
         # `editor.document`-rooted (document === nothing) ⇒ reroot the reference;
         # a self-contained one (carried root) passes through unchanged.
@@ -1497,7 +1523,12 @@ function _retarget_op(p, iomap, op)
                    intent.description, intent.domain)
             for intent in op.intents])
     else
-        return op
+        # An operation that names a place through `operation_reference`, such as
+        # the open of a page, maps that place as any path; any other goes as it is.
+        reference = operation_reference(op)
+        reference === nothing && return op
+        new_ref = map_reference_backward(p, iomap, reference)
+        return new_ref === nothing ? nothing : retarget_operation(op, new_ref)
     end
 end
 
@@ -1618,6 +1649,11 @@ end
 _is_plain_key(evt, keys::Symbol...) =
     evt isa KeyDown && evt.key in keys && evt.modifiers == ModifierKeys()
 
+# A character typed with no modifier: Return is `'\n'` and Space is `' '`. A key
+# that types a character gives its meaning by its `KeyPress`.
+_is_plain_typed(evt, chars::Char...) =
+    evt isa KeyPress && evt.char in chars && evt.modifiers == ModifierKeys()
+
 # The row that holds `y`, from `(top, bottom)` bounds in the frame of the widget,
 # or `nothing` between and past the rows.
 function _find_row_index(bounds, y::Real)
@@ -1680,7 +1716,10 @@ read_intent(::WidgetInsertionToGraphicsCanvas, iomap::SimpleIoMap, evt) = nothin
 # move and every edit, and the widget re-roots what it answers under `content`
 # (see `map_reference_backward`). A Document content, typically a `TextBlock`, is
 # recursed through the chain. A plain value is drawn through a text view of its
-# string, which `_make_plain_text_view` makes.
+# string, which `_make_plain_text_view` makes. A document whose child gives a value
+# and not graphics, such as an `ObjectField` under a nesting of
+# `make_object_field_widget_dispatch`, is drawn through a text view of that value:
+# `value_iomap` is that child, and an edit asks it to store the new string.
 # @iomap so the reader reads content_iomap/input transparently; the content is
 # reconciled so a field grows reactively as text is typed
 # (PAR-STABLE-IOMAP-IDENTITY).
@@ -1689,6 +1728,7 @@ read_intent(::WidgetInsertionToGraphicsCanvas, iomap::SimpleIoMap, evt) = nothin
     input::Any
     output::Any
     content_iomap::Any
+    value_iomap::Any   # the child of a document in `content` that gives a value, or nothing
 end
 
 # ── A plain value as a text ─────────────────────────────────────────────────
@@ -1697,25 +1737,36 @@ end
 # a `String`, is edited as a text too. The printer makes one `TextBlock` whose
 # text is the string of the value and whose caret is the range of `content` that
 # the widget holds, and draws it with a `TextToGraphics` of its own, so a chain
-# with no rule for a `TextBlock` draws it too. The block is one span, or, for a
-# field of code, a span for each piece that `compute_code_pieces` gives, in its
-# color. The reader maps what the text domain answers back to a range of the
-# `content` field. So a string edit writes the field itself, and the caret after
+# with no rule for a `TextBlock` draws it too. The block is the lines of the string;
+# in a field of code, each line holds a run for each piece that `compute_code_pieces`
+# gives, in its color. The reader maps what the text domain answers back to a range
+# of the `content` field. So a string edit writes the field itself, and the caret after
 # the edit is again a range of the field.
 
-# The spans of a field of code: a span for each piece of its text, in the color
-# of the piece, or of the field. `appearance` gives the colors of the language.
-function _make_code_spans(w, style::StyleText, appearance)
-    text = string(w.content)
-    spans = Any[]
+# The lines of a field of code: a line for each line of its text, which holds a
+# run for each piece of that line, in the color of the piece, or of the field. A
+# piece that holds a break ends one line and starts the next. An empty line holds
+# one empty run in the style of the field. `appearance` gives the colors of the
+# language.
+function _make_code_lines(w, style::StyleText, appearance; text = string(w.content))
+    lines = TextDocument[]
+    runs = TextDocument[]
     start = 1
     for (count, color) in _get_plain_text_pieces(w, text, appearance)
         stop = count == 0 ? start - 1 : nextind(text, start, count) - 1
-        push!(spans, TextString(text[start:min(stop, lastindex(text))],
-                                color === nothing ? style : StyleText(style.font, color)))
+        piece_style = color === nothing ? style : StyleText(style.font, color)
+        parts = split(text[start:min(stop, lastindex(text))], '\n')
+        for (k, part) in enumerate(parts)
+            if k > 1
+                push!(lines, TextLine(isempty(runs) ? TextDocument[TextString("", style)] : runs))
+                runs = TextDocument[]
+            end
+            isempty(part) || push!(runs, TextString(String(part), piece_style))
+        end
         start = stop + 1
     end
-    spans
+    push!(lines, TextLine(isempty(runs) ? TextDocument[TextString("", style)] : runs))
+    lines
 end
 
 # The pieces of the text of `w`: one, or the pieces of the code of its language.
@@ -1725,21 +1776,41 @@ function _get_plain_text_pieces(w, text::AbstractString, appearance)
     Base.invokelatest(compute_code_pieces, Val(language), text, appearance)
 end
 
-function _make_plain_text_view(w, style::StyleText, appearance)
+# `value_slot` is the cell of the child of a document in `content` that gives the
+# value to show, or `nothing` for a plain `content`.
+function _make_plain_text_view(w, style::StyleText, appearance; value_slot = nothing)
+    text = value_slot === nothing ? () -> string(w.content) : () -> string(value_slot[].output)
     language = hasfield(typeof(w), :language) ? w.language : nothing
-    view = language === nothing ? TextBlock(TextString(() -> string(w.content), style)) :
-                                  TextBlock(() -> _make_code_spans(w, style, appearance))
+    view = language === nothing ? make_text_block(text, style) :
+                                  TextBlock(() -> _make_code_lines(w, style, appearance; text = text()))
     set_cell_computation!(getfield(view, :selection),
-                          () -> _get_plain_text_caret(w.selection))
+                          () -> _get_text_view_caret(w.selection, value_slot))
     set_cell_computation!(getfield(view, :mouse_target),
-                          () -> _get_plain_text_caret(w.mouse_target))
+                          () -> _get_text_view_caret(w.mouse_target, value_slot))
     view
+end
+
+_get_text_view_caret(selection, value_slot::Nothing) = _get_plain_text_caret(selection)
+_get_text_view_caret(selection, value_slot) = _get_value_text_caret(selection, value_slot[])
+
+# The caret of the view of the value that the child of a document in `content`
+# gives: the path under `content`, mapped forward through the child, which keeps
+# it as a path that it introduces (the defaults of `Projection`). A flat range of
+# the one span.
+function _get_value_text_caret(selection, child)
+    selection isa ConcreteReference || return nothing
+    stripped = strip_reference_types(selection)
+    head = get_reference_head(stripped)
+    (head isa FieldReferenceStep && head.name == "content") || return nothing
+    inner = map_reference_forward(child.projection, child, get_reference_tail(stripped))
+    inner isa ConcreteReference ? inner : nothing
 end
 
 # `appearance` is the appearance of a field of code, whose theme of its language
 # gives the colors, or `nothing`.
-function _print_plain_text_view(p, recursion, w, style::StyleText, ctx; appearance = nothing)
-    view = _make_plain_text_view(w, style, appearance)
+function _print_plain_text_view(p, recursion, w, style::StyleText, ctx; appearance = nothing,
+                                value_slot = nothing)
+    view = _make_plain_text_view(w, style, appearance; value_slot)
     measure = p.measure
     make_reconciled_child_iomap_cell(() -> view,
                           v -> print_document(TextToGraphics(measure = measure), recursion, v, ctx))
@@ -1762,34 +1833,24 @@ _make_content_range_reference(start::Int, stop::Int) =
                       ConcreteReference(RangeReferenceStep(start, stop), EmptyReference()))
 
 # A reference of the view, mapped to a range of the `content` field. The text
-# domain answers a caret or a selection as a flat range, and an edit of the one
-# span as `elements[1].content[start:stop]`. The whole view, which a press on an
-# empty string answers, is the caret at the end of the string.
-function _map_plain_text_reference(w, reference)
+# domain answers a place in the view in either form that a text takes, and
+# `get_flat_range` reads both. A flat offset of the view is an offset of the
+# string, because the lines of the view are the lines of the string, with one
+# break between two and no indentation. The whole view, which a press on an empty
+# string answers, is the caret at the end of the string.
+function _map_plain_text_reference(view::TextBlock, reference)
     reference === nothing && return nothing
-    steps = get_reference_steps(strip_reference_types(reference))
-    if isempty(steps)
-        n = length(string(w.content))
+    if isempty(get_reference_steps(strip_reference_types(reference)))
+        n = get_flat_length(view)
         return _make_content_range_reference(n, n)
     end
-    range = steps[end]
-    if length(steps) == 1 && range isa TextRangeReferenceStep
-        return _make_content_range_reference(range.start, range.stop)
-    end
-    if length(steps) == 4 && range isa RangeReferenceStep &&
-       steps[1] isa FieldReferenceStep && steps[1].name == "elements" &&
-       steps[2] isa RangeReferenceStep &&
-       steps[3] isa FieldReferenceStep && steps[3].name == "content"
-        # A range in span `k` of the pieces is that range moved by the length of
-        # the spans before it. The lengths do not depend on the colors, so the
-        # pieces need no appearance.
-        text = string(w.content)
-        before = sum((first(piece) for piece in _get_plain_text_pieces(w, text, nothing)[1:steps[2].start]);
-                     init = 0)
-        return _make_content_range_reference(before + range.start, before + range.stop)
-    end
-    nothing
+    range = get_flat_range(view, reference)
+    range === nothing ? nothing : _make_content_range_reference(range...)
 end
+
+# The view of a plain value, which the text domain prints: the input of the IO map
+# of the content of a text widget.
+_get_plain_text_view(iomap) = iomap.content_iomap.input
 
 # The range of the content of a widget that draws its box around it: the range of
 # the widget less its insets, in the same state, so a slot stays a slot and an edge
@@ -1810,12 +1871,18 @@ function print_document(p::WidgetTextToGraphicsCanvas, recursion, w::WidgetText,
     # A Document content (e.g. a TextBlock) is recursed through the outer
     # projection chain (which routes it to TextToGraphics); a plain value is
     # drawn through a text view of its string. Mirrors WidgetScrollPane's
-    # content recursion.
+    # content recursion. A document whose child gives a value and not graphics,
+    # as an `ObjectField` does under the nesting of a value widget, is drawn
+    # through a text view of that value. Which of the two a document is, is read
+    # once, here, and with no reader, so the print does not follow the value.
     content_ctx = _get_inner_content_context(p, w, ctx)
-    content_iomap = w.content isa Document ?
+    document_iomap = w.content isa Document ?
         make_reconciled_child_iomap_cell(() -> w.content, c -> print_child(recursion, c, content_ctx)) :
+        nothing
+    value_slot = _is_value_child(document_iomap) ? document_iomap : nothing
+    content_iomap = document_iomap !== nothing && value_slot === nothing ? document_iomap :
         _print_plain_text_view(p, recursion, w, _get_state_text(p, w, :label; state), content_ctx;
-                               appearance = p.appearance)
+                               appearance = p.appearance, value_slot)
     build = Cell(@computation begin
         radius = p.corner_radius
         inner = content_iomap[].output::GraphicsCanvas
@@ -1828,6 +1895,8 @@ function print_document(p::WidgetTextToGraphicsCanvas, recursion, w::WidgetText,
         # it takes, where its text begins, and is as wide as the example.
         placeholder = w.placeholder
         shows_placeholder = placeholder !== nothing && !(w.content isa Document) && isempty(string(w.content))
+        shows_placeholder |= placeholder !== nothing && value_slot !== nothing &&
+                             isempty(string(value_slot[].output))
         inner_w = Int(inner.w[])
         shows_placeholder && (inner_w = max(inner_w, _text_size(p.measure, p.placeholder_text.font,
                                                                 String(placeholder))[1]))
@@ -1855,8 +1924,14 @@ function print_document(p::WidgetTextToGraphicsCanvas, recursion, w::WidgetText,
                           whole = p.graphics_style)
         (width=outer_w, height=outer_h, elements=elems)
     end)
-    WidgetTextToGraphicsCanvasIoMap(p, w, _reactive_canvas_cell(_origin(pos)..., build), content_iomap)
+    WidgetTextToGraphicsCanvasIoMap(p, w, _reactive_canvas_cell(_origin(pos)..., build), content_iomap,
+                                    value_slot)
 end
+
+# Whether the child of a document in `content` gives a value and not graphics.
+_is_value_child(document_iomap::Nothing) = false
+_is_value_child(document_iomap) =
+    !(run_without_cell_tracking(() -> document_iomap[].output) isa GraphicsCanvas)
 
 map_reference_forward(::WidgetTextToGraphicsCanvas, iomap, reference) = _map_child_forward(iomap, reference)
 
@@ -1874,8 +1949,22 @@ function map_reference_backward(::WidgetTextToGraphicsCanvas, iomap::WidgetTextT
     point = find_reference_point(reference)
     point === nothing || return _map_text_point(point)
     w = iomap.input
-    w.content isa Document || return _map_plain_text_reference(w, reference)
+    child = iomap.value_iomap
+    child === nothing || return _map_value_text_reference(_get_plain_text_view(iomap), child, reference)
+    w.content isa Document || return _map_plain_text_reference(_get_plain_text_view(iomap), reference)
     ConcreteReference(FieldReferenceStep("content"), reference)
+end
+
+# A reference of the text view of the value that the child of `content` gives,
+# mapped back through the child: the range of the view, as a flat range, is a path
+# that the child introduces, under `content`.
+function _map_value_text_reference(view::TextBlock, child, reference)
+    range = _map_plain_text_reference(view, reference)
+    range === nothing && return nothing
+    step = get_reference_steps(range)[end]
+    inner = map_reference_backward(child.projection, child,
+                                   make_flat_range_reference(step.start, step.stop))
+    inner === nothing ? nothing : ConcreteReference(FieldReferenceStep("content"), inner)
 end
 
 # A point of a text widget: its content is the part there, at that point. The
@@ -1887,13 +1976,41 @@ _map_text_point(point::PointReferenceStep) =
 read_intent(::WidgetTextToGraphicsCanvas, iomap::SimpleIoMap, evt) = nothing
 
 # Delegate every event to the recursed content (Text domain), then re-root the
-# returned path-bearing operation through `map_reference_backward`.
+# returned path-bearing operation through `map_reference_backward`. A field is
+# one line: Return breaks no line in it, and goes on to the bindings around the
+# field, such as the find of a bar.
 function read_intent(p::WidgetTextToGraphicsCanvas, iomap::WidgetTextToGraphicsCanvasIoMap, evt)
     _outside_widget(iomap, evt) && return nothing
     iomap.input.enabled === false && return nothing   # a disabled text widget accepts no edits
-    _validate_text_edit(iomap.input,
-                        _read_text_content_intent(p, iomap, evt, _content_offset(p, iomap.input)...))
+    _is_plain_typed(evt, '\n') && return nothing
+    operation = _validate_text_edit(iomap.input,
+        _read_text_content_intent(p, iomap, evt, _content_offset(p, iomap.input)...))
+    child = iomap.value_iomap
+    child === nothing ? operation : _make_value_text_store(iomap.input, child, operation)
 end
+
+# An edit of the text view of the value that the child of `content` gives: the
+# whole string after the edit, which the child stores (`make_slot_store_operation`),
+# and the caret after the inserted text. A store moves no caret, as the edit of a
+# plain value does, so the caret move is a second operation.
+function _make_value_text_store(w, child, operation::ReplaceStringRangeOperation)
+    range = _get_value_text_caret(operation.reference, child)
+    range === nothing && return nothing
+    step = get_reference_head(range)
+    edited = _apply_range(string(child.output), step.start, step.stop, operation.replacement)
+    store = make_slot_store_operation(w, :content, child, edited)
+    store === nothing && return nothing
+    caret = step.start + length(operation.replacement)
+    inner = map_reference_backward(child.projection, child, make_flat_range_reference(caret, caret))
+    inner === nothing && return store
+    CompoundOperation(Any[store,
+        ReplaceSelectionOperation(ConcreteReference(FieldReferenceStep("content"), inner))])
+end
+
+_make_value_text_store(w, child, operation::CompoundOperation) =
+    CompoundOperation(Any[_make_value_text_store(w, child, member) for member in operation.operations])
+
+_make_value_text_store(w, child, operation) = operation
 
 # Give an event to the text document that a text widget holds, and re-root the
 # answer under `content`. The Text domain makes every caret move and every edit.
@@ -1971,10 +2088,11 @@ function _push_mark_label!(elements::Vector, p, content, x::Int, y::Int)
 end
 
 function print_document(p::WidgetCheckboxToGraphicsCanvas, recursion, w::WidgetCheckbox, ctx)
-    w.visible == false && return SimpleIoMap(p, w, _empty_canvas())
+    w.visible == false && return WidgetValueIoMap(p, w, _empty_canvas(), nothing)
     position = w.position::Point2D
-    SimpleIoMap(p, w, _reactive_canvas(_origin(position)..., () -> begin
-        checked = w.content === true
+    slot = _print_value_slot(recursion, w, :content, ctx)
+    WidgetValueIoMap(p, w, _reactive_canvas(_origin(position)..., () -> begin
+        checked = _get_slot_value(w, :content, _get_slot_child(slot)) === true
         enabled = !(w.enabled === false)
         box_size = p.indicator_size
         corner_radius = p.corner_radius
@@ -2001,7 +2119,7 @@ function print_document(p::WidgetCheckboxToGraphicsCanvas, recursion, w::WidgetC
         outer_width, outer_height = content.width + inset_width, content.height + inset_height
         _push_focus_ring!(elements, w, outer_width, outer_height, p.focus_ring_stroke, corner_radius)
         (width=outer_width, height=outer_height, elements=elements)
-    end))
+    end), slot)
 end
 
 map_reference_forward(::WidgetCheckboxToGraphicsCanvas, iomap, reference) = _map_child_forward(iomap, reference)
@@ -2010,33 +2128,35 @@ function map_reference_backward(::WidgetCheckboxToGraphicsCanvas, iomap, referen
     return nothing
 end
 
-# A click toggles the checkbox. By convention a leaf control reports an edit as
-# `ReplaceReferencedValueOperation(self, content, new_value)`; a configuring projection
-# (ObjectToWidget) intercepts it by control identity and redirects it onto the
-# bound parameter cell. A bare click that does not reach here leaves the value
-# unchanged.
-_checkbox_toggle(w) = ReplaceReferencedValueOperation(w,
-    ConcreteReference(FieldReferenceStep("content"), EmptyReference()), !(w.content === true))
+# A click toggles the checkbox: it stores the opposite of the value in `content`
+# (`make_slot_store_operation`). A plain value is written on the checkbox itself,
+# where a configuring projection (ObjectToWidget) intercepts it by control
+# identity and redirects it onto the bound parameter cell; a document in the slot,
+# such as an `ObjectField`, answers the write itself. A bare click that does not
+# reach here leaves the value unchanged.
+_checkbox_toggle(iomap::WidgetValueIoMap) =
+    make_slot_store_operation(iomap, :content,
+        !(_get_slot_value(iomap.input, :content, iomap.value_iomap) === true))
 
-function read_intent(::WidgetCheckboxToGraphicsCanvas, iomap::SimpleIoMap, evt::MouseClick)
+function read_intent(::WidgetCheckboxToGraphicsCanvas, iomap::WidgetValueIoMap, evt::MouseClick)
     _outside_widget(iomap, evt) && return nothing
     w = iomap.input
     w.enabled === false && return nothing   # a disabled checkbox swallows the click
     op = read_bound_gesture(w, evt); op === nothing || return op   # per-instance gestures win
     evt.button === :left || return nothing
-    _checkbox_toggle(w)
+    _checkbox_toggle(iomap)
 end
 
 # Enter / Space with no modifier toggle the focused checkbox (the keystroke
 # reaches it via the selection-driven routing). Tab is left to fall through
 # (nothing) so focus traversal can claim it.
-function read_intent(::WidgetCheckboxToGraphicsCanvas, iomap::SimpleIoMap, evt)
+function read_intent(::WidgetCheckboxToGraphicsCanvas, iomap::WidgetValueIoMap, evt)
     _outside_widget(iomap, evt) && return nothing
     w = iomap.input
     w.enabled === false && return nothing
     op = read_bound_gesture(w, evt); op === nothing || return op   # per-instance gestures win
-    _is_plain_key(evt, :return, :space) || return nothing
-    _checkbox_toggle(w)
+    _is_plain_typed(evt, '\n', ' ') || return nothing
+    _checkbox_toggle(iomap)
 end
 
 # ── WidgetButton ────────────────────────────────────────────────────────────
@@ -2163,10 +2283,10 @@ function read_intent(::WidgetButtonToGraphicsCanvas, iomap::SimpleIoMap, evt)
         MouseClick(button, x, y) => button === :left ? _button_primary_op(w) : nothing
         MouseDown(button, x, y)  => button === :left ? _write_view_state(w, "pressed", true) : nothing
         MouseUp(button, x, y)    => button === :left ? _write_view_state(w, "pressed", false) : nothing
-        # Enter / Space with no modifier activate the focused button (key reaches
-        # it via selection routing). `:tab` is intentionally not matched, so it
-        # falls through to `nothing` and focus traversal can claim it.
-        when(KeyDown(k), _is_plain_key(evt, :return, :space)) => _button_primary_op(w)
+        # Return / Space with no modifier activate the focused button (key reaches
+        # it via selection routing). Tab is not matched, so it falls through to
+        # `nothing` and focus traversal can claim it.
+        when(KeyPress(c), _is_plain_typed(evt, '\n', ' ')) => _button_primary_op(w)
         _ => nothing
     end
 end
@@ -2953,10 +3073,10 @@ function print_document(p::WidgetMenuToGraphicsCanvas, recursion, w::WidgetMenu,
     row_width = Cell(nothing)
     child_cells = make_reconciled_child_iomaps_cell(
         () -> w.elements,
-        (i, item) -> item isa WidgetDocument ?
+        (index, item) -> item isa WidgetDocument ?
             print_child(recursion, item,
-                make_child_context(_menu_item_context(w, ctx, item, row_width),
-                                   FieldReferenceStep("elements"), RangeReferenceStep(i - 1, i))) :
+                make_element_context(_menu_item_context(w, ctx, item, row_width), index,
+                                     i -> (FieldReferenceStep("elements"), RangeReferenceStep(i - 1, i)))) :
             nothing)
     w.orientation === :horizontal ||
         set_cell_computation!(row_width, () -> _menu_row_width(child_cells[]))
@@ -3027,14 +3147,20 @@ function print_document(p::WidgetCompositeToGraphicsCanvas, recursion, w::Widget
     child_cells = make_reconciled_child_iomaps_cell(
         () -> Any[c for c in w.elements
                   if (c isa WidgetDocument || c isa LayoutDocument || c isa LayoutConstraint)],
-        (i, c) -> print_child(recursion, c, _make_composite_child_context(p, w, c, ctx)))
-    # The natural extent of the children together, before the box around them.
+        (_, c) -> print_child(recursion, c, _make_composite_child_context(p, w, c, ctx)))
+    # The natural extent of the children together, before the box around them. A
+    # context with a minimum width, as a slot that the composite fills gives, makes
+    # the box at least that wide, so a box of a `Fill` composite reaches the edge
+    # of its slot.
+    minimum_width = ctx isa PrinterContext ? ctx.minimum_width : nothing
     extent = Cell(@computation begin
         content_width, content_height = 0, 0
         for cim in child_cells[]
             ew, eh = _element_size(cim.output, _p_measure(p))
             content_width = max(content_width, ew); content_height = max(content_height, eh)
         end
+        minimum_width === nothing ||
+            (content_width = max(content_width, Int(minimum_width[]) - _inset_total(p, w)[1]))
         (content_width, content_height)
     end)
     # The box around the children is a canvas of its own, so the list of the
@@ -3125,12 +3251,12 @@ function read_intent(p::WidgetCompositeToGraphicsCanvas, iomap::ChildrenIoMap, e
     # Tab traversal (Stage 2): distributed focus advance. Handle before the generic
     # selection-only routing so a Tab the selected child declines can advance my
     # own selection to the next focusable sibling.
-    if iomap.input isa WidgetComposite && evt isa KeyDown && evt.key === :tab
+    if iomap.input isa WidgetComposite && evt isa KeyPress && evt.char == '\t'
         return _composite_tab(iomap.input, child_iomaps, evt)
     end
     res = @gesture_case evt begin
         MouseScroll => _route_composite_event(child_iomaps, evt.x, evt.y,
-            (x, y) -> MouseScroll(evt.dx, evt.dy, x, y; time = evt.time))
+            (x, y) -> shift_event_position(evt, x - evt.x, y - evt.y))
         MouseClick => _route_composite_event(child_iomaps, evt.x, evt.y,
             (x, y) -> MouseClick(evt.button, x, y, evt.count, evt.modifiers;
                                  time = evt.time))
@@ -3759,7 +3885,6 @@ function _split_build(p::WidgetSplitPaneToGraphicsCanvas, recursion, w::WidgetSp
     cox, coy = _content_offset(p, w)
     orientation = w.orientation::Symbol
     main_axis = orientation === :horizontal ? :x : :y
-    sizes = w.sizes
     splitter_stroke = _get_part_stroke(w, :splitter_stroke, p.splitter_stroke)
     splitter_thickness = max(1, Int(splitter_stroke.width))
     splitter_color = splitter_stroke.color
@@ -3831,12 +3956,16 @@ function _split_build(p::WidgetSplitPaneToGraphicsCanvas, recursion, w::WidgetSp
         push!(inner_iomaps, cim)
     end
 
-    # The unoffered slots, now that the children have drawn.
+    # The unoffered slots, now that the children have drawn. The sizes and the pins
+    # are read in the cells of the slots and of the allocation, and not here: a
+    # drag writes them, and a new build prints every child again, so the view
+    # state inside a child, such as the place of its own divider, would start over.
     if avail_main === nothing
         for i in 1:n
-            declared = _split_intrinsic(valid_elems[i], sizes, i, main_axis)
+            elem_local = valid_elems[i]
             cim_local = inner_iomaps[i]
             set_cell_computation!(slot_main[i], function ()
+                declared = _split_intrinsic(elem_local, w.sizes, i, main_axis)
                 declared > 0 && return declared
                 out = cim_local.output
                 out isa GraphicsCanvas || return 0
@@ -3853,13 +3982,14 @@ function _split_build(p::WidgetSplitPaneToGraphicsCanvas, recursion, w::WidgetSp
         local_cims  = inner_iomaps
         axis        = main_axis
         n_local     = n
-        sizes_local = sizes
-        pinned_cv   = w.pinned
         set_cell_computation!(alloc_cell, function ()
+            sizes_local = w.sizes
+            pinned_cv   = w.pinned
             mins  = Vector{Int}(undef, n_local)
             maxs  = Vector{Int}(undef, n_local)
             prefs = Vector{Int}(undef, n_local)
             wts   = Vector{Float64}(undef, n_local)
+            has_pinned = false
             for i in 1:n_local
                 elem      = local_elems[i]
                 intrinsic = _split_intrinsic(elem, sizes_local, i, axis)
@@ -3872,11 +4002,15 @@ function _split_build(p::WidgetSplitPaneToGraphicsCanvas, recursion, w::WidgetSp
                 if i <= length(pinned_cv) && pinned_cv[i] && i <= length(sizes_local)
                     prefs[i] = Int(sizes_local[i])
                     wts[i]   = 0.0
+                    has_pinned = true
                 else
                     prefs[i] = intrinsic
                     wts[i]   = layout_weight(elem, axis)
                 end
             end
+            # A drag pins every slot but the last, and the last takes the rest of
+            # the total, also when it has no weight of its own.
+            has_pinned && wts[n_local] == 0.0 && (wts[n_local] = 1.0)
             allocate_axis(Int(avail_main[]); mins, maxs, prefs, weights = wts,
                           gap = splitter_thickness, n = n_local)
         end)
@@ -4170,12 +4304,12 @@ function read_intent(p::WidgetSplitPaneToGraphicsCanvas, iomap::ChildrenIoMap, e
     child_iomaps = getfield(iomap, :child_iomaps)[]::Vector
     # Tab traversal (Stage 2): distributed focus advance, handled before the
     # selection-only coordless routing.
-    if w isa WidgetSplitPane && evt isa KeyDown && evt.key === :tab
+    if w isa WidgetSplitPane && evt isa KeyPress && evt.char == '\t'
         return _split_tab(w, child_iomaps, evt)
     end
     res = @gesture_case evt begin
         MouseScroll => _route_split_event(child_iomaps, evt.x, evt.y,
-            (x, y) -> MouseScroll(evt.dx, evt.dy, x, y; time = evt.time))
+            (x, y) -> shift_event_position(evt, x - evt.x, y - evt.y))
         MouseClick => _route_split_event(child_iomaps, evt.x, evt.y,
             (x, y) -> MouseClick(evt.button, x, y, evt.count, evt.modifiers;
                                  time = evt.time))
@@ -4487,7 +4621,7 @@ function _print_tab_name_view(p, recursion, w::WidgetTabbedPane, caret::Cell, ct
         (found === nothing || !(1 <= found[1] <= length(pairs))) ? "" :
             _get_tab_selector_text(pairs[found[1]].selector)
     end, _get_state_text(p, w, :tab; state = :selected))
-    view = TextBlock(span)
+    view = TextBlock(TextLine(span))
     set_cell_computation!(getfield(view, :selection), () -> begin
         found = caret[]
         found === nothing ? nothing : make_flat_range_reference(found[2], found[2])
@@ -4548,8 +4682,11 @@ function print_document(p::WidgetTabbedPaneToGraphicsCanvas, recursion, w::Widge
                                                w.draggable === true ? :open_hand : :pointing_hand))
             tab_text = _get_state_text(p, w, :tab; state)
             fg = tab_text.color
-            iw > 0 && _push_icon!(header, icon, tx + sel_pad, coy + sel_pad + (sel_h - 2 * sel_pad - iw) ÷ 2,
-                                  iw, _get_tab_icon_color(p, pairs[i].selector, fg))
+            # A decorated icon draws its marks on a disc of the color of its tab.
+            iw > 0 && _push_decorated_icon!(header, p.badge, icon, tx + sel_pad,
+                                            coy + sel_pad + (sel_h - 2 * sel_pad - iw) ÷ 2, iw,
+                                            _get_tab_icon_color(p, pairs[i].selector, fg),
+                                            state === :selected ? p.tab_selected_color : p.tab_strip_color)
             name_x, name_y = tx + sel_pad + iw + gap, coy + sel_pad + (sel_h - 2 * sel_pad - g.line) ÷ 2
             found = name_caret[]
             if found !== nothing && found[1] == i
@@ -4609,7 +4746,7 @@ function print_document(p::WidgetTabbedPaneToGraphicsCanvas, recursion, w::Widge
     # through the held iomap; a non-widget slot reconciles to `nothing` (no content).
     all_cims = make_reconciled_child_iomaps_cell(
         () -> Any[pair.element for pair in w.selector_element_pairs],
-        (i, content) -> content !== nothing ? print_child(recursion, content, content_ctx) : nothing)
+        (_, content) -> content !== nothing ? print_child(recursion, content, content_ctx) : nothing)
 
     # The page. A tabbed pane hands its content a bounded extent above, so it is the
     # tabbed pane that keeps the promise: the page is a viewport at the content
@@ -4923,8 +5060,8 @@ function read_intent(p::WidgetTabbedPaneToGraphicsCanvas, iomap::ChildrenIoMap, 
             cox, coy, sel_pad, sel_h, strip_w, tabs = _tab_strip_geometry(p, w)
             # A wheel over the strip scrolls it horizontally (the strip is a horizontal
             # row, so vertical wheel maps to horizontal motion); over the content it
-            # scrolls the active tab as before.
-            if !isempty(tabs) && evt.y >= coy && evt.y < coy + sel_h
+            # scrolls the active tab as before. Ctrl and the wheel never scroll it.
+            if !evt.modifiers.ctrl && !isempty(tabs) && evt.y >= coy && evt.y < coy + sel_h
                 view_w = _tab_view_w(iomap, strip_w)
                 max_s = max(0, strip_w - view_w)
                 if max_s > 0
@@ -5098,7 +5235,7 @@ function _route_active_tab(iomap::ChildrenIoMap, child_iomaps::Vector, evt)
         MouseScroll(dx, dy, x, y) => begin
             lx, ly = x - ox - Int(canvas.x), y - oy - Int(canvas.y)
             hit_element_at(canvas, lx, ly) === nothing && return nothing
-            MouseScroll(dx, dy, lx, ly; time = evt.time)
+            shift_event_position(evt, lx - x, ly - y)
         end
         MouseDwell(x, y) => begin
             lx, ly = x - ox - Int(canvas.x), y - oy - Int(canvas.y)
@@ -5812,20 +5949,81 @@ function _scroll_by(sp, dx, dy, room = nothing)
     _write_view_state(sp, "scroll_position", Point2D(x, y))
 end
 
+# A notch of a run of the wheel that comes sooner than this after the last one,
+# in seconds, scrolls more than it; up to `_WHEEL_RUN_END_GAP` it scrolls as much,
+# and a longer gap ends the run.
+const _WHEEL_RUN_GROWTH_GAP = 0.08
+const _WHEEL_RUN_END_GAP = 0.15
+
+# The distance in pixels that a turn of `turn` notches at `time` moves a view, with
+# the sign of `turn`, and the run of the wheel after it. The first notch of a run
+# moves `step`. A notch in the same direction less than `_WHEEL_RUN_GROWTH_GAP`
+# seconds after the last one moves `growth` times the distance of that one, and
+# up to `_WHEEL_RUN_END_GAP` seconds as much; a longer gap or the other direction
+# starts a new run. The notches of a merged turn share the time since the last
+# notch evenly, so the pace of the notches decides, and not the length of a
+# frame; a merged turn that starts a run moves `step` for each notch. No notch
+# moves more than `largest`. A turn with a fraction comes from a touchpad, which
+# the system already speeds up: it moves `turn` steps and ends the run.
+function _compute_wheel_turn(run, turn::Float64, time::Float64, step::Real, largest::Real,
+                             growth::Real)
+    turn == 0 && return (0, run)
+    isinteger(turn) || return (round(Int, turn * step), nothing)
+    direction = turn > 0 ? 1 : -1
+    notches = Int(abs(turn))
+    distance = Float64(step)
+    grows = false
+    if run !== nothing && run.direction == direction
+        pace = (time - run.time) / notches
+        if 0 <= pace < _WHEEL_RUN_END_GAP
+            distance = min(Float64(largest), run.distance)
+            grows = pace < _WHEEL_RUN_GROWTH_GAP
+        end
+    end
+    total = 0.0
+    for _ in 1:notches
+        grows && (distance = min(Float64(largest), distance * growth))
+        total += distance
+    end
+    (direction * round(Int, total), (time = time, direction = direction, distance = distance))
+end
+
+# `op` with the write of the run of the wheel `run` into `w`. A turn that moves
+# nothing writes no run, so its notch does not count.
+_add_wheel_run(op, w, run) =
+    op === nothing ? nothing : CompoundOperation(Any[op, _write_view_state(w, "wheel_run", run)])
+
 # Scroll this pane, if the wheel landed on it. Only reached once the content has
-# declined the event, so the innermost pane under the pointer wins.
+# declined the event, so the innermost pane under the pointer wins. A notch
+# scrolls `lines_per_notch` lines, more in a fast run, and at most the view less
+# one line. Ctrl and the wheel zoom and never scroll, so a zoom that stops at its
+# limit does not give the next notch to the page.
+function _self_scroll(p, iomap, canvas, evt)
+    evt isa MouseScroll || return nothing
+    evt.modifiers.ctrl && return nothing
+    hit_element_at(canvas, evt.x, evt.y) === nothing && return nothing
+    _, line = _text_size(p.measure, p.font, "M")
+    # The turn with its fraction, so a touchpad scrolls smoothly.
+    turn_x, turn_y = evt.precise_dx, evt.precise_dy
+    horizontal = turn_x != 0 && turn_y == 0
+    view_w, view_h = _get_pane_scroll_view(p, iomap)
+    largest = max(line, (horizontal ? view_w : view_h) - line)
+    step = min(p.lines_per_notch * line, largest)
+    w = iomap.input
+    distance, run = _compute_wheel_turn(w.wheel_run, horizontal ? turn_x : turn_y, evt.time,
+                                        step, largest, p.wheel_growth)
+    dx, dy = horizontal ? (-distance, 0) : (0, -distance)
+    _add_wheel_run(_scroll_pane_by(p, iomap, dx, dy), w, run)
+end
+
+# The scroll of the pane of `iomap` by `(dx, dy)` pixels.
 #
 # `follow_end` is a mode, not a lock. A pane that follows the end draws at the
 # end and ignores `scroll_position` — so a reader who scrolls back through a
 # transcript must first take the pane off the pin, and the pin goes back on when
-# they reach the end again. Without that the wheel wrote a cell nothing read, and
-# the transcript could not be scrolled at all.
-function _self_scroll(p, iomap, canvas, evt)
-    evt isa MouseScroll || return nothing
-    hit_element_at(canvas, evt.x, evt.y) === nothing && return nothing
-    _, scroll_step = _text_size(p.measure, p.font, "M")
-    dx, dy = (evt.dx != 0 && evt.dy == 0) ? (-evt.dx * scroll_step, 0) :
-                                            (0, -evt.dy * scroll_step)
+# they reach the end again. Without that, the wheel writes a cell that nothing
+# reads, and the transcript does not scroll.
+function _scroll_pane_by(p, iomap, dx::Int, dy::Int)
     w = iomap.input
     room = _scroll_room(p, iomap)
     following = getfield(w, :follow_end)[] === true
@@ -6000,8 +6198,7 @@ function read_intent(p::WidgetScrollPaneToGraphicsCanvas, iomap::WidgetScrollPan
         # variant for why intercepting here would strand a nested pane.
         MouseScroll(dx, dy, x, y) => begin
             lx, ly = _local(x, y)
-            read_intent(content_iomap.projection, content_iomap,
-                             MouseScroll(dx, dy, lx, ly, evt.modifiers; time = evt.time))
+            read_intent(content_iomap.projection, content_iomap, shift_event_position(evt, lx - x, ly - y))
         end
         _ => read_intent(content_iomap.projection, content_iomap, evt)
     end
@@ -6336,13 +6533,15 @@ _zoom_about(M::AffineTransform, factor, ax, ay) =
 # Pan: prepend a screen-space translation. `M' = T(dx, dy) ∘ M`.
 _pan_by(M::AffineTransform, dx, dy) = make_affine_translate(dx, dy) ∘ M
 
-# One zoom step about `(ax, ay)`: `dir > 0` zooms in, `dir < 0` out. Returns the
-# write of the transform, or `nothing` if the clamp leaves the scale unchanged
-# (already at `_ZOOM_MIN`/`_ZOOM_MAX`). Shared by the wheel and keyboard readers.
-# The transform is view state, so every write of it is one a history skips.
-function _zoom_op(w, M::AffineTransform, dir, ax, ay)
+# `steps` zoom steps about `(ax, ay)`: a positive count zooms in, a negative one
+# out, and 0 does nothing. Returns the write of the transform, or `nothing` if the
+# clamp leaves the scale unchanged (already at `_ZOOM_MIN`/`_ZOOM_MAX`). Shared by
+# the wheel, which zooms a step for each notch, and keyboard readers. The
+# transform is view state, so every write of it is one a history skips.
+function _zoom_op(w, M::AffineTransform, steps::Integer, ax, ay)
+    steps == 0 && return nothing
     cur = M.a == 0.0 ? 1.0 : M.a
-    f = dir > 0 ? _ZOOM_STEP : 1.0 / _ZOOM_STEP
+    f = Float64(_ZOOM_STEP)^steps
     new_scale = clamp(cur * f, _ZOOM_MIN, _ZOOM_MAX)
     f = new_scale / cur
     f == 1.0 && return nothing
@@ -6361,15 +6560,24 @@ function read_intent(p::WidgetTransformPaneToGraphicsCanvas, iomap::WidgetTransf
         # Ctrl+wheel: zoom about the cursor.
         MouseScroll(dx, dy, x, y; ctrl) => begin
             hit_element_at(canvas, x, y) === nothing && return nothing
-            return _zoom_op(w, M, dy >= 0 ? 1 : -1, Float64(x - cox), Float64(y - coy))
+            return _zoom_op(w, M, dy, Float64(x - cox), Float64(y - coy))
         end
-        # Plain wheel: pan. Vertical by `dy`, horizontal by `dx`, step = line height.
+        # Plain wheel: pan. Vertical by `dy`, horizontal by `dx`, `lines_per_notch`
+        # lines for each notch.
         MouseScroll(dx, dy, x, y) => begin
             hit_element_at(canvas, x, y) === nothing && return nothing
-            _, step = _text_size(p.measure, p.font, "M")
-            return dx != 0 && dy == 0 ?
-                _write_view_state(w, "transform", _pan_by(M, dx * step, 0)) :
-                _write_view_state(w, "transform", _pan_by(M, 0, dy * step))
+            _, line = _text_size(p.measure, p.font, "M")
+            # The turn with its fraction, so a touchpad pans smoothly. A fast run
+            # pans more at each notch, and at most the view less one line.
+            turn_x, turn_y = evt.precise_dx, evt.precise_dy
+            horizontal = turn_x != 0 && turn_y == 0
+            tx, ty = _inset_total(p, w)
+            largest = max(line, (horizontal ? Int(canvas.w) - tx : Int(canvas.h) - ty) - line)
+            step = min(p.lines_per_notch * line, largest)
+            distance, run = _compute_wheel_turn(w.wheel_run, horizontal ? turn_x : turn_y, evt.time,
+                                                step, largest, p.wheel_growth)
+            pan = horizontal ? _pan_by(M, distance, 0) : _pan_by(M, 0, distance)
+            return _add_wheel_run(_write_view_state(w, "transform", pan), w, run)
         end
     end
     # Forward other events to the content, then re-root the result. Every pointer
@@ -6442,7 +6650,7 @@ function print_document(p::WidgetToolbarToGraphicsCanvas, recursion, w::WidgetTo
         # no slot on the main axis: an item that took a slot would stretch to the
         # whole band. It gives its edge instead, as a bounded range, so an item
         # draws its content and a text in it wraps at the band's edge.
-        (i, item) -> print_child(recursion, item, with_bounded_size(ctx; width = ctx.maximum_width)))
+        (_, item) -> print_child(recursion, item, with_bounded_size(ctx; width = ctx.maximum_width)))
     build = Cell(@computation begin
         content_x, content_y = _content_offset(p, w)
         item_gap = p.item_gap
@@ -6607,11 +6815,71 @@ function _get_scroll_bar_thumb(p::WidgetScrollBarToGraphicsCanvas, w::WidgetScro
     end
 end
 
+# A cell of the value that `get_value()` gives and the clock time of its last
+# change, as `(value, time)`. `is_change(old, new)` says what a change is. The
+# first run sees no change, and the time is -Inf until a change. The time is read
+# with `get_clock_time`, which records nothing, so the cell computes again only
+# when what `get_value` reads changes. With no clock the time stays -Inf.
+function _make_change_time_cell(get_value::Function, clock, is_change::Function = !=)
+    previous = Ref{Union{Some, Nothing}}(nothing)
+    at = Ref(-Inf)
+    Cell(@computation begin
+        value = get_value()
+        seen = previous[]
+        if seen !== nothing && clock !== nothing && is_change(something(seen), value)
+            at[] = get_clock_time(clock)
+        end
+        previous[] = Some(value)
+        (value, at[])
+    end)
+end
+
+# Whether less than `duration` seconds passed on `clock` since `start`. While they
+# did, the read subscribes to the clock, so the caller computes again on the next
+# frame; after that it reads no clock, and the editor draws no frame for it.
+function _is_within_duration(clock, start::Float64, duration::Real)
+    clock === nothing && return false
+    get_clock_time(clock) - start < duration || return false
+    get_reactive_clock_time(clock) - start < duration
+end
+
+# The share of the shown color of a bar, from the pair `(showing, since)` of
+# whether it shows and the clock time of the last change of that: 1 while it
+# shows, and from 1 down to 0 over `duration` seconds after it stops.
+function _compute_scroll_bar_share(clock, shown::Tuple{Bool, Float64}, duration::Real)
+    showing, since = shown
+    showing && return 1.0
+    _is_within_duration(clock, since, duration) || return 0.0
+    1.0 - (get_clock_time(clock) - since) / duration
+end
+
+# The color `fraction` of the way from `a` to `b`. The channels mix in
+# proportion to the alpha of each end, so a transparent end takes the color of
+# the other end and only its alpha changes.
+function _mix_colors(a::StyleColor, b::StyleColor, fraction::Real)
+    fraction <= 0 && return a
+    fraction >= 1 && return b
+    alpha = a.alpha + (b.alpha - a.alpha) * fraction
+    alpha <= 0 && return color_transparent
+    mix(x, y) = (x * a.alpha + (y * b.alpha - x * a.alpha) * fraction) / alpha
+    StyleColor(mix(a.red, b.red), mix(a.green, b.green), mix(a.blue, b.blue), alpha)
+end
+
+# Whether a bar shows a change of its value from `old` to `new` as a scroll: the
+# value moved and the thumb kept its size. A change of both is a change of the
+# size of the content or of the view, such as a typed line or a log that grows.
+_is_scroll_bar_scroll(old, new) = old[1] != new[1] && old[2] == new[2]
+
 # A scroll bar is as long as its parent offers and as thick as its theme says,
 # unless it authors a size. Its track and its thumb read the value in cells, so
-# a scroll moves the thumb and prints nothing again. Both light while the pointer
-# is on the bar or its thumb is dragged, and the pointer is an arrow over the
-# bar, also over a text under it.
+# a scroll moves the thumb and prints nothing again. Both take their lit colors
+# while the pointer is on the bar or its thumb is dragged. Else the thumb takes
+# its scrolled color for `show_duration` seconds of the clock of `ctx` after a
+# scroll, and both take their colors at rest, which are transparent unless a
+# maker gives them. When the bar stops showing, the thumb goes from its scrolled
+# color to its color at rest over `fade_duration` seconds. A clock that no code
+# writes keeps a fade at its start. The pointer is an arrow over the bar, also
+# over a text under it.
 function print_document(p::WidgetScrollBarToGraphicsCanvas, _, w::WidgetScrollBar, ctx)
     w.visible == false && return SimpleIoMap(p, w, _empty_canvas())
     pos = w.position
@@ -6627,8 +6895,21 @@ function print_document(p::WidgetScrollBarToGraphicsCanvas, _, w::WidgetScrollBa
                                                             offered_h, !horizontal, p.thickness)))
     parts = Cell(@computation _get_scroll_bar_thumb(p, w, Int(width[]), Int(height[])))
     lit = Cell(@computation _is_under_pointer(w) || w.thumb_drag !== nothing)
-    colors = ((_get_state_color(p, w, :track), _get_state_color(p, w, :track; state = :hovered)),
-              (_get_state_color(p, w, :thumb), _get_state_color(p, w, :thumb; state = :hovered)))
+    clock = ctx === nothing ? nothing : ctx.clock
+    scroll = _make_change_time_cell(() -> (Float64(w.value), Float64(w.thumb_size)), clock,
+                                    _is_scroll_bar_scroll)
+    scrolled = Cell(@computation _is_within_duration(clock, scroll[][2], p.show_duration))
+    track_rest, track_lit = _get_state_color(p, w, :track), _get_state_color(p, w, :track; state = :hovered)
+    thumb_rest, thumb_lit = _get_state_color(p, w, :thumb), _get_state_color(p, w, :thumb; state = :hovered)
+    thumb_scrolled = _get_state_color(p, w, :thumb; state = :scrolled)
+    # Whether the bar shows, and the clock time of the last change of that. The
+    # scroll is read first, so a scroll under the pointer counts too.
+    shown = _make_change_time_cell(() -> (recent = scrolled[]; lit[] || recent), clock)
+    share = Cell(@computation _compute_scroll_bar_share(clock, shown[], p.fade_duration))
+    track_color = Cell(@computation lit[] ? track_lit : track_rest)
+    thumb_color = Cell(@computation (fraction = share[];
+                                     lit[] ? thumb_lit : _mix_colors(thumb_rest, thumb_scrolled, fraction)))
+    colors = (track_color, thumb_color)
     function make_rect(part::Int)
         rect = GraphicsRect(0, 0, 0, 0; color = color_transparent)
         for (k, field) in enumerate((:x, :y, :w, :h))
@@ -6638,8 +6919,8 @@ function print_document(p::WidgetScrollBarToGraphicsCanvas, _, w::WidgetScrollBa
             set_cell_computation!(getfield(rect, corner),
                                   () -> Int32(min(parts[][part][3], parts[][part][4]) ÷ 2))
         end
-        rest, hovered = colors[part]
-        set_cell_computation!(getfield(rect, :color), () -> lit[] ? hovered : rest)
+        color = colors[part]
+        set_cell_computation!(getfield(rect, :color), () -> color[])
         rect
     end
     elems = Any[]
@@ -7432,7 +7713,19 @@ end
 # Every other click routes into the card: the title and the content each read
 # their own. A Document title is the card's first child entry, and its
 # height is the height of the chevron's column.
+#
+# A card is a solid surface: a plain left click on it that nothing inside it
+# uses ends there, so it does not reach a document that a stack draws under the
+# card, such as the text under the bar of a find bar view. Any other click goes
+# on, to the menus of the parts around the card and to a whole selection.
 function read_intent(p::WidgetCardToGraphicsCanvas, iomap::ChildrenIoMap, evt::MouseClick)
+    answer = _read_card_click(p, iomap, evt)
+    answer === nothing || return answer
+    (!_outside_widget(iomap, evt) && evt.button === :left && evt.modifiers == ModifierKeys()) ?
+        DoNothingOperation() : nothing
+end
+
+function _read_card_click(p::WidgetCardToGraphicsCanvas, iomap::ChildrenIoMap, evt::MouseClick)
     _outside_widget(iomap, evt) && return nothing
     w = iomap.input
     entries = getfield(iomap, :child_iomaps)[]
@@ -7453,7 +7746,9 @@ end
 # widget nested in a card (a button, a row of a list) still sees the pointer
 # motion and the raw press-down/release that drive its light and its `pressed`
 # feedback. A dwell goes to the slot under the point, as a click does, and folds
-# nothing. The scroll wheel is still the card's own concern to decline (nothing).
+# nothing. A turn of the wheel goes to the slot under the point too, so a chart in
+# a card zooms; a turn that the slot does not use is left to the pane around the
+# card, which scrolls.
 #
 # A coordless keyboard event has no coordinate to hit-test, so it routes into the
 # card's CONTENT selection-directed: forwarded only when the card's `selection`
@@ -7478,7 +7773,8 @@ function read_intent(::WidgetCardToGraphicsCanvas, iomap::ChildrenIoMap, evt)
                                                                    time = evt.time) :
                                                          MouseUp(evt.button, x, y, evt.modifiers;
                                                                  time = evt.time))
-    evt isa MouseScroll && return nothing
+    evt isa MouseScroll &&
+        return _card_route(w, entries, evt, (x, y) -> shift_event_position(evt, x - evt.x, y - evt.y))
     getfield(w, :selection)[] === nothing && return nothing
     for entry in entries
         entry === nothing && continue
@@ -7546,10 +7842,11 @@ WidgetSwitchToGraphicsCanvas(theme; measure,
                                  focus_ring_stroke, label_text, label_disabled_text, label_gap)
 
 function print_document(p::WidgetSwitchToGraphicsCanvas, recursion, w::WidgetSwitch, ctx)
-    w.visible == false && return SimpleIoMap(p, w, _empty_canvas())
+    w.visible == false && return WidgetValueIoMap(p, w, _empty_canvas(), nothing)
     position = w.position::Point2D
-    SimpleIoMap(p, w, _reactive_canvas(_origin(position)..., () -> begin
-        on  = w.checked === true
+    slot = _print_value_slot(recursion, w, :checked, ctx)
+    WidgetValueIoMap(p, w, _reactive_canvas(_origin(position)..., () -> begin
+        on  = _get_slot_value(w, :checked, _get_slot_child(slot)) === true
         enabled = !(w.enabled === false)
         state = !enabled ? :disabled : on ? :checked : nothing
         track_width  = Int(p.track_size.x[])
@@ -7579,31 +7876,31 @@ function print_document(p::WidgetSwitchToGraphicsCanvas, recursion, w::WidgetSwi
         outer_width, outer_height = content.width + inset_width, content.height + inset_height
         _push_focus_ring!(elements, w, outer_width, outer_height, p.focus_ring_stroke, track_height ÷ 2)
         (width=outer_width, height=outer_height, elements=elements)
-    end))
+    end), slot)
 end
 
-# A click, or Return or Space on the focused switch, toggles `checked`.
-_switch_toggle(w::WidgetSwitch) =
-    ReplaceReferencedValueOperation(w,
-        ConcreteReference(FieldReferenceStep("checked"), EmptyReference()),
-        !(w.checked === true))
+# A click, or Return or Space on the focused switch, toggles `checked`: it stores
+# the opposite of the value (`make_slot_store_operation`).
+_switch_toggle(iomap::WidgetValueIoMap) =
+    make_slot_store_operation(iomap, :checked,
+        !(_get_slot_value(iomap.input, :checked, iomap.value_iomap) === true))
 
-function read_intent(::WidgetSwitchToGraphicsCanvas, iomap::SimpleIoMap, evt::MouseClick)
+function read_intent(::WidgetSwitchToGraphicsCanvas, iomap::WidgetValueIoMap, evt::MouseClick)
     _outside_widget(iomap, evt) && return nothing
     w = iomap.input
     w.enabled === false && return nothing   # a disabled switch swallows the click
     op = read_bound_gesture(w, evt); op === nothing || return op   # per-instance gestures win
     evt.button === :left || return nothing
-    _switch_toggle(w)
+    _switch_toggle(iomap)
 end
 
-function read_intent(::WidgetSwitchToGraphicsCanvas, iomap::SimpleIoMap, evt)
+function read_intent(::WidgetSwitchToGraphicsCanvas, iomap::WidgetValueIoMap, evt)
     _outside_widget(iomap, evt) && return nothing
     w = iomap.input
     w.enabled === false && return nothing
     op = read_bound_gesture(w, evt); op === nothing || return op   # per-instance gestures win
-    _is_plain_key(evt, :return, :space) || return nothing
-    _switch_toggle(w)
+    _is_plain_typed(evt, '\n', ' ') || return nothing
+    _switch_toggle(iomap)
 end
 
 map_reference_forward(::WidgetSwitchToGraphicsCanvas, iomap, reference) = _map_child_forward(iomap, reference)
@@ -7819,10 +8116,11 @@ function print_document(p::WidgetSliderToGraphicsCanvas, recursion, w::WidgetSli
     track_authored = _sc(Int(w.width))
     track_outer_width = _resolve_width(ctx, track_authored > 0 ? track_authored + inset_width_only : 0, inset_width_only)
     track_width = track_outer_width - inset_width_only
+    slot = _print_value_slot(recursion, w, :value, ctx)
     WidgetSliderToGraphicsCanvasIoMap(p, w, _reactive_canvas(_origin(position)..., () -> begin
         enabled = !(w.enabled === false)
         state = enabled ? nothing : :disabled
-        value = clamp(Float64(w.value), 0.0, 1.0)
+        value = clamp(Float64(_get_slot_value(w, :value, _get_slot_child(slot))), 0.0, 1.0)
         box = _get_box_insets(p, w)
         colors = _get_box_colors(p, w; state)
         inset_width, inset_height = _inset_total(p, w)
@@ -7845,7 +8143,7 @@ function print_document(p::WidgetSliderToGraphicsCanvas, recursion, w::WidgetSli
         outer_width, outer_height = slider_width + inset_width, slider_height + inset_height
         _push_focus_ring!(elements, w, outer_width, outer_height, p.focus_ring_stroke, slider_height ÷ 2)
         (width=outer_width, height=outer_height, elements=elements)
-    end), track_width)
+    end), track_width, slot)
 end
 
 # The track width the printer drew with, so a press is turned into a value by the
@@ -7857,6 +8155,16 @@ end
     input::Any
     output::Any
     track_width::Any
+    value_iomap::Any   # the IO map of a document in `value`, or nothing
+end
+
+# What a drag to `value` writes, and the value that the knob then has. A document
+# in the value slot stores it (`make_slot_store_operation`), and the `target` of
+# the slider is not used; a plain value writes what `resolve_slider_write` names.
+function _make_slider_write(w::WidgetSlider, child, value::Float64)
+    child === nothing || return (make_slot_store_operation(w, :value, child, value), value)
+    document, field, written = resolve_slider_write(w, value)
+    (ReplaceReferencedValueOperation(document, field, written), written)
 end
 
 map_reference_forward(::WidgetSliderToGraphicsCanvas, iomap, reference) = _map_child_forward(iomap, reference)
@@ -7890,12 +8198,14 @@ function read_intent(p::WidgetSliderToGraphicsCanvas,
     w.enabled === false && return nothing
     width  = Int(iomap.track_width)
     content_x, _ = _content_offset(p, w)
-    resolve_write_at(x) = resolve_slider_write(w, _slider_value(width, x - content_x))
+    child = iomap.value_iomap
+    current_value() = Float64(_get_slot_value(w, :value, child))
+    write_at(x) = _make_slider_write(w, child, _slider_value(width, x - content_x))
     @gesture_case evt begin
         MouseDown(button, x, y) => begin
             button === :left || return nothing
             _outside_widget(iomap, evt) && return nothing
-            document, field, value = resolve_write_at(x)
+            write, _ = write_at(x)
             # Taking the knob is a second write, and it is on the slider itself
             # rather than on the target: what is held is a property of the
             # control, not of the value it stands for. The drag starts at the
@@ -7904,37 +8214,37 @@ function read_intent(p::WidgetSliderToGraphicsCanvas,
             # The pointer keeps the arrow of the press while the drag is on, also
             # over a part that has a shape of its own.
             CompoundOperation(Any[_write_view_state(w, "dragging", true),
-                                  _write_view_state(w, "press_value", Float64(w.value)),
-                                  ReplaceReferencedValueOperation(document, field, value),
+                                  _write_view_state(w, "press_value", current_value()),
+                                  something(write, DoNothingOperation()),
                                   StartDragOperation(EmptyReference(), nothing),
                                   make_screen_pointer_shape_operation(:arrow)])
         end
         MouseClick(button, x, y) => begin
             button === :left || return nothing
             _outside_widget(iomap, evt) && return nothing
-            document, field, value = resolve_write_at(x)
+            write, value = write_at(x)
             # A value the knob already has is not written again, so a real
             # click leaves one step in the history; the press is still taken.
-            Float64(w.value) == value && return _write_view_state(w, "dragging", false)
-            ReplaceReferencedValueOperation(document, field, value)
+            current_value() == value && return _write_view_state(w, "dragging", false)
+            write
         end
         DragMove(x, y) => begin
             # A drag that wanders off the control still moves it, which is the
             # whole difference between a slider and a row of buttons: the drag
             # comes by the path of the slider, wherever the pointer is.
             w.dragging === true || return nothing
-            document, field, value = resolve_write_at(x)
-            Float64(w.value) == value && return nothing
-            ReplaceReferencedValueOperation(document, field, value)
+            write, value = write_at(x)
+            current_value() == value && return nothing
+            write
         end
         DragEnd => _end_slider_drag(w)
         DragCancel => begin
             ending = _end_slider_drag(w)
             ending === nothing && return nothing
             start = w.press_value
-            (start isa Real && Float64(w.value) != Float64(start)) || return ending
-            document, field, value = resolve_slider_write(w, Float64(start))
-            CompoundOperation(Any[ending, ReplaceReferencedValueOperation(document, field, value)])
+            (start isa Real && current_value() != Float64(start)) || return ending
+            write, _ = _make_slider_write(w, child, Float64(start))
+            write === nothing ? ending : CompoundOperation(Any[ending, write])
         end
         _ => nothing
     end
@@ -8009,14 +8319,25 @@ WidgetRadioGroupToGraphicsCanvas(theme; measure,
     input::Any
     output::Any
     row_bounds::Any
+    value_iomap::Any   # the IO map of a document in `selected`, or nothing
+end
+
+# The index of the selected option. A document in `selected` gives an option, and
+# the index is its place in `options`, or `0` when it is no option.
+function _get_radio_selected(w::WidgetRadioGroup, child)
+    child === nothing && return Int(w.selected)
+    value = child.output
+    index = findfirst(option -> option == value, collect(w.options))
+    index === nothing ? 0 : index
 end
 
 function print_document(p::WidgetRadioGroupToGraphicsCanvas, recursion, w::WidgetRadioGroup, ctx)
     w.visible == false && return SimpleIoMap(p, w, _empty_canvas())
     position = w.position::Point2D
+    slot = _print_value_slot(recursion, w, :selected, ctx)
     build = Cell(@computation begin
         enabled = !(w.enabled === false)
-        selected = Int(w.selected)
+        selected = _get_radio_selected(w, _get_slot_child(slot))
         diameter = p.button_size
         label_gap = p.label_gap
         row_gap = p.row_gap
@@ -8067,7 +8388,7 @@ function print_document(p::WidgetRadioGroupToGraphicsCanvas, recursion, w::Widge
         (width=outer_width, height=outer_height, elements=elements, row_bounds=row_bounds)
     end)
     WidgetRadioGroupToGraphicsCanvasIoMap(p, w, _reactive_canvas_cell(_origin(position)..., build),
-                                          Cell(@computation build[].row_bounds))
+                                          Cell(@computation build[].row_bounds), slot)
 end
 
 map_reference_forward(::WidgetRadioGroupToGraphicsCanvas, iomap, reference) = _map_child_forward(iomap, reference)
@@ -8086,7 +8407,9 @@ end
 # A left press on the row of an option selects it: its circle and its label are
 # one target. While the group has the focus, the arrow keys select the next or the
 # previous option, and Return and Space select the first one when no option is on.
-# The option that is already on is not a change, so it answers nothing.
+# The option that is already on is not a change, so it answers nothing. A plain
+# `selected` stores the index; a document in it stores the option itself
+# (`make_slot_store_operation`).
 function read_intent(::WidgetRadioGroupToGraphicsCanvas,
                      iomap::WidgetRadioGroupToGraphicsCanvasIoMap, evt)
     _outside_widget(iomap, evt) && return nothing
@@ -8094,7 +8417,8 @@ function read_intent(::WidgetRadioGroupToGraphicsCanvas,
     w.enabled === false && return nothing
     count = length(w.options)
     count == 0 && return nothing
-    selected = Int(w.selected)
+    child = iomap.value_iomap
+    selected = _get_radio_selected(w, child)
     option = if evt isa MouseClick
         evt.button === :left || return nothing
         _find_row_index(iomap.row_bounds, evt.y)
@@ -8102,13 +8426,14 @@ function read_intent(::WidgetRadioGroupToGraphicsCanvas,
         _step_radio_option(selected, count, 1)
     elseif _is_plain_key(evt, :up, :left)
         _step_radio_option(selected, count, -1)
-    elseif _is_plain_key(evt, :return, :space)
+    elseif _is_plain_typed(evt, '\n', ' ')
         1 <= selected <= count ? nothing : 1
     else
         nothing
     end
     (option === nothing || option == selected) && return nothing
-    ReplaceReferencedValueOperation(w, "selected", option)
+    make_slot_store_operation(w, :selected, child,
+                              child === nothing ? option : collect(w.options)[option])
 end
 
 # ── WidgetAvatar ────────────────────────────────────────────────────────────
@@ -8510,6 +8835,7 @@ const LUCIDE_ICON_GLYPHS = (
     :circle         => 0xe076,  # circle
     # The tools of a window
     :chat           => 0xe117,  # message-square
+    :chats          => 0xe40d,  # messages-square
     :terminal       => 0xe20a,  # square-terminal
     :list           => 0xe5f4,  # logs
     :keyboard       => 0xe284,  # keyboard
@@ -8517,6 +8843,7 @@ const LUCIDE_ICON_GLYPHS = (
     :chart          => 0xe2a3,  # chart-column
     :chart_line     => 0xe2a5,  # chart-line
     :crosshair      => 0xe0ac,  # crosshair
+    :camera         => 0xe064,  # camera
     # Kinds of file
     :lambda         => 0xe780,  # lambda
     :braces         => 0xe36a,  # braces
@@ -8527,10 +8854,31 @@ const LUCIDE_ICON_GLYPHS = (
     :palette        => 0xe1dd,  # palette
     :settings       => 0xe154,  # settings: a gear
     :sigma          => 0xe201,  # sigma
+    :external_link  => 0xe0b9,  # external-link: open a page in a tab of its own
     # Who speaks
     :user           => 0xe19f,  # user
     :bot            => 0xe1bb,  # bot
     :dot            => 0xe44f,  # dot
+    # The marks of a decoration at the corners of an icon
+    :lock           => 0xe10b,  # lock: read only
+    :funnel         => 0xe0dc,  # filter: a filter or a sort hides or orders the items
+    :hourglass      => 0xe296,  # hourglass: not started
+    :file_stack     => 0xe4a1,  # file-stack: the open files of an editor
+    # The kinds that an explorer shows
+    :layers         => 0xe52a,  # layers-2: a section of entries
+    :folder_tree    => 0xe33c,  # folder-tree: an explorer
+    :files          => 0xe0cf,  # files: the folders of a workspace
+    :scroll_text    => 0xe45f,  # scroll-text: a log of messages
+    :plug           => 0xe37f,  # plug: the calls of a client
+    :table          => 0xe17d,  # table: a roster
+    :cpu            => 0xe0a9,  # cpu: the processes of the system
+    :circle_help    => 0xe082,  # circle-help: a page of help
+    :layout_dashboard => 0xe1c1,  # layout-dashboard: a page of cards
+    :panel_top      => 0xe435,  # panel-top: one card of a page
+    :package        => 0xe129,  # package: a project that builds and runs
+    :circle_play    => 0xe080,  # circle-play: one run of a configuration
+    :database       => 0xe0ad,  # database: a store of values on disk
+    :circle_dashed  => 0xe4b0,  # circle-dashed: a configuration that only others extend
 )
 
 for (name, codepoint) in LUCIDE_ICON_GLYPHS
@@ -8601,11 +8949,12 @@ WidgetToggleToGraphicsCanvas(theme; measure,
                                  focus_ring_stroke, corner_radius)
 
 function print_document(p::WidgetToggleToGraphicsCanvas, recursion, w::WidgetToggle, ctx)
-    w.visible == false && return SimpleIoMap(p, w, _empty_canvas())
+    w.visible == false && return WidgetValueIoMap(p, w, _empty_canvas(), nothing)
     position = w.position::Point2D
-    SimpleIoMap(p, w, _reactive_canvas(_origin(position)..., () -> begin
+    slot = _print_value_slot(recursion, w, :pressed, ctx)
+    WidgetValueIoMap(p, w, _reactive_canvas(_origin(position)..., () -> begin
         text = string(w.content)
-        on  = w.pressed === true
+        on  = _get_slot_value(w, :pressed, _get_slot_child(slot)) === true
         enabled = !(w.enabled === false)
         state = !enabled ? :disabled : on ? :checked : nothing
         label = _get_state_text(p, w, :label; state)
@@ -8624,7 +8973,7 @@ function print_document(p::WidgetToggleToGraphicsCanvas, recursion, w::WidgetTog
                     content_y + (content_height - text_height) ÷ 2, label.color)
         _push_focus_ring!(elements, w, outer_width, outer_height, p.focus_ring_stroke, radius)
         (width=outer_width, height=outer_height, elements=elements)
-    end))
+    end), slot)
 end
 
 map_reference_forward(::WidgetToggleToGraphicsCanvas, iomap, reference) = _map_child_forward(iomap, reference)
@@ -8632,13 +8981,15 @@ map_reference_backward(::WidgetToggleToGraphicsCanvas, iomap, reference) = nothi
 
 # A left press flips `pressed`, and so do Return and Space while the toggle has
 # the focus: a container gives a key only to the child that its selection names.
-function read_intent(::WidgetToggleToGraphicsCanvas, iomap::SimpleIoMap, evt)
+# The flip stores the opposite of the value (`make_slot_store_operation`).
+function read_intent(::WidgetToggleToGraphicsCanvas, iomap::WidgetValueIoMap, evt)
     _outside_widget(iomap, evt) && return nothing
     w = iomap.input
     (w.visible === false || w.enabled === false) && return nothing
-    activated = evt isa MouseClick ? evt.button === :left : _is_plain_key(evt, :return, :space)
+    activated = evt isa MouseClick ? evt.button === :left : _is_plain_typed(evt, '\n', ' ')
     activated || return nothing
-    ReplaceReferencedValueOperation(w, "pressed", !(w.pressed === true))
+    make_slot_store_operation(iomap, :pressed,
+        !(_get_slot_value(w, :pressed, iomap.value_iomap) === true))
 end
 
 # ── WidgetToggleGroup ───────────────────────────────────────────────────────
@@ -8842,7 +9193,7 @@ function _read_toggle_group_step(w::WidgetToggleGroup, evt)
     count = length(w.options)
     count < 2 && return nothing
     step = evt isa MouseClick && evt.button === :left ? (evt.modifiers.shift ? -1 : 1) :
-           _is_plain_key(evt, :return, :space) ? 1 : 0
+           _is_plain_typed(evt, '\n', ' ') ? 1 : 0
     step == 0 && return nothing
     document, field, value = resolve_toggle_group_write(w, mod1(Int(w.selected) + step, count))
     ReplaceReferencedValueOperation(document, field, value)
@@ -8906,13 +9257,15 @@ WidgetSelectToGraphicsCanvas(theme; measure,
     output::Any
     control_width::Any
     control_height::Any
+    value_iomap::Any   # the IO map of a document in `value`, or nothing
 end
 
 function print_document(p::WidgetSelectToGraphicsCanvas, recursion, w::WidgetSelect, ctx)
     w.visible == false && return SimpleIoMap(p, w, _empty_canvas())
     position = w.position::Point2D
+    slot = _print_value_slot(recursion, w, :value, ctx)
     build = Cell(@computation begin
-        text = string(w.value)
+        text = string(_get_slot_value(w, :value, _get_slot_child(slot)))
         enabled = !(w.enabled === false)
         state = enabled ? nothing : :disabled
         box = _get_box_insets(p, w)
@@ -8940,7 +9293,8 @@ function print_document(p::WidgetSelectToGraphicsCanvas, recursion, w::WidgetSel
     end)
     canvas = _reactive_canvas_cell(_origin(position)..., build)
     WidgetSelectToGraphicsCanvasIoMap(p, w, canvas,
-                                      Cell(@computation build[].width), Cell(@computation build[].height))
+                                      Cell(@computation build[].width), Cell(@computation build[].height),
+                                      slot)
 end
 
 map_reference_forward(::WidgetSelectToGraphicsCanvas, iomap::WidgetSelectToGraphicsCanvasIoMap, reference) = _map_child_forward(iomap, reference)
@@ -8965,14 +9319,23 @@ function read_intent(p::WidgetSelectToGraphicsCanvas, iomap::WidgetSelectToGraph
 end
 
 # Build the dropdown: a vertical `WidgetMenu` of `WidgetOption`s (one per
-# selectable value, each pointing back at this select for the value write), so it
-# draws the popover of a menu, wrapped in an `OpenPopupOperation` under the box.
-# No options ⇒ nothing to open.
+# selectable value), so it draws the popover of a menu, wrapped in an
+# `OpenPopupOperation` under the box. No options ⇒ nothing to open.
+#
+# Each option holds the operation that its pick sends, made now, in the window of
+# the select (`make_slot_store_operation`): a write of the value on the select, or
+# what a document in the value slot gives for it. The pick runs in the window of
+# the popup, which has no way back to the select, so the operation must be final
+# when the popup opens. A value that the document does not take does nothing.
 function _open_select_popup(p::WidgetSelectToGraphicsCanvas, w::WidgetSelect,
                             iomap::WidgetSelectToGraphicsCanvasIoMap)
     opts = collect(w.options)
     isempty(opts) && return nothing
-    items = Any[WidgetOption(w, opt; width=iomap.control_width) for opt in opts]
+    child = iomap.value_iomap
+    items = Any[WidgetOption(w, opt; width=iomap.control_width,
+                             operation=something(make_slot_store_operation(w, :value, child, opt),
+                                                 DoNothingOperation()))
+                for opt in opts]
     ReplaceViewStateOperation(
         OpenPopupOperation(; id=:widget_popup, x=0, y=iomap.control_height + p.popup_gap,
                            auto_dismiss=true, content=WidgetMenu(items)))
@@ -9030,14 +9393,17 @@ end
 map_reference_forward(::WidgetOptionToGraphicsCanvas, iomap, reference) = _map_child_forward(iomap, reference)
 map_reference_backward(::WidgetOptionToGraphicsCanvas, iomap, reference) = nothing
 
-# Pick: write `value` onto the target select (identity-rooted, so it round-trips
-# unchanged to the real select in the default window) and close the popup. The
-# WindowManager's CompoundOperation unpacking applies the close; the value write
-# bubbles to `evaluate_operation`.
-_pick_option(w::WidgetOption) = CompoundOperation(Any[
-    ReplaceReferencedValueOperation(w.select, "value", w.value),
-    CloseWindowOperation(w.popup_id),
-])
+# Pick: send the operation of the option, or else write `value` onto the target
+# select (identity-rooted, so it round-trips unchanged to the real select in the
+# default window), and close the popup. The WindowManager's CompoundOperation
+# unpacking applies the close; the value write bubbles to `evaluate_operation`.
+function _pick_option(w::WidgetOption)
+    operation = w.operation
+    CompoundOperation(Any[
+        operation === nothing ? ReplaceReferencedValueOperation(w.select, "value", w.value) : operation,
+        CloseWindowOperation(w.popup_id),
+    ])
+end
 
 function read_intent(::WidgetOptionToGraphicsCanvas, iomap::SimpleIoMap, evt)
     _outside_widget(iomap, evt) && return nothing
@@ -9111,15 +9477,17 @@ WidgetSpinBoxToGraphicsCanvas(theme; measure,
     control_width::Any
     control_height::Any
     stepper_w::Any
+    value_iomap::Any   # the IO map of a document in `value`, or nothing
 end
 
 function print_document(p::WidgetSpinBoxToGraphicsCanvas, recursion, w::WidgetSpinBox, ctx)
     w.visible == false && return SimpleIoMap(p, w, _empty_canvas())
     position = w.position::Point2D
+    slot = _print_value_slot(recursion, w, :value, ctx)
     build = Cell(@computation begin
         enabled = !(w.enabled === false)
         state = enabled ? nothing : :disabled
-        text = string(w.value)
+        text = string(_get_slot_value(w, :value, _get_slot_child(slot)))
         box = _get_box_insets(p, w)
         colors = _get_box_colors(p, w; state)
         inset_width, inset_height = _inset_total(p, w)
@@ -9156,7 +9524,8 @@ function print_document(p::WidgetSpinBoxToGraphicsCanvas, recursion, w::WidgetSp
     end)
     canvas = _reactive_canvas_cell(_origin(position)..., build)
     WidgetSpinBoxToGraphicsCanvasIoMap(p, w, canvas,
-        Cell(@computation build[].width), Cell(@computation build[].height), Cell(@computation build[].stepper_w))
+        Cell(@computation build[].width), Cell(@computation build[].height), Cell(@computation build[].stepper_w),
+        slot)
 end
 
 map_reference_forward(::WidgetSpinBoxToGraphicsCanvas, iomap::WidgetSpinBoxToGraphicsCanvasIoMap, reference) = _map_child_forward(iomap, reference)
@@ -9174,7 +9543,11 @@ function read_intent(p::WidgetSpinBoxToGraphicsCanvas, iomap::WidgetSpinBoxToGra
     content_width = Int(iomap.control_width) - inset_width
     stepper_w = Int(iomap.stepper_w)
     sy = content_y - box.padding[2]
-    _step(delta) = ReplaceReferencedValueOperation(w, "value", _spin_clamp(w.value + delta, w.min, w.max))
+    # A step stores the value after it, inside `min` and `max`
+    # (`make_slot_store_operation`).
+    child = iomap.value_iomap
+    _step(delta) = make_slot_store_operation(w, :value, child,
+        _spin_clamp(_get_slot_value(w, :value, child) + delta, w.min, w.max))
     @gesture_case evt begin
         MouseClick(button, x, y) =>
             (button === :left && x - content_x >= content_width - stepper_w) ?
@@ -9237,9 +9610,10 @@ function _print_rows_pane(p, recursion, w, ctx)
     right = box.margin[3] + box.border[3]
     bottom = box.margin[4] + box.border[4]
     # Positional: content, position, size, scroll_position, follow_end,
-    # vertical_scroll_bar, horizontal_scroll_bar, visible, margin, border,
-    # padding, style, tooltip, selection, mouse_target.
+    # wheel_run, vertical_scroll_bar, horizontal_scroll_bar, visible, margin,
+    # border, padding, style, tooltip, selection, mouse_target.
     pane = WidgetScrollPane(Cell(w), Cell(nothing), Cell(nothing), getfield(w, :scroll_position), Cell(false),
+                            Cell(nothing),
                             getfield(w, :vertical_scroll_bar), getfield(w, :horizontal_scroll_bar), Cell(true),
                             Cell(nothing), Cell(nothing), Cell(_get_inset(w, p, :padding)),
                             Cell(WidgetStyle(; content_color = color_transparent)), Cell(nothing),
@@ -9604,21 +9978,19 @@ function map_reference_backward(::WidgetTextareaToGraphicsCanvas, iomap::WidgetT
     point = find_reference_point(reference)
     point === nothing || return _map_text_point(point)
     w = iomap.input
-    w.content isa Document || return _map_plain_text_reference(w, reference)
+    w.content isa Document || return _map_plain_text_reference(_get_plain_text_view(iomap), reference)
     ConcreteReference(FieldReferenceStep("content"), reference)
 end
 
 # Invisible text area (the printer returned a bare empty canvas): inert.
 read_intent(::WidgetTextareaToGraphicsCanvas, iomap::SimpleIoMap, evt) = nothing
 
-# The Text domain edits the content, as it edits the content of a `WidgetText`.
-# Return has no meaning there, so here it types a line break.
+# The Text domain edits the content, as it edits the content of a `WidgetText`;
+# a plain Return breaks the line there.
 function read_intent(p::WidgetTextareaToGraphicsCanvas, iomap::WidgetTextareaToGraphicsCanvasIoMap, evt)
     _outside_widget(iomap, evt) && return nothing
     iomap.input.enabled === false && return nothing
-    typed = _is_plain_key(evt, :return) ?
-            KeyPress('\n', "\n", ModifierKeys(); time = evt.time) : evt
-    _read_text_content_intent(p, iomap, typed, _content_offset(p, iomap.input)...)
+    _read_text_content_intent(p, iomap, evt, _content_offset(p, iomap.input)...)
 end
 
 # ── WidgetAccordion ─────────────────────────────────────────────────────────
@@ -9704,7 +10076,7 @@ function print_document(p::WidgetAccordionToGraphicsCanvas, recursion, w::Widget
     item_ctx = _get_accordion_item_context(p, w, ctx)
     title_iomaps = make_reconciled_child_iomaps_cell(
         () -> Any[item.title for item in w.items],
-        (i, title) -> title isa Document ? print_child(recursion, title, item_ctx) : nothing)
+        (_, title) -> title isa Document ? print_child(recursion, title, item_ctx) : nothing)
     body_iomap = make_reconciled_child_iomap_cell(() -> _get_open_accordion_body(w),
         body -> body isa Document ? print_child(recursion, body, item_ctx) : nothing)
     build = Cell(@computation begin
@@ -9969,8 +10341,7 @@ _translate_pointer_event(evt::MouseUp, dx, dy) = MouseUp(evt.button, evt.x - dx,
                                                          time = evt.time)
 _translate_pointer_event(evt::MouseMove, dx, dy) = MouseMove(evt.x - dx, evt.y - dy, evt.buttons, evt.modifiers;
                                                              time = evt.time)
-_translate_pointer_event(evt::MouseScroll, dx, dy) = MouseScroll(evt.dx, evt.dy, evt.x - dx, evt.y - dy;
-                                                                 time = evt.time)
+_translate_pointer_event(evt::MouseScroll, dx, dy) = shift_event_position(evt, -dx, -dy)
 _translate_pointer_event(evt::MouseDwell, dx, dy) = shift_event_position(evt, -dx, -dy)
 
 # ── WidgetTable ─────────────────────────────────────────────────────────────
@@ -10141,9 +10512,11 @@ end
 _is_column_major(w::WidgetTable) = w.cell_order === :column_major
 
 # Whether the body of `w` is a list in either direction, which the parts of a
-# table draw one row at a time.
+# table draw one row at a time. `nothing` is a list with no rows, as in a grid,
+# so a table whose list is empty at its print draws the rows that come later.
 _is_listed_body(w::WidgetTable) =
-    w.cells isa ListNode || (_is_column_major(w) && any(column -> column isa ListNode, w.cells))
+    w.cells isa ListNode || w.cells === nothing ||
+    (_is_column_major(w) && any(column -> column isa ListNode, w.cells))
 
 # The cell in row `r` and column `c` of the body of `w`, in the order of the
 # table, or an empty cell where the body has none.
@@ -10478,8 +10851,11 @@ function print_document(p::WidgetTableToGraphicsCanvas, recursion, w::WidgetTabl
     # this is: a list in either direction draws the rows a viewport shows, a
     # vector draws them all.
     # A corner makes a table of a list, whose rows can be an empty vector at
-    # first.
-    (_is_listed_body(w) || w.corner !== nothing) && return _print_table_parts(p, recursion, w, ctx)
+    # first. The form is read in a cell of its own, so the print depends on the
+    # form and not on the list: a new list of rows is a new head of the grid of
+    # the cells, and no new print of the table.
+    listed = Cell(@computation _is_listed_body(w))
+    (listed[] || w.corner !== nothing) && return _print_table_parts(p, recursion, w, ctx)
     position = w.position::Point2D
     # The cell padding is the projection's, from the theme: how a table is
     # drawn is not what a table is.
@@ -10758,7 +11134,7 @@ function read_intent(p::WidgetTableToGraphicsCanvas, recursion, change::Intent, 
         return Intent(g, _read_cells_wheel(iomap.output, iomap.parts.cells_pane,
                                            content_x + region_x, content_y + region_y, g))
     end
-    if g isa KeyDown
+    if g isa KeyDown || g isa KeyPress
         op = _read_open_cell_key(iomap.input, g)
         op === nothing || return Intent(g, op)
         op = _wt_key_navigate(iomap, g, iomap.geometry)
@@ -10873,6 +11249,21 @@ function _wt_route_cell_click(iomap::WidgetTableToGraphicsCanvasIoMap, r::Int, c
     reroot_operation(op, _wt_get_cell_steps(iomap.input, r, c))
 end
 
+# Return on a selected row or column selects its first cell, and on a cell enters
+# its content; any other typed character is no navigation.
+function _wt_key_navigate(iomap::WidgetTableToGraphicsCanvasIoMap, evt::KeyPress, geom::WTGeometry)
+    evt.char == '\n' || return nothing
+    (geom.nrows == 0 || geom.ncols == 0) && return nothing
+    sel = iomap.input.selection
+    shape = _wt_selection_shape(iomap.input, sel, geom)
+    cell_rc = _wt_cell_terminal(iomap.input, sel)
+    shape !== nothing && shape[1] === :row &&
+        return ReplaceSelectionOperation(_wt_cell_ref(iomap.input, shape[2], 1))
+    shape !== nothing && shape[1] === :col &&
+        return ReplaceSelectionOperation(_wt_cell_ref(iomap.input, 1, shape[2]))
+    cell_rc === nothing ? nothing : _wt_enter_cell_content(iomap, cell_rc[1], cell_rc[2])
+end
+
 # Keyboard grid navigation, addressed via cells[r][c].
 function _wt_key_navigate(iomap::WidgetTableToGraphicsCanvasIoMap, evt::KeyDown, geom::WTGeometry)
     nrows, ncols = geom.nrows, geom.ncols
@@ -10885,17 +11276,6 @@ function _wt_key_navigate(iomap::WidgetTableToGraphicsCanvasIoMap, evt::KeyDown,
 
     shape = _wt_selection_shape(iomap.input, sel, geom)
     cell_rc = _wt_cell_terminal(iomap.input, sel)
-
-    if evt.key === :return
-        if shape !== nothing && shape[1] === :row
-            return ReplaceSelectionOperation(_wt_cell_ref(iomap.input, shape[2], 1))
-        elseif shape !== nothing && shape[1] === :col
-            return ReplaceSelectionOperation(_wt_cell_ref(iomap.input, 1, shape[2]))
-        elseif cell_rc !== nothing
-            return _wt_enter_cell_content(iomap, cell_rc[1], cell_rc[2])
-        end
-        return nothing
-    end
 
     shape !== nothing && shape[1] in (:column_header, :row_header) &&
         return _wt_read_header_key(iomap.input, shape, evt, nrows, ncols)
@@ -10995,19 +11375,27 @@ function _find_open_cell(w::WidgetTable, k::Int, c::Int)
     nothing
 end
 
-# Enter, Tab, Shift+Tab and Escape in the open cell that the selection is in,
+# Return, Tab, Shift+Tab and Escape in the open cell that the selection is in,
 # before the cell reads them: the commit or the drop of the cell, which the owner
 # of the table converts; `nothing` for another key or another place.
-function _read_open_cell_key(w::WidgetTable, g::KeyDown)
-    g.key in (:return, :tab, :escape) || return nothing
+function _read_open_cell_key(w::WidgetTable, g)
+    exit = _find_open_cell_exit(g)
+    exit === nothing && return nothing
     isempty(something(w.open_cells, ())) && return nothing
     prefix = _wt_cell_prefix(w, w.selection)
     prefix === nothing && return nothing
     k, c = prefix
     _find_open_cell(w, k, c) === nothing && return nothing
-    g.key === :escape && return DropTableCellOperation(w, k, c)
-    CommitTableCellOperation(w, k, c, g.key === :return ? :return : g.modifiers.shift ? :backtab : :tab)
+    exit === :escape && return DropTableCellOperation(w, k, c)
+    CommitTableCellOperation(w, k, c, exit)
 end
+
+# How a key leaves an open cell: `:return`, `:tab`, `:backtab` or `:escape`, or
+# `nothing` for a key that does not leave it.
+_find_open_cell_exit(g::KeyPress) =
+    g.char == '\n' ? :return : g.char == '\t' ? (g.modifiers.shift ? :backtab : :tab) : nothing
+_find_open_cell_exit(g::KeyDown) = g.key === :escape ? :escape : nothing
+_find_open_cell_exit(g) = nothing
 
 # F2 or a typed character on the whole cell that the selection names, which the
 # cell took no key for, and which is not open: the opening of the cell, which the
@@ -11044,7 +11432,8 @@ end
 function _read_cell_mark_dwell(w::WidgetTable, k::Int, c::Int, g::MouseDwell)
     cell = _find_open_cell(w, k, c)
     (cell === nothing || cell.reason === nothing) && return nothing
-    reroot_operation(make_tooltip_operation(w, PrimitiveString(cell.reason), g), _wt_get_cell_steps(w, k, c))
+    reroot_operation(make_tooltip_operation(w, TooltipNote(; text = cell.reason, tone = :error), g),
+                     _wt_get_cell_steps(w, k, c))
 end
 
 _wt_row_ref(r::Int) = ConcreteReference(FieldReferenceStep("rows"),
@@ -11084,7 +11473,7 @@ function read_intent(p::WidgetTableToGraphicsCanvas, iomap::WidgetTableToGraphic
     _is_table_bar_event(iomap.parts.cells_pane, place, event) &&
         return _read_table_bar_event(iomap.parts.cells_pane, place, event)
     _outside_widget(iomap, event) && return nothing
-    if event isa MouseClick || event isa KeyDown || event isa MouseScroll ||
+    if event isa MouseClick || event isa KeyDown || event isa KeyPress || event isa MouseScroll ||
        event isa MouseMove
         return read_intent(p, nothing, Intent(event, nothing), iomap).operation
     end
@@ -11205,6 +11594,11 @@ end
     row_radius::Int               # corner radius of the hover and the selection band
     label_gap::Int                # between an icon column widened for a glyph and its label
     icon_size::Float64           # times the box of a named icon, one line of the label
+    current_color::StyleColor     # the mark at the left edge of the row of the current page
+    current_width::Int            # the width of that mark
+    badge::Any                    # the badge printer: the pills of a row and the colors of the roles
+    detail_text::StyleText        # the dim text after the label
+    mark_background::StyleColor   # the disc behind a corner mark of an icon
 end
 
 WidgetTreeToGraphicsCanvas(theme; graphics_theme = nothing, measure,
@@ -11223,15 +11617,24 @@ WidgetTreeToGraphicsCanvas(theme; graphics_theme = nothing, measure,
                            chevron_size = _themed(Int, theme, t -> t.chevron),
                            row_radius = _themed(Int, theme, t -> t.radius_small),
                            label_gap = _themed(Int, theme, t -> t.label_gap),
-                           icon_size = _themed(Float64, theme, t -> t.icon_size)) =
+                           icon_size = _themed(Float64, theme, t -> t.icon_size),
+                           current_color = _themed(StyleColor, theme, t -> t.primary),
+                           current_width = _themed(Int, theme, t -> t.stroke),
+                           badge = WidgetBadgeToGraphicsCanvas(theme; measure),
+                           detail_text = _themed(StyleText, theme, t -> StyleText(t.font, t.muted_foreground)),
+                           mark_background = _themed(StyleColor, theme, t -> t.background)) =
     WidgetTreeToGraphicsCanvas(measure, margin, border, padding, margin_color, border_color, padding_color,
                                content_color, label_text, icon_text, chevron_color, row_selected_color,
                                layer_hovered_color, indent, chevron_column, icon_column, row_padding, chevron_size,
-                               row_radius, label_gap, icon_size)
+                               row_radius, label_gap, icon_size, current_color, current_width, badge, detail_text,
+                               mark_background)
 
 # A node is a WidgetTreeNode (icon + label + children) or a leaf label (String).
 # A leaf reports an empty icon.
 _tree_icon(node)  = node isa WidgetTreeNode ? node.icon : ""
+_tree_badges(node) = node isa WidgetTreeNode ? node.badges : Any[]
+_tree_detail(node) = node isa WidgetTreeNode ? node.detail : ""
+_tree_tooltip(node) = node isa WidgetTreeNode ? node.tooltip : nothing
 _tree_label(node) = node isa WidgetTreeNode ? string(node.label) : string(node)
 # The children of a `WidgetTreeNode` are not read here: the caller reads them,
 # and the tree reads them only for a drawn row and for an open node.
@@ -11264,6 +11667,296 @@ struct WTreeGeometry
     total_h::Int
 end
 
+# The rows of a tree that scrolls itself, from its head: a lazy list whose links
+# make the row after a row and the row before it when a walk first reaches them,
+# so the tree makes the rows that the renderer and the readers reach and no
+# others. The head is the row of the anchor of the tree. `built` gives
+# the node of the list of each row that a walk made, by its path. Every row is as
+# high as the others.
+struct WTreeListGeometry
+    head::Union{ListNode,Nothing}
+    built::Dict{Vector{Int},ListNode}
+    row_height::Int
+end
+
+# One row of the lazy list of rows: the row, its count from the head, and the
+# place of its node among its siblings, so the walk steps to a sibling by one
+# link: the collection that holds the node, its index there, its node of the list
+# when the collection is a lazy list, and the row of its parent. A row holds no
+# node: the walk reads the node of an open row only, and the node of any other row
+# is read when the row is drawn.
+struct WTreeListRow
+    row::WTreeRow
+    count::Int
+    siblings::Any
+    index::Int
+    link::Any
+    above::Union{WTreeListRow,Nothing}
+end
+
+# The node of the row `row` of a lazy list of rows.
+_get_wtree_row_node(row::WTreeListRow) =
+    row.link === nothing ? row.siblings[row.index] : row.link.value
+
+# The child `i` of the collection `kids`, or `nothing` past its ends. A lazy list
+# counts its children from its head.
+function _find_tree_child(kids, i::Int)
+    kids === nothing && return nothing
+    if kids isa ListNode
+        link = find_list_node(kids, i)
+        return link === nothing ? nothing : link.value
+    end
+    1 <= i <= length(kids) ? kids[i] : nothing
+end
+
+# The place of the first child of `kids` as `(index, link)`, where `link` is its
+# node of the list in a lazy list, or `nothing` for no child. It reads no child.
+function _find_first_tree_child(kids)
+    kids === nothing && return nothing
+    kids isa ListNode && return (1, kids)
+    isempty(kids) ? nothing : (1, nothing)
+end
+
+# The place of the sibling after the child at `index` of `kids`, whose node of the
+# list is `link` in a lazy list, or `nothing` after the last. It reads no child.
+function _find_next_tree_child(kids, index::Int, link)
+    if link !== nothing
+        following = link.next
+        return following === nothing ? nothing : (index + 1, following)
+    end
+    index < length(kids) ? (index + 1, nothing) : nothing
+end
+
+# The lazy list of the rows of `w` from its head, or `nothing` for a tree with no
+# root. The head is the row of the anchor of the tree while that row is in the open
+# tree, else the row of the nearest node above it that is, else the first row.
+# `place(path, depth, count)` places a row, and `built` takes the node of each row
+# that a walk makes.
+function _make_wtree_row_list(w::WidgetTree, expanded, place, built)
+    anchor = w.anchor
+    shown = anchor isa WTreeListRow ? _find_shown_anchor_row(w, expanded, anchor) :
+                                      nothing
+    if shown === nothing
+        first = _find_first_tree_child(w.roots)
+        first === nothing && return nothing
+        (index, link) = first
+        head = WTreeListRow(place([index], 0, 1), 1, w.roots, index, link, nothing)
+    else
+        head = WTreeListRow(place(shown.row.path, shown.row.depth, 1), 1, shown.siblings,
+                            shown.index, shown.link, shown.above)
+    end
+    _make_wtree_list_node(expanded, place, built, head)
+end
+
+# The row of `anchor`, or of the nearest node above it, that is still in the open
+# tree of `w`: a row is in it while its collection is the children of the node of
+# the row above it, that node is open, and its index is inside the collection. So
+# an anchor under a node that closed gives the row of that node. `nothing` when no
+# row of the chain is in the tree.
+function _find_shown_anchor_row(w::WidgetTree, expanded, anchor::WTreeListRow)
+    chain = WTreeListRow[]
+    at = anchor
+    while at !== nothing
+        push!(chain, at)
+        at = at.above
+    end
+    shown = nothing
+    for row in Iterators.reverse(chain)
+        above = row.above
+        siblings = above === nothing ? w.roots :
+                   _tree_children(_get_wtree_row_node(above))
+        row.siblings === siblings || break
+        (above === nothing || above.row.path in expanded) || break
+        (row.link !== nothing || row.index <= length(siblings)) || break
+        shown = row
+    end
+    shown
+end
+
+# The node of the list of `row`, whose links make the row after it and the row
+# before it when a walk first reads them.
+function _make_wtree_list_node(expanded, place, built, row::WTreeListRow)
+    list = ListNode(row)
+    built[row.row.path] = list
+    set_lazy_link!(list, :next, () -> begin
+        following = _find_next_wtree_row(expanded, place, row)
+        following === nothing && return nothing
+        _make_wtree_list_node(expanded, place, built, following)
+    end)
+    set_lazy_link!(list, :prev, () -> begin
+        preceding = _find_previous_wtree_row(expanded, place, row)
+        preceding === nothing && return nothing
+        _make_wtree_list_node(expanded, place, built, preceding)
+    end)
+    list
+end
+
+# The row before `row`: the last row under the sibling before it, else the row of
+# its parent, or `nothing` before the first row. The last row under an open node
+# that holds a lazy list of children is found by a walk to the end of that list.
+function _find_previous_wtree_row(expanded, place, row::WTreeListRow)
+    count = row.count - 1
+    preceding = _find_previous_tree_child(row.siblings, row.index, row.link)
+    if preceding === nothing
+        above = row.above
+        above === nothing && return nothing
+        parent = place(above.row.path, above.row.depth, count)
+        return WTreeListRow(parent, count, above.siblings, above.index, above.link,
+                            above.above)
+    end
+    (index, link) = preceding
+    sibling = place(vcat(row.row.path[1:end-1], index), row.row.depth, count)
+    at = WTreeListRow(sibling, count, row.siblings, index, link, row.above)
+    while at.row.path in expanded
+        kids = _tree_children(_get_wtree_row_node(at))
+        last = _find_last_tree_child(kids)
+        last === nothing && break
+        (index, link) = last
+        child = place(vcat(at.row.path, index), at.row.depth + 1, count)
+        at = WTreeListRow(child, count, kids, index, link, at)
+    end
+    at
+end
+
+# The place of the sibling before the child at `index` of `kids`, whose node of
+# the list is `link` in a lazy list, or `nothing` before the first. The first child
+# of a lazy list is its head, as `_find_first_tree_child` says, so a node before
+# the head is no child. It reads no child.
+function _find_previous_tree_child(kids, index::Int, link)
+    index > 1 || return nothing
+    link === nothing ? (index - 1, nothing) : (index - 1, link.prev)
+end
+
+# The place of the last child of `kids` as `(index, link)`, or `nothing` for no
+# child. A lazy list is walked to its end.
+function _find_last_tree_child(kids)
+    kids === nothing && return nothing
+    kids isa ListNode || return isempty(kids) ? nothing : (length(kids), nothing)
+    (index, link) = (1, kids)
+    while link.next !== nothing
+        (index, link) = (index + 1, link.next)
+    end
+    (index, link)
+end
+
+# The row after `row`: the first child of its node when it is open, else its next
+# sibling, else the next sibling of the nearest node above it, or `nothing` after
+# the last row.
+function _find_next_wtree_row(expanded, place, row::WTreeListRow)
+    count = row.count + 1
+    path = row.row.path
+    if path in expanded
+        kids = _tree_children(_get_wtree_row_node(row))
+        first = _find_first_tree_child(kids)
+        if first !== nothing
+            (index, link) = first
+            child = place(vcat(path, index), row.row.depth + 1, count)
+            return WTreeListRow(child, count, kids, index, link, row)
+        end
+    end
+    at = row
+    while at !== nothing
+        following = _find_next_tree_child(at.siblings, at.index, at.link)
+        if following !== nothing
+            (index, link) = following
+            sibling = place(vcat(at.row.path[1:end-1], index), at.row.depth, count)
+            return WTreeListRow(sibling, count, at.siblings, index, link, at.above)
+        end
+        at = at.above
+    end
+    nothing
+end
+
+# The node of the list of the row of `path`, when a walk made it, or `nothing`.
+_find_wtree_list_node(geometry::WTreeListGeometry, path) =
+    path === nothing ? nothing : get(geometry.built, path, nothing)
+
+# The count of the row of `path` from the head of the rows, or `nothing` when
+# the tree has no row for it.
+_find_wtree_row_index(geometry::WTreeGeometry, path) = get(geometry.index, path, nothing)
+
+function _find_wtree_row_index(geometry::WTreeListGeometry, path)
+    node = _find_wtree_list_node(geometry, path)
+    node === nothing ? nothing : node.value.count
+end
+
+# The node of the tree `w` at `path`. A lazy list of rows gives the node of a row
+# that a walk made, so a reader finds the node of a row far down a lazy list of
+# children without a walk from the head of that list.
+_find_wtree_node(::WTreeGeometry, w::WidgetTree, path) = _wtree_node_at(w, path)
+
+function _find_wtree_node(geometry::WTreeListGeometry, w::WidgetTree, path)
+    link = _find_wtree_list_node(geometry, path)
+    link === nothing ? _wtree_node_at(w, path) : _get_wtree_row_node(link.value)
+end
+
+# The height of all the rows: a lazy list of rows has none.
+_get_wtree_rows_height(geometry::WTreeGeometry) = geometry.total_h
+_get_wtree_rows_height(::WTreeListGeometry) = 0
+
+# Whether an open node of `w` whose nodes above are open holds a lazy list of
+# children, which has no count. It takes the open paths from the shortest, so it
+# meets a node that holds a lazy list before an open path inside that list, and it
+# reads no path inside a lazy list. It reads the count of the children of each
+# other open node, so a change of them makes the rows again.
+function _has_wtree_open_lazy_children(w::WidgetTree, expanded)
+    holders = Vector{Int}[]
+    for path in sort!(collect(expanded); by = length)
+        is_inside(holder) =
+            length(holder) < length(path) && path[1:length(holder)] == holder
+        any(is_inside, holders) && continue
+        all(k -> path[1:k] in expanded, 1:length(path) - 1) || continue
+        kids = _tree_children(_wtree_node_at(w, path))
+        kids isa ListNode ? push!(holders, path) : (kids === nothing || length(kids))
+    end
+    !isempty(holders)
+end
+
+# The count of the children in `kids`; a lazy list is walked to its end.
+function _count_wtree_children(kids)
+    kids === nothing && return 0
+    kids isa ListNode || return length(kids)
+    (count, link) = (1, kids.next)
+    while link !== nothing
+        (count, link) = (count + 1, link.next)
+    end
+    count
+end
+
+# Whether the row of `path` is in the open tree of `w`: its node exists and each
+# node above it is open.
+_is_wtree_row_shown(w::WidgetTree, path::Vector{Int}) =
+    all(k -> path[1:k] in w.expanded, 1:length(path) - 1) &&
+    _wtree_node_at(w, path) !== nothing
+
+# The path of the row after the row of `path` in the open tree of `w`, from its
+# nodes: the first child of an open node, else the next sibling, else the next
+# sibling of the nearest node above, or `nothing` after the last row.
+function _find_wtree_path_after(w::WidgetTree, path::Vector{Int}; expanded = w.expanded)
+    kids = path in expanded ? _tree_children(_wtree_node_at(w, path)) : nothing
+    _find_first_tree_child(kids) === nothing || return vcat(path, 1)
+    at = path
+    while !isempty(at)
+        following = vcat(at[1:end-1], at[end] + 1)
+        _wtree_node_at(w, following) === nothing || return following
+        at = at[1:end-1]
+    end
+    nothing
+end
+
+# The path of the row before the row of `path`: the last row under the sibling
+# before it, else its parent, or `nothing` before the first row.
+function _find_wtree_path_before(w::WidgetTree, path::Vector{Int})
+    path[end] == 1 && return length(path) == 1 ? nothing : path[1:end-1]
+    before = vcat(path[1:end-1], path[end] - 1)
+    while before in w.expanded
+        count = _count_wtree_children(_tree_children(_wtree_node_at(w, before)))
+        count == 0 && break
+        before = vcat(before, count)
+    end
+    before
+end
+
 @iomap struct WidgetTreeToGraphicsCanvasIoMap
     projection::Any
     input::Any
@@ -11271,6 +11964,7 @@ end
     geometry::Cell
     width::Cell
     bare::Bool       # the rows of a tree that scrolls itself, with no box
+    view_height::Any # the height of the view of the rows that a pane offers, or nothing
 end
 
 # ── Node-path ⇄ WidgetTree reference ─────────────────────────────────────────
@@ -11326,13 +12020,14 @@ function print_document(p::WidgetTreeToGraphicsCanvas, recursion, w::WidgetTree,
     _, line_height = _text_size(p.measure, label_style.font, "M")
     icon_size = scale_length(line_height, p.icon_size)
     avail_w = ctx === nothing ? nothing : get_exact_width(ctx)
+    avail_h = ctx === nothing ? nothing : get_exact_height(ctx)
 
     # A named icon is a square of one line times `icon_size`. A tree whose roots
     # show one reserves a column that holds it and a gap, and rows as tall as the
     # larger of the icon and a line; a tree of plain labels keeps the column of its
     # theme and rows of one line. The roots decide, because a row below them is read
     # only when it is drawn, and every row takes the same column and height.
-    shows_icons = Cell(@computation any(node -> _tree_icon(node) isa Symbol, w.roots))
+    shows_icons = Cell(@computation any(node -> _tree_icon(node) isa Union{Symbol,WidgetIcon}, w.roots))
     column = Cell(@computation shows_icons[] ? max(icon_column, icon_size + p.label_gap) : icon_column)
     line_box = Cell(@computation shows_icons[] ? max(line_height, icon_size) : line_height)
 
@@ -11341,10 +12036,26 @@ function print_document(p::WidgetTreeToGraphicsCanvas, recursion, w::WidgetTree,
     # the renderer draws the row. Reading `w.expanded` here ties the rows to the
     # open nodes, so a chevron toggle walks again. Rows stay content-local; the
     # content offset is added where they are drawn and where a reader turns a
-    # position into a row.
+    # position into a row. A tree whose open nodes each count their children lays
+    # out each row, so the renderer starts at the rows in view and the pane has the
+    # extent of the rows. A tree that prints as the rows of its own pane, with an
+    # open node that holds a lazy list of children, makes its rows as a lazy list
+    # from the row of its anchor instead, so it makes the rows that a walk reaches
+    # and no others; reading `w.anchor` here makes the rows again when a far scroll
+    # moves the head.
     geometry = Cell(@computation begin
         expanded = w.expanded
         row_height = line_box[] + 2 * pad
+        if bare && _has_wtree_open_lazy_children(w, expanded)
+            function place(path, depth, count)
+                x = depth * indent
+                WTreeRow(path, depth, x, x + chevron_column, (count - 1) * row_height,
+                         row_height)
+            end
+            built = Dict{Vector{Int},ListNode}()
+            head = _make_wtree_row_list(w, expanded, place, built)
+            return WTreeListGeometry(head, built, row_height)
+        end
         rows = WTreeRow[]
         index = Dict{Vector{Int},Int}()
         function visit(path, depth, node)
@@ -11354,9 +12065,18 @@ function print_document(p::WidgetTreeToGraphicsCanvas, recursion, w::WidgetTree,
             node === nothing && return
             kids = _tree_children(node)
             kids === nothing && return
-            for i in 1:length(kids)
-                child = vcat(path, i)
-                visit(child, depth + 1, child in expanded ? kids[i] : nothing)
+            if kids isa ListNode
+                (i, link) = (1, kids)
+                while link !== nothing
+                    child = vcat(path, i)
+                    visit(child, depth + 1, child in expanded ? link.value : nothing)
+                    (i, link) = (i + 1, link.next)
+                end
+            else
+                for i in 1:length(kids)
+                    child = vcat(path, i)
+                    visit(child, depth + 1, child in expanded ? kids[i] : nothing)
+                end
             end
         end
         roots = w.roots
@@ -11366,19 +12086,75 @@ function print_document(p::WidgetTreeToGraphicsCanvas, recursion, w::WidgetTree,
         WTreeGeometry(rows, index, row_height, length(rows) * row_height)
     end)
 
+    # The height of all the rows; a lazy list of rows has none, so its pane walks to
+    # the ends of the list.
+    rows_height = Cell(@computation _get_wtree_rows_height(geometry[]))
+
     # The tree takes the width that its parent offers, and what holds the tree
     # clips a longer label. With no offer the tree is as wide as its widest row,
-    # which reads the node of every row of the open tree.
+    # which reads the node of every row of the open tree; a lazy list of rows is as
+    # wide as the rows that a walk from its head to the edges of its view reaches,
+    # so it can grow as a person scrolls.
     width = Cell(@computation begin
         avail_w === nothing || return max(1, Int(avail_w[]) - inset_width)
         widest = 1
-        for row in geometry[].rows
-            label_width, _ = _text_size(p.measure, label_style.font,
-                                        _tree_label(_wtree_node_at(w, row.path)))
-            widest = max(widest, row.depth * indent + chevron_column + column[] + label_width)
+        function measure_row(row, node)
+            label = _tree_label(node)
+            label_width = first(_text_size(p.measure, label_style.font, label))
+            row.depth * indent + chevron_column + column[] + label_width + measure_tail(node)
+        end
+        g = geometry[]
+        if g isa WTreeListGeometry
+            top = Int(w.scroll_position.y[])
+            bottom = top + max(avail_h === nothing ? 0 : Int(avail_h[]), g.row_height)
+            measure_link(link) =
+                measure_row(link.value.row, _get_wtree_row_node(link.value))
+            link = g.head
+            while link !== nothing && link.value.row.y0 < bottom
+                widest = max(widest, measure_link(link))
+                link = link.next
+            end
+            link = g.head === nothing ? nothing : g.head.prev
+            while link !== nothing && link.value.row.y0 + link.value.row.height > top
+                widest = max(widest, measure_link(link))
+                link = link.prev
+            end
+            return widest
+        end
+        for row in g.rows
+            widest = max(widest, measure_row(row, _wtree_node_at(w, row.path)))
         end
         widest
     end)
+
+    # What a row draws after its label: the glyphs of the facts of its document, its
+    # detail, and its pills, each after a gap. `push_tail!` draws them from `x`, and
+    # `measure_tail` answers their width.
+    function push_tail!(elements, node, x::Int, row_height::Int, text_y::Int, icon_y::Int)
+        for part in _tree_badges(node)
+            part isa WidgetIcon || continue
+            x += p.label_gap
+            _push_decorated_icon!(elements, p.badge, part, x, icon_y, icon_size, icon_style.color,
+                                  p.mark_background)
+            x += icon_size
+        end
+        detail = _tree_detail(node)
+        if !isempty(detail)
+            x += p.label_gap
+            _push_text!(elements, p.measure, p.detail_text.font, detail, x, text_y, p.detail_text.color)
+            x += first(_text_size(p.measure, p.detail_text.font, detail))
+        end
+        for part in _tree_badges(node)
+            part isa WidgetBadge || continue
+            badge_width, badge_height = _measure_badge(p.badge, part)
+            x += p.label_gap
+            push!(elements, _make_canvas(x, (row_height - badge_height) ÷ 2,
+                                         _build_badge_elements(p.badge, part, badge_width, badge_height)))
+            x += badge_width
+        end
+        x
+    end
+    measure_tail(node) = push_tail!(Any[], node, 0, 0, 0, 0)
 
     # The band of a row: as wide as the tree, and as high as the row while `read`
     # answers the path of the row. A band reads the selection or the pointer in a
@@ -11394,8 +12170,18 @@ function print_document(p::WidgetTreeToGraphicsCanvas, recursion, w::WidgetTree,
     # The top of the row of `path` in the open tree, or 0 once the path is not in it.
     function get_row_top(path)
         g = geometry[]
+        g isa WTreeGeometry || return Int32(0)
         i = get(g.index, path, nothing)
         i === nothing ? Int32(0) : Int32(g.rows[i].y0)
+    end
+
+    # The mark of the row of the current page: a bar at the left edge of the row, as
+    # high as the row while the tree names the row as its current one. It reads
+    # `current` in a cell of its own, so a move of the page redraws two marks.
+    function make_current_mark(row::WTreeRow)
+        mark = GraphicsRect(0, 0, Int32(p.current_width), 0; color = p.current_color, radius = 0)
+        set_cell_computation!(getfield(mark, :h), () -> Int32(w.current == row.path ? row.height : 0))
+        mark
     end
 
     # The canvas of each row that was drawn, kept by the path of the row. A toggle
@@ -11405,23 +12191,39 @@ function print_document(p::WidgetTreeToGraphicsCanvas, recursion, w::WidgetTree,
     # rows of the open tree are the keys of the list, and a path that leaves the
     # open tree leaves the cache.
     kept_rows = Dict{Vector{Int},GraphicsCanvas}()
-    make_row(row::WTreeRow) = get!(() -> make_row_canvas(row), kept_rows, row.path)
+    function make_row(row::WTreeRow)
+        make = () -> make_row_canvas(row, () -> _wtree_node_at(w, row.path),
+                                     Cell(@computation get_row_top(row.path)))
+        get!(make, kept_rows, row.path)
+    end
     function get_open_rows()
         g = geometry[]
+        g isa WTreeGeometry || return WTreeRow[]
         filter!(entry -> haskey(g.index, entry.first), kept_rows)
         g.rows
     end
 
-    # One row: a canvas at the place of the row, whose content the renderer reads
-    # only when it draws the row. The content reads the node, and whether the node
-    # has children, which for a folder is one read of its listing. The chevron
-    # reads whether the row is open in a cell of its own, so a toggle changes the
-    # glyph of a chevron and not the content of a row.
-    function make_row_canvas(row::WTreeRow)
+    # One row: a canvas at `top`, whose content the renderer reads only when it
+    # draws the row. The content reads the node that `get_node` answers, and
+    # whether the node has children: its own answer when it gives one, else a read
+    # of its children. The chevron reads whether the row is open in a cell of its
+    # own, so a toggle changes the glyph of a chevron and not the content of a row.
+    # A row of a lazy list has a transparent band of its own behind everything, so
+    # a press on the empty part of the row lands on the row.
+    function make_row_canvas(row::WTreeRow, get_node, top::Cell; hit::Bool = false)
         content = CellVector(Computation(function ()
-            node = _wtree_node_at(w, row.path)
-            result = Any[make_band(row, p.layer_hovered_color, () -> get_mouse_target(w)),
-                         make_band(row, row_selected_color, () -> w.selection)]
+            node = get_node()
+            result = Any[]
+            if hit
+                band = GraphicsRect(0, 0, 0, row.height; color = color_transparent,
+                                    radius = 0)
+                set_cell_computation!(getfield(band, :w), () -> Int32(width[]))
+                push!(result, band)
+            end
+            push!(result,
+                  make_band(row, p.layer_hovered_color, () -> get_mouse_target(w)),
+                  make_band(row, row_selected_color, () -> w.selection),
+                  make_current_mark(row))
             x = row.depth * indent
             if _wtree_has_children(node)
                 _push_open_chevron!(result, x + chevron_column ÷ 2, row.height ÷ 2, chevron_size,
@@ -11429,23 +12231,44 @@ function print_document(p::WidgetTreeToGraphicsCanvas, recursion, w::WidgetTree,
             end
             icon = _tree_icon(node)
             text_y = pad + (line_box[] - line_height) ÷ 2
-            if icon isa Symbol
-                # A registered icon name: a glyph, tinted to the icon color.
-                _push_icon!(result, icon, x + chevron_column, pad + (line_box[] - icon_size) ÷ 2, icon_size,
-                            icon_style.color)
+            icon_y = pad + (line_box[] - icon_size) ÷ 2
+            if icon isa Union{Symbol,WidgetIcon}
+                # A registered icon name: a glyph, tinted to the icon color, or to the
+                # role of a decorated icon, with its corner marks.
+                _push_decorated_icon!(result, p.badge, icon, x + chevron_column, icon_y, icon_size,
+                                      icon_style.color, p.mark_background)
             elseif icon isa AbstractString && !isempty(icon)
                 # A literal glyph string (e.g. an emoji), drawn as text.
                 _push_text!(result, p.measure, icon_style.font, icon, x + chevron_column, text_y,
                             icon_style.color)
             end
-            _push_text!(result, p.measure, label_style.font, _tree_label(node),
-                        x + chevron_column + column[], text_y, label_style.color)
+            label = _tree_label(node)
+            label_x = x + chevron_column + column[]
+            _push_text!(result, p.measure, label_style.font, label, label_x, text_y, label_style.color)
+            push_tail!(result, node, label_x + first(_text_size(p.measure, label_style.font, label)),
+                       row.height, text_y, icon_y)
             result
         end))
-        GraphicsCanvas(Cell(Int32(0)), Cell(@computation get_row_top(row.path)),
+        GraphicsCanvas(Cell(Int32(0)), top,
                        Cell(@computation Int32(width[])),
                        Cell(Int32(row.height)), content, layout_none, true, Cell(nothing))
     end
+
+    # The canvases of the rows: one for each row of the open tree, made at its first
+    # read; or, for a lazy list of rows, one for each row that a walk first
+    # reaches, at the place of the row below the head.
+    laid_out_rows = CellVector(@computation(get_open_rows()); element = make_row)
+    row_canvases = Cell(@computation begin
+        g = geometry[]
+        g isa WTreeListGeometry || return laid_out_rows
+        g.head === nothing && return CellVector()
+        function make_canvas(link, _, _, _)
+            row = link.value
+            top = Cell(Int32(row.row.y0))
+            make_row_canvas(row.row, () -> _get_wtree_row_node(row), top; hit = true)
+        end
+        make_mapped_list(make_canvas, g.head)
+    end)
 
     # The rows lie along the vertical axis without overlap, so the renderer draws
     # the rows between the edges of its clip, and a query of the size takes the
@@ -11453,8 +12276,8 @@ function print_document(p::WidgetTreeToGraphicsCanvas, recursion, w::WidgetTree,
     # read, so a toggle makes the rows that the renderer reaches and no others.
     rows_canvas = GraphicsCanvas(Cell(Int32(content_x)), Cell(Int32(content_y)),
                                  Cell(@computation Int32(width[])),
-                                 Cell(@computation Int32(geometry[].total_h)),
-                                 CellVector(@computation(get_open_rows()); element = make_row),
+                                 Cell(@computation Int32(rows_height[])),
+                                 bare ? row_canvases : laid_out_rows,
                                  layout_vertical, false, Cell(nothing))
 
     # Whole-canvas transparent hit target. The tree hit-tests by *row band* (a whole
@@ -11465,23 +12288,24 @@ function print_document(p::WidgetTreeToGraphicsCanvas, recursion, w::WidgetTree,
     # top-level tree.
     hit_target = GraphicsRect(0, 0, 0, 0; color = color_transparent, radius = 0)
     set_cell_computation!(getfield(hit_target, :w), () -> Int32(width[] + inset_width))
-    set_cell_computation!(getfield(hit_target, :h), () -> Int32(geometry[].total_h + inset_height))
+    set_cell_computation!(getfield(hit_target, :h),
+                          () -> Int32(rows_height[] + inset_height))
 
     elements = CellVector(@computation begin
         # The hit target behind everything, then the box: margin, border, padding
         # and content, from the outside in (transparent and zero-width by default),
         # then the rows.
         result = Any[hit_target]
-        bare || _push_box_parts!(result, box, colors, width[], geometry[].total_h)
+        bare || _push_box_parts!(result, box, colors, width[], rows_height[])
         push!(result, rows_canvas)
         result
     end)
 
     canvas = GraphicsCanvas(Cell(Int32(_origin(position)[1])), Cell(Int32(_origin(position)[2])),
                             Cell(@computation Int32(width[] + inset_width)),
-                            Cell(@computation Int32(geometry[].total_h + inset_height)),
+                            Cell(@computation Int32(rows_height[] + inset_height)),
                             elements, layout_none, true, Cell(nothing))
-    WidgetTreeToGraphicsCanvasIoMap(p, w, canvas, geometry, width, bare)
+    WidgetTreeToGraphicsCanvasIoMap(p, w, canvas, geometry, width, bare, avail_h)
 end
 
 # A row of the tree is a canvas of its own in the canvas of the rows, the last of
@@ -11493,7 +12317,7 @@ function map_reference_forward(::WidgetTreeToGraphicsCanvas, iomap::WidgetTreeTo
     reference isa ConcreteReference || return _map_self_forward(reference)
     path = _wtree_ref_path(reference)
     path === nothing && return nothing
-    row = get(unwrap_cell(iomap.geometry).index, path, nothing)
+    row = _find_wtree_row_index(unwrap_cell(iomap.geometry), path)
     row === nothing && return nothing
     last = length(unwrap_cell(getfield(unwrap_cell(iomap.output), :elements)))
     ConcreteReference(FieldReferenceStep("elements"), ConcreteReference(RangeReferenceStep(last - 1, last),
@@ -11515,7 +12339,46 @@ end
 _find_wtree_row_at(p::WidgetTreeToGraphicsCanvas, iomap::WidgetTreeToGraphicsCanvasIoMap, y::Int) =
     _wtree_row_at(iomap.geometry, y - _get_rows_content_offset(p, iomap)[2])
 
-read_intent(p::WidgetTreeToGraphicsCanvas, iomap::WidgetRowsPaneIoMap, evt) = _read_rows_pane(p, iomap, evt)
+read_intent(p::WidgetTreeToGraphicsCanvas, iomap::WidgetRowsPaneIoMap, evt) =
+    _add_wtree_scroll_writes(iomap, _read_rows_pane(p, iomap, evt))
+
+# How far from the head the row at the top may be before a tree moves the head of
+# its lazy list of rows to it, as a table moves the head of its rows.
+const _TREE_RELOCATION_DISTANCE = 200
+
+# A scroll of the rows of a tree, with the write of the rows that its view shows
+# after the scroll (`shown`). When the rows are a lazy list and the row at the top
+# of the offset is more than `_TREE_RELOCATION_DISTANCE` rows from the head, the
+# answer moves the head to that row instead: the anchor of the tree written to
+# the row, and the offset less the place of the row, so the row stays at the same
+# place on the screen and the walks of the renderer and of the readers stay
+# short. Any other answer, as it is.
+function _add_wtree_scroll_writes(iomap::WidgetRowsPaneIoMap, op)
+    op isa Operation || return op
+    # A fault barrier can wrap the pane and its content, as in the print of a window.
+    pane = get_content_iomap(iomap.pane)
+    pane isa WidgetScrollPaneToGraphicsCanvasIoMap || return op
+    rows = get_content_iomap(pane.content_iomap)
+    rows isa WidgetTreeToGraphicsCanvasIoMap || return op
+    offset = _find_written_offset(op, pane.input)
+    offset === nothing && return op
+    (x, y) = (Int(offset.x[]), Int(offset.y[]))
+    w = iomap.input
+    geometry = rows.geometry
+    view_height = last(_get_pane_scroll_view(get_iomap_projection(pane), pane))
+    shown = _collect_wtree_view_paths(geometry, y, view_height)
+    writes = shown == w.shown ? Any[] : Any[_write_view_state(w, "shown", shown)]
+    top = geometry isa WTreeListGeometry ? _find_wtree_list_row_at(geometry, y) : nothing
+    if top !== nothing && abs(top.count - 1) > _TREE_RELOCATION_DISTANCE
+        is_other(o) = _find_written_offset(o, pane.input) === nothing
+        others = op isa CompoundOperation ? filter(is_other, op.operations) : Any[]
+        rebased = Point2D(x, y - top.row.y0)
+        moves = Any[_write_view_state(w, "anchor", top),
+                    _write_view_state(w, "scroll_position", rebased)]
+        return CompoundOperation(Any[others..., moves..., writes...])
+    end
+    isempty(writes) ? op : CompoundOperation(Any[op, writes...])
+end
 map_reference_backward(::WidgetTreeToGraphicsCanvas, iomap::WidgetRowsPaneIoMap, reference) =
     _map_rows_pane_backward(iomap, reference)
 map_reference_forward(::WidgetTreeToGraphicsCanvas, iomap::WidgetRowsPaneIoMap, reference) =
@@ -11538,6 +12401,7 @@ function read_intent(p::WidgetTreeToGraphicsCanvas, iomap::WidgetTreeToGraphicsC
     op === nothing || return op
     nop = _wtree_node_gesture(p, iomap, evt)
     nop === nothing || return nop
+    evt isa MouseDwell && return _read_wtree_row_dwell(p, iomap, evt)
     if evt isa MouseClick && evt.button === :left
         return _wtree_mouse_press(p, iomap, evt)
     elseif evt isa KeyDown
@@ -11554,8 +12418,8 @@ function _wtree_node_at(w::WidgetTree, path::Vector{Int})
     coll = w.roots
     node = nothing
     for (level, i) in enumerate(path)
-        (coll !== nothing && 1 <= i <= length(coll)) || return nothing
-        node = coll[i]
+        node = _find_tree_child(coll, i)
+        node === nothing && return nothing
         level < length(path) && (coll = _tree_children(node))
     end
     return node
@@ -11564,7 +12428,9 @@ end
 # Whether `node` has children. For a node whose children are computed, this reads
 # them: a folder reads its listing.
 function _wtree_has_children(node)
+    node isa WidgetTreeNode && node.has_children !== nothing && return node.has_children() === true
     kids = _tree_children(node)
+    kids isa ListNode && return true
     kids !== nothing && !isempty(kids)
 end
 
@@ -11573,6 +12439,54 @@ end
 function _wtree_row_at(geom::WTreeGeometry, y::Int)
     isempty(geom.rows) && return nothing
     geom.rows[clamp(fld(y, geom.row_height) + 1, 1, length(geom.rows))]
+end
+
+# In a lazy list of rows, the row that many links from the head, down or up, or
+# `nothing` for a point above the first row or below the last one, where a lazy
+# list of rows, which declares no height, has no row.
+function _wtree_row_at(geometry::WTreeListGeometry, y::Int)
+    row = _find_wtree_list_row_at(geometry, y)
+    row === nothing ? nothing : row.row
+end
+
+function _find_wtree_list_row_at(geometry::WTreeListGeometry, y::Int)
+    link = geometry.head
+    link === nothing && return nothing
+    steps = fld(y, geometry.row_height)
+    for _ in 1:abs(steps)
+        link = steps > 0 ? link.next : link.prev
+        link === nothing && return nothing
+    end
+    link.value
+end
+
+# The paths of the rows that a view of `height` pixels shows at the offset `y`.
+function _collect_wtree_view_paths(geometry::WTreeGeometry, y::Int, height::Int)
+    count = length(geometry.rows)
+    count == 0 && return Set{Vector{Int}}()
+    first = clamp(fld(y, geometry.row_height) + 1, 1, count)
+    last = clamp(fld(y + max(height, 1) - 1, geometry.row_height) + 1, 1, count)
+    Set{Vector{Int}}(geometry.rows[k].path for k in first:last)
+end
+
+# In a lazy list of rows, the walk goes from the head to the row at `y`, and stops
+# at an end of the rows, then down through the rows that the view crosses.
+function _collect_wtree_view_paths(geometry::WTreeListGeometry, y::Int, height::Int)
+    paths = Set{Vector{Int}}()
+    link = geometry.head
+    link === nothing && return paths
+    steps = fld(y, geometry.row_height)
+    for _ in 1:abs(steps)
+        neighbor = steps > 0 ? link.next : link.prev
+        neighbor === nothing && break
+        link = neighbor
+    end
+    while link !== nothing && link.value.row.y0 < y + height
+        row = link.value.row
+        row.y0 + row.height > y && push!(paths, row.path)
+        link = link.next
+    end
+    paths
 end
 
 # Per-node gesture consult: find the node targeted by `g` — the row under the
@@ -11590,13 +12504,30 @@ function _wtree_node_gesture(p::WidgetTreeToGraphicsCanvas, iomap::WidgetTreeToG
         _, content_y = _get_rows_content_offset(p, iomap)
         row = _wtree_row_at(geom, g.y - content_y)
         row === nothing || (path = row.path)
-    elseif g isa KeyDown
+    elseif g isa Union{KeyDown, KeyPress}
+        # A key goes to the selected node; Return gives its meaning by its KeyPress.
         path = _wtree_ref_path(w.selection)
     end
     path === nothing && return nothing
-    node = _wtree_node_at(w, path)
+    node = _find_wtree_node(geom, w, path)
     node === nothing && return nothing
     return read_bound_gesture(node, g, w.selection)
+end
+
+# The tooltip of the row under a rest of the pointer, titled by its label and
+# rooted under its node, as the mark of a cell of a table answers; `nothing` for a
+# row whose node has no tooltip.
+function _read_wtree_row_dwell(p::WidgetTreeToGraphicsCanvas, iomap::WidgetTreeToGraphicsCanvasIoMap,
+                               g::MouseDwell)
+    _, content_y = _get_rows_content_offset(p, iomap)
+    row = _wtree_row_at(iomap.geometry, g.y - content_y)
+    row === nothing && return nothing
+    node = _find_wtree_node(iomap.geometry, iomap.input, row.path)
+    tooltip = _as_tooltip_document(_tree_tooltip(node))
+    tooltip === nothing && return nothing
+    open = OpenTooltipOperation(Tuple{String,Document}[(_tree_label(node), tooltip)],
+                                EmptyReference(), (g.x, g.y))
+    reroot_operation(ReplaceViewStateOperation(open), Tuple(get_reference_steps(_wtree_path_ref(row.path))))
 end
 
 # A left click on the chevron of a row with children opens or closes it; anywhere
@@ -11608,7 +12539,8 @@ function _wtree_mouse_press(p::WidgetTreeToGraphicsCanvas, iomap::WidgetTreeToGr
     row = _find_wtree_row_at(p, iomap, g.y)
     row === nothing && return nothing
     x = clamp(g.x - content_x, 0, max(0, iomap.width - 1))
-    if row.chevron_x0 <= x < row.chevron_x1 && _wtree_has_children(_wtree_node_at(w, row.path))
+    node = _find_wtree_node(iomap.geometry, w, row.path)
+    if row.chevron_x0 <= x < row.chevron_x1 && _wtree_has_children(node)
         return _wtree_toggle_expanded(iomap, row.path)
     end
     ReplaceSelectionOperation(_wtree_path_ref(row.path))
@@ -11621,18 +12553,215 @@ function _wtree_toggle_expanded(iomap::WidgetTreeToGraphicsCanvasIoMap, path::Ve
     w = iomap.input
     next = copy(w.expanded)
     path in next ? delete!(next, path) : push!(next, path)
-    _write_view_state(w, "expanded", next)
+    write = _write_view_state(w, "expanded", next)
+    moves = something(_make_wtree_toggle_moves(iomap, path, next), Any[])
+    shown = _collect_wtree_toggle_view_paths(iomap, path, next)
+    is_new = shown !== nothing && shown != w.shown
+    is_new && push!(moves, _write_view_state(w, "shown", shown))
+    isempty(moves) ? write : CompoundOperation(Any[write, moves...])
 end
 
+# The paths of the rows that the view of a tree that scrolls itself shows after a
+# toggle of the row of `path` with the open nodes `next`: the rows above it in the
+# view stay, the row stays where it was pressed, and the rows after it follow the
+# open nodes `next` down to the bottom of the view. `nothing` for a tree with no
+# view, or when the row has no place.
+function _collect_wtree_toggle_view_paths(iomap::WidgetTreeToGraphicsCanvasIoMap,
+                                          path::Vector{Int}, next)
+    (iomap.bare && iomap.view_height !== nothing) || return nothing
+    w = iomap.input
+    geometry = iomap.geometry
+    view_height = Int(iomap.view_height)
+    y = Int(w.scroll_position.y[])
+    if geometry isa WTreeListGeometry
+        link = _find_wtree_list_node(geometry, path)
+        link === nothing && return nothing
+        (row, top) = (link.value, link.value.row.y0)
+    else
+        index = get(geometry.index, path, nothing)
+        index === nothing && return nothing
+        (row, top) = (_make_wtree_path_row(w, path), geometry.rows[index].y0)
+    end
+    # Rows that are laid out after the toggle start at the offset that the pane
+    # clamps to their new height.
+    if !_has_wtree_open_lazy_children(w, next)
+        place = geometry isa WTreeListGeometry ?
+                _count_wtree_rows_before(w, next, path) * geometry.row_height - top : 0
+        return _collect_wtree_laid_out_view_paths(w, next, y + place, view_height,
+                                                  geometry.row_height)
+    end
+    paths = top > y ? _collect_wtree_view_paths(geometry, y, top - y) : Set{Vector{Int}}()
+    place(at, depth, count) = WTreeRow(at, depth, 0, 0, 0, 0)
+    bottom = top + geometry.row_height
+    while row !== nothing && bottom - geometry.row_height < y + view_height
+        push!(paths, row.row.path)
+        row = _find_next_wtree_row(next, place, row)
+        bottom += geometry.row_height
+    end
+    paths
+end
+
+# What a toggle of the row of `path` writes beside the open nodes `next` in a tree
+# whose rows are, or become, a lazy list: the row stays where the person pressed
+# it. When the rows stay or become a lazy list, the row is the head, and the
+# offset is less its place; when they become laid out, the anchor goes, and the
+# offset is less its place now and plus its place in the laid-out rows. `nothing`
+# for a tree whose rows stay laid out.
+function _make_wtree_toggle_moves(iomap::WidgetTreeToGraphicsCanvasIoMap,
+                                  path::Vector{Int}, next)
+    iomap.bare || return nothing
+    w = iomap.input
+    geometry = iomap.geometry
+    lazy = geometry isa WTreeListGeometry
+    becomes_lazy = _has_wtree_open_lazy_children(w, next)
+    (lazy || becomes_lazy) || return nothing
+    if lazy
+        link = _find_wtree_list_node(geometry, path)
+        link === nothing && return nothing
+        (row, top) = (link.value, link.value.row.y0)
+    else
+        index = get(geometry.index, path, nothing)
+        index === nothing && return nothing
+        (row, top) = (_make_wtree_path_row(w, path), geometry.rows[index].y0)
+    end
+    offset = w.scroll_position
+    (x, y) = (Int(offset.x[]), Int(offset.y[]))
+    if becomes_lazy
+        return Any[_write_view_state(w, "anchor", row),
+                   _write_view_state(w, "scroll_position", Point2D(x, y - top))]
+    end
+    place = _count_wtree_rows_before(w, next, path) * geometry.row_height
+    Any[_write_view_state(w, "anchor", nothing),
+        _write_view_state(w, "scroll_position", Point2D(x, y - top + place))]
+end
+
+# The row of `path` in the open tree of `w` as a row of a lazy list, with its
+# place among its siblings at each level, made from the nodes. A row of laid-out
+# rows has no lazy list on its path, so each level is an index.
+function _make_wtree_path_row(w::WidgetTree, path::Vector{Int})
+    (above, siblings) = (nothing, w.roots)
+    for level in eachindex(path)
+        index = path[level]
+        link = siblings isa ListNode ? find_list_node(siblings, index) : nothing
+        place = WTreeRow(path[1:level], level - 1, 0, 0, 0, 0)
+        above = WTreeListRow(place, 0, siblings, index, link, above)
+        siblings = _tree_children(_get_wtree_row_node(above))
+    end
+    above
+end
+
+# The paths of the rows that a view of `height` pixels shows at the offset `y` of
+# the laid-out rows of `w` with the open nodes `expanded`, which hold no lazy list
+# of children, with the offset clamped to the rows as the pane clamps it.
+function _collect_wtree_laid_out_view_paths(w::WidgetTree, expanded, y::Int, height::Int,
+                                            row_height::Int)
+    first = _find_first_tree_child(w.roots)
+    first === nothing && return Set{Vector{Int}}()
+    (rows, at) = (Vector{Int}[], [first[1]])
+    while at !== nothing
+        push!(rows, at)
+        at = _find_wtree_path_after(w, at; expanded)
+    end
+    top = clamp(y, 0, max(0, length(rows) * row_height - height))
+    from = fld(top, row_height) + 1
+    to = min(length(rows), fld(top + max(height, 1) - 1, row_height) + 1)
+    Set{Vector{Int}}(rows[from:to])
+end
+
+# The count of the rows before the row of `path` in the open tree of `w` with the
+# open nodes `expanded`, which hold no lazy list of children.
+function _count_wtree_rows_before(w::WidgetTree, expanded, path::Vector{Int})
+    first = _find_first_tree_child(w.roots)
+    first === nothing && return 0
+    (count, at) = (0, [first[1]])
+    while at !== nothing && at != path
+        (count, at) = (count + 1, _find_wtree_path_after(w, at; expanded))
+    end
+    count
+end
+
+# Up and Down move the selection by one row. With no modifier, Right opens a closed
+# node and goes into an open one, Left closes an open node and goes up from any
+# other, Home and End go to the first and the last row, and Page Up and Page Down
+# move by the rows that the view holds.
 function _wtree_key_navigate(iomap::WidgetTreeToGraphicsCanvasIoMap, g::KeyDown)
-    g.key in (:up, :down) || return nothing
-    geom = iomap.geometry
-    isempty(geom.rows) && return nothing
-    cur = _wtree_ref_path(iomap.input.selection)
-    idx = cur === nothing ? 0 : get(geom.index, cur, 0)
-    ni = g.key === :down ? (idx == 0 ? 1 : min(length(geom.rows), idx + 1)) :
-                           (idx <= 1 ? 1 : idx - 1)
-    ReplaceSelectionOperation(_wtree_path_ref(geom.rows[ni].path))
+    w = iomap.input
+    selected = _wtree_ref_path(w.selection)
+    if g.key in (:up, :down)
+        path = _find_wtree_neighbor_path(iomap.geometry, w, selected, g.key === :down)
+    elseif _has_any_modifier_key(g.modifiers)
+        return nothing
+    elseif g.key in (:right, :left)
+        selected === nothing && return nothing
+        node = _find_wtree_node(iomap.geometry, w, selected)
+        node === nothing && return nothing
+        is_open = selected in w.expanded && _wtree_has_children(node)
+        if g.key === :right
+            _wtree_has_children(node) || return nothing
+            is_open || return _wtree_toggle_expanded(iomap, selected)
+            path = _find_wtree_path_after(w, selected)
+        else
+            is_open && return _wtree_toggle_expanded(iomap, selected)
+            path = length(selected) > 1 ? selected[1:(end - 1)] : nothing
+        end
+    elseif g.key === :home
+        path = _find_first_tree_child(w.roots) === nothing ? nothing : [1]
+    elseif g.key === :end
+        geometry = iomap.geometry
+        # A lazy list of rows can have no end, so End goes to the last row only of
+        # rows that are laid out.
+        path = geometry isa WTreeGeometry && !isempty(geometry.rows) ? geometry.rows[end].path : nothing
+    elseif g.key in (:page_up, :page_down)
+        selected === nothing && return nothing
+        path = selected
+        for _ in 1:_count_wtree_page_rows(iomap)
+            step = g.key === :page_down ? _find_wtree_path_after(w, path) : _find_wtree_path_before(w, path)
+            step === nothing && break
+            path = step
+        end
+    else
+        return nothing
+    end
+    path === nothing ? nothing : ReplaceSelectionOperation(_wtree_path_ref(path))
+end
+
+_has_any_modifier_key(modifiers) = modifiers.ctrl || modifiers.shift || modifiers.alt || modifiers.meta
+
+# How many rows Page Up and Page Down move: the rows that the view of the tree
+# holds, less one, so one row of the page before stays in view. The view is the
+# one that a pane offers, else the canvas of the tree.
+function _count_wtree_page_rows(iomap::WidgetTreeToGraphicsCanvasIoMap)
+    row_height = iomap.geometry.row_height
+    row_height > 0 || return 1
+    max(1, Int(something(iomap.view_height, iomap.output.h)) ÷ row_height - 1)
+end
+
+# The path of the row after the row of `path` (`down`), or before it: the first
+# row when the tree has no row of `path`, and the row itself at an end of the
+# rows. `nothing` for a tree with no row.
+function _find_wtree_neighbor_path(geometry::WTreeGeometry, w, path, down::Bool)
+    isempty(geometry.rows) && return nothing
+    index = path === nothing ? 0 : get(geometry.index, path, 0)
+    count = length(geometry.rows)
+    next = down ? (index == 0 ? 1 : min(count, index + 1)) : max(1, index - 1)
+    geometry.rows[next].path
+end
+
+# In a lazy list of rows the neighbour of a row that a walk made is one link away,
+# and the neighbour of any other row comes from the nodes and the open paths of
+# the tree.
+function _find_wtree_neighbor_path(geometry::WTreeListGeometry, w::WidgetTree, path,
+                                   down::Bool)
+    geometry.head === nothing && return nothing
+    link = _find_wtree_list_node(geometry, path)
+    if link !== nothing
+        neighbor = down ? link.next : link.prev
+        return (neighbor === nothing ? link : neighbor).value.row.path
+    end
+    first_path = geometry.head.value.row.path
+    (path === nothing || !_is_wtree_row_shown(w, path)) && return first_path
+    neighbor = down ? _find_wtree_path_after(w, path) : _find_wtree_path_before(w, path)
+    neighbor === nothing ? path : neighbor
 end
 
 # ── Factory ────────────────────────────────────────────────────────────────

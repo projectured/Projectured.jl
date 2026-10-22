@@ -35,6 +35,41 @@ function test_performance_counter()
         @test isempty(after.counts) && isempty(after.times)
     end
 
+    @testset "the macros count and time only when the switch compiled them in" begin
+        store = PerformanceModule._make_performance_counter_store()
+        value = Base.ScopedValues.with(PerformanceModule._counters => store) do
+            @count_performance :layout_passes
+            @count_performance :layout_passes
+            @measure_performance_time :probe_time (1 + 2)
+        end
+        @test value == 3
+        @test get(store.counts, :layout_passes, 0) == (PERFORMANCE_COUNTERS_ENABLED ? 2 : 0)
+        @test haskey(store.times, :probe_time) == PERFORMANCE_COUNTERS_ENABLED
+    end
+
+    @testset "a scope answers the value of its body" begin
+        @test run_with_performance_counters(() -> 42) == 42
+    end
+
+    @testset "the counters of a scope are copies, with four seeded counts" begin
+        store = PerformanceModule._make_performance_counter_store()
+        Base.ScopedValues.with(PerformanceModule._counters => store) do
+            counters = get_performance_counters()
+            @test Set(keys(counters.counts)) == Set([:reads, :computes, :invalidations, :writes])
+            counters.counts[:reads] = 99
+            counters.times[:probe_time] = 99
+            again = get_performance_counters()
+            @test again.counts[:reads] == 0
+            @test isempty(again.times)
+        end
+    end
+
+    @testset "the switch is the preference that the kernel was compiled with" begin
+        preferences = Base.get_preferences(Base.PkgId(Base.moduleroot(PerformanceModule)).uuid)
+        @test PERFORMANCE_COUNTERS_ENABLED ==
+              get(preferences, "performance_counters", false)
+    end
+
     if !PERFORMANCE_COUNTERS_ENABLED
         # Counting is compiled out: the machinery is inert but still transparent.
         # `run_with_performance_counters` runs the body and returns its value, and
@@ -58,6 +93,13 @@ function test_performance_counter()
         _ = b[]           # first read: 1 compute + at least 2 reads (a, b)
         a[] = 2           # write + invalidation
         _ = b[]           # recompute
+        # A computation that gives the plain value that it had stops the walk, and
+        # the cell below it becomes valid by a check.
+        parity = Cell(@computation isodd(a[]))
+        label = Cell(@computation parity[] ? "odd" : "even")
+        _ = label[]
+        a[] = 4
+        _ = label[]
 
         # `@measure_performance_time` returns the expression's value and
         # records the elapsed nanoseconds.
@@ -69,6 +111,8 @@ function test_performance_counter()
     @test counters.counts[:computes]      >= 2
     @test counters.counts[:writes]        >= 1
     @test counters.counts[:invalidations] >= 1
+    @test counters.counts[:stops]         >= 1
+    @test counters.counts[:checks]        >= 1
     # A time goes into the times and never into the counts.
     @test counters.times[:timed_expr]     >= 0
     @test !haskey(counters.counts, :timed_expr)

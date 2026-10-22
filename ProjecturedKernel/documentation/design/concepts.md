@@ -24,10 +24,13 @@ A user of ProjecturEd and a developer of it use different words for the same thi
 | view | projection output | What a view definition makes from the data: widgets, text or graphics. |
 | view definition | projection | A pair of functions: one makes the view, one maps an edit back to the data. |
 | view on demand | reflection view | A view that nobody designed for this data. |
+| view state | view document | What one view keeps of how it shows the data, such as its open nodes, its scroll or its filter. The data itself does not change. |
 | edit | operation | A typed change of the data. |
 | selection | selection, reference | A path from the root of the data to the part you work on. |
 | assistant | `Assistant` | A language model with a set of tools, inside the running program. |
 | tool set | `ToolSet` | The functions that the assistant and an external client can call. |
+| provisional value | `is_cell_provisional` | A value that is valid now, and that a newer value will replace. A computation that reads one is provisional too. |
+| background cell | `make_background_cell` | A cell whose value a task computes after the frame. It shows its last value, or a default, until the answer comes. |
 
 ## The five ideas
 

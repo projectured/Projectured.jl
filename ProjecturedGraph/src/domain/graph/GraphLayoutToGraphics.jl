@@ -105,6 +105,10 @@ function print_document(p::GraphLayoutToGraphicsCanvas, recursion, layout::Graph
         out
     end)
 
+    # The drag that has started, or nothing. A press that has not become a drag
+    # keeps this cell at `nothing`, so it draws nothing again.
+    started_drag = Cell(@computation _find_started_drag(layout))
+
     # The drawing, and where each vertex's box ended up in it. The two are built
     # together because the second is a fact about the first: element order
     # depends on how many edges and edge labels came before the nodes, and a
@@ -115,6 +119,10 @@ function print_document(p::GraphLayoutToGraphicsCanvas, recursion, layout::Graph
         # against the vertex/edge each layout holds.
         highlight_vertex = layout.highlight_vertex
         highlight_edge = layout.highlight_edge
+        # The drag of a vertex moves that vertex and the edges at it, and the
+        # layout stays as it is until the drop.
+        drag = started_drag[]
+        boxes = drag === nothing ? nothing : _collect_dragged_boxes(layout, drag)
         # Where each vertex's node box lands in `result` — the reference target
         # for "beside node i", which is what an annotation anchors to.
         node_at = Union{Int,Nothing}[nothing for _ in 1:length(layout.vertex_layouts)]
@@ -125,8 +133,12 @@ function print_document(p::GraphLayoutToGraphicsCanvas, recursion, layout::Graph
             el = layout.edge_layouts[i]
             el isa EdgeLayout || continue
             route = el.route
-            length(route) < 2 && continue
             e = getfield(el, :edge)[]
+            if boxes !== nothing && e isa GraphEdge &&
+               (e.source === drag.vertex || e.target === drag.vertex)
+                route = something(_make_dragged_route(e, boxes), route)
+            end
+            length(route) < 2 && continue
             directed = e isa GraphEdge ? e.directed : false
             push!(result, GraphicsPolyline(route; color = style.edge,
                 width = style.edge_width, end_arrow = directed, arrow_size = style.arrow_size))
@@ -147,12 +159,16 @@ function print_document(p::GraphLayoutToGraphicsCanvas, recursion, layout::Graph
                                              x = mx - lw ÷ 2, y = my - lh ÷ 2))
             end
         end
-        # Node boxes + content on top.
+        # Node boxes + content on top, and the dragged one over every other.
         entries = child_iomaps[]
-        for i in 1:length(layout.vertex_layouts)
+        vertex_count = length(layout.vertex_layouts)
+        order = drag === nothing ? (1:vertex_count) :
+                vcat([j for j in 1:vertex_count if j != drag.index], [drag.index])
+        for i in order
             vl = layout.vertex_layouts[i]
             vl isa VertexLayout || continue
             x, y, w, h = Int(vl.x), Int(vl.y), Int(vl.w), Int(vl.h)
+            drag !== nothing && i == drag.index && ((x, y) = _get_dragged_corner(vl, drag.offset))
             pad = style.node_padding
             bx, by = x - pad, y - pad
             bw, bh = w + 2*pad, h + 2*pad
@@ -201,14 +217,21 @@ function print_document(p::GraphLayoutToGraphicsCanvas, recursion, layout::Graph
     # text-measuring function this stage has no business holding.
     extent = Cell(Computation(function ()
         right = bottom = 0
+        # The node BOX is the vertex inflated by its padding on every side, and a
+        # highlight ring sits outside that — both are painted, so both count.
+        margin = style.node_padding + style.highlight_gap + style.highlight_width
         for vertex_layout in layout.vertex_layouts
             vertex_layout isa VertexLayout || continue
-            # The node BOX is the vertex inflated by its padding on every side,
-            # and a highlight ring sits outside that — both are painted, so both
-            # count.
-            margin = style.node_padding + style.highlight_gap + style.highlight_width
             right  = max(right,  Int(vertex_layout.x) + Int(vertex_layout.w) + margin)
             bottom = max(bottom, Int(vertex_layout.y) + Int(vertex_layout.h) + margin)
+        end
+        # A dragged box is painted where the pointer took it.
+        drag = started_drag[]
+        if drag !== nothing
+            vertex_layout = layout.vertex_layouts[drag.index]
+            x, y = _get_dragged_corner(vertex_layout, drag.offset)
+            right  = max(right,  x + Int(vertex_layout.w) + margin)
+            bottom = max(bottom, y + Int(vertex_layout.h) + margin)
         end
         # A route may bow outside every box it connects, and an edge label sits
         # on the route, so the waypoints count too.
@@ -278,10 +301,50 @@ end
 
 map_reference_backward(::GraphLayoutToGraphicsCanvas, iomap, reference) = nothing
 
+# A change whose route leads into the content of a vertex, such as a part of a
+# drag that a part of that content started, goes to that content in the frame of
+# its canvas. Any other change is read at the point of the graph.
+function read_intent(p::GraphLayoutToGraphicsCanvas, recursion, change::Intent,
+                     iomap::GraphLayoutToGraphicsCanvasIoMap)
+    route = change.route
+    (route === nothing || isempty(get_reference_steps(strip_reference_types(route)))) ||
+        return read_routed_child(recursion, change, iomap)
+    payload = change.operation === nothing ? change.gesture : change.operation
+    Intent(change.gesture, read_intent(p, iomap, payload), change.description, change.domain)
+end
+
+# The IO maps of the contents of the vertices, which a route reaches.
+get_child_iomaps(iomap::GraphLayoutToGraphicsCanvasIoMap) =
+    Any[entry[3] for entry in iomap.child_iomaps if entry isa Tuple && entry[3] !== nothing]
+
+read_child_by_route(::GraphLayoutToGraphicsCanvas, recursion, change::Intent,
+                    iomap::GraphLayoutToGraphicsCanvasIoMap, child) =
+    read_routed_entry_child(recursion, change, child; entries = iomap.child_iomaps)
+
 # Route a left click into the node whose content box contains it. Coordinates are
-# translated into the content canvas's local frame (mirrors TableToGraphics).
+# translated into the content canvas's local frame (mirrors TableToGraphics). A
+# left press can start the drag of a vertex, and the parts of that drag come here
+# by the path of the graph.
 function read_intent(p::GraphLayoutToGraphicsCanvas, iomap::GraphLayoutToGraphicsCanvasIoMap, event)
-    event isa MouseMove && return _read_graph_move(iomap, event)
+    layout = iomap.input
+    drag = layout.drag
+    event isa Union{DragMove, DragEnd, DragCancel} && return _read_vertex_drag(iomap, drag, event)
+    if event isa MouseMove
+        (drag === nothing || drag.started) && return _read_graph_move(iomap, event)
+        return join_move_answers(_read_vertex_press_move(iomap, drag, event),
+                                 _read_graph_move(iomap, event))
+    end
+    # A left release ends a press that did not become a drag, which was a click,
+    # and a drag that no drag wrapper took; a new left press ends a press whose
+    # release came to no part of the graph.
+    if event isa MouseUp && event.button === :left && drag !== nothing
+        return join_move_answers(_write_vertex_drag(layout, nothing),
+                                 _forward_to_selected(iomap, event))
+    end
+    if event isa MouseDown && event.button === :left
+        return join_move_answers(drag === nothing ? nothing : _write_vertex_drag(layout, nothing),
+                                 _read_vertex_press(iomap, event))
+    end
     is_outward_gesture(event) && return _route_outward(iomap, event)
     if event isa MouseClick && event.button === :left
         op = _route_click(iomap, event)
@@ -298,7 +361,8 @@ end
 function _find_vertex_at(iomap::GraphLayoutToGraphicsCanvasIoMap, px, py)
     layout = iomap.input
     entries = iomap.child_iomaps
-    for i in 1:length(layout.vertex_layouts)
+    # The last box drawn is on top, so the search goes from the end.
+    for i in length(layout.vertex_layouts):-1:1
         vl = layout.vertex_layouts[i]
         vl isa VertexLayout || continue
         x, y, w, h = Int(vl.x), Int(vl.y), Int(vl.w), Int(vl.h)
@@ -357,6 +421,15 @@ end
 _reroot_vertex_answer(::Nothing, i::Int, content) = nothing
 _reroot_vertex_answer(op::CompoundOperation, i::Int, content) =
     join_move_answers((_reroot_vertex_answer(member, i, content) for member in op.operations)...)
+# A wrapper, such as a write of view state, travels with what it holds.
+function _reroot_vertex_answer(op::WrappingOperation, i::Int, content)
+    inner = _reroot_vertex_answer(get_wrapped_operation(op), i, content)
+    inner === nothing ? nothing : rewrap_operation(op, inner)
+end
+# A write that carries its own document travels as it is, such as the knob of a
+# slider that is held.
+_reroot_vertex_answer(op::ReplaceReferencedValueOperation, i::Int, content) =
+    op.document === nothing ? nothing : op
 function _reroot_vertex_answer(op, i::Int, content)
     op isa ReplacePathOperation || return is_self_contained_operation(op) ? op : nothing
     path = get_operation_path(op)
@@ -376,6 +449,165 @@ function _get_target_vertex(iomap::GraphLayoutToGraphicsCanvasIoMap)
      steps[4].name == "content") || return 0
     i = steps[2].stop
     1 <= i <= length(iomap.child_iomaps) ? i : 0
+end
+
+# ── The drag of a vertex ─────────────────────────────────────────────────────
+#
+# `GraphLayout.drag` holds `(vertex, index, origin, offset, started)` while the
+# button is down on a vertex. It is view state, so each write carries the layout
+# itself, and no history records it; the drop is the edit. The graph is the part
+# whose drag is on: it starts the drag after the small move, so a press that does
+# not move is still a click, and the drag wrapper then sends it `DragMove`,
+# `DragEnd` and `DragCancel` by its path.
+
+# The pixels that a press on a vertex moves on one axis before it drags the
+# vertex. A release counts as a click while each axis moved less than the same
+# number (`ClickRecognition`), so a drag starts where a click stops.
+const _VERTEX_DRAG_START = 5
+
+_write_vertex_drag(layout::GraphLayout, drag) =
+    ReplaceViewStateOperation(ReplaceReferencedValueOperation(layout, "drag", drag))
+
+# A left press. The content of the vertex under the point reads it first, in the
+# frame of its canvas, so a part of the content that takes a press, such as the
+# edge of a column of a table, keeps it. A plain press that the content does not
+# take, on the box that the graph draws, keeps the vertex and the point of the
+# press: no drag is on yet, so a release before the pointer moves is a click.
+function _read_vertex_press(iomap::GraphLayoutToGraphicsCanvasIoMap, event::MouseDown)
+    answer = _route_press(iomap, event)
+    answer === nothing || return answer
+    event.modifiers == ModifierKeys() || return nothing
+    i = _find_node_at(iomap, event.x, event.y)
+    i == 0 && return nothing
+    layout = iomap.input
+    _write_vertex_drag(layout, (vertex = layout.vertex_layouts[i].vertex, index = i,
+                                origin = (event.x, event.y), offset = (0, 0),
+                                started = false))
+end
+
+# The answer of the content of the vertex under the point of `event`, a press.
+function _route_press(iomap::GraphLayoutToGraphicsCanvasIoMap, event::MouseDown)
+    hit = _find_vertex_at(iomap, event.x, event.y)
+    (hit === nothing || hit[2] === nothing) && return nothing
+    (i, cim, x, y) = hit
+    answer = read_intent(cim.projection, cim, shift_event_position(event, x - event.x, y - event.y))
+    _reroot_vertex_answer(answer, i, cim.input)
+end
+
+# The vertex whose drawn box, its content and the padding around it, holds the
+# point, or 0. The last box drawn is on top, so the search goes from the end.
+function _find_node_at(iomap::GraphLayoutToGraphicsCanvasIoMap, px, py)
+    layout = iomap.input
+    pad = unwrap_cell(iomap.projection.style).node_padding
+    for i in length(layout.vertex_layouts):-1:1
+        vl = layout.vertex_layouts[i]
+        vl isa VertexLayout || continue
+        x, y = Int(vl.x) - pad, Int(vl.y) - pad
+        (x <= px < x + Int(vl.w) + 2pad && y <= py < y + Int(vl.h) + 2pad) && return i
+    end
+    0
+end
+
+# Before the drag of a vertex starts: a move with the left button held past the
+# small move starts it, and the graph is the part whose drag is on. A move without
+# the left button shows a release that the window did not get, and ends the press.
+function _read_vertex_press_move(iomap::GraphLayoutToGraphicsCanvasIoMap, drag, event::MouseMove)
+    event.buttons.left || return _write_vertex_drag(iomap.input, nothing)
+    ox, oy = drag.origin
+    max(abs(event.x - ox), abs(event.y - oy)) >= _VERTEX_DRAG_START || return nothing
+    join_move_answers(
+        _write_vertex_drag(iomap.input, merge(drag, (offset = (event.x - ox, event.y - oy),
+                                                     started = true))),
+        StartDragOperation(EmptyReference(), nothing),
+        make_screen_pointer_shape_operation(:closed_hand))
+end
+
+# The parts of the drag of a vertex, which come by the path of the graph: a move
+# sets how far the vertex moved, the release drops it there, and a cancel puts it
+# back where it was.
+function _read_vertex_drag(iomap::GraphLayoutToGraphicsCanvasIoMap, drag, event)
+    (drag === nothing || !drag.started) && return nothing
+    layout = iomap.input
+    ox, oy = drag.origin
+    if event isa DragMove
+        offset = (event.x - ox, event.y - oy)
+        offset == drag.offset && return nothing
+        return _write_vertex_drag(layout, merge(drag, (offset = offset,)))
+    end
+    clear = join_move_answers(_write_vertex_drag(layout, nothing),
+                                   make_screen_pointer_shape_operation(nothing))
+    event isa DragCancel && return clear
+    dropped = merge(drag, (offset = (event.x - ox, event.y - oy),))
+    join_move_answers(_make_vertex_drop_operation(layout, dropped), clear)
+end
+
+# The drop of the dragged vertex, as one edit of the constraints of the graph.
+# The constraints of other kinds and the pins of the other vertices stay; the
+# dragged vertex gets a pin at its new corner; and every other vertex without a
+# pin gets a start at the corner where it is drawn, so the next layout begins
+# from what the person saw.
+function _make_vertex_drop_operation(layout::GraphLayout, drag)
+    graph = layout.graph
+    graph isa GraphGraph || return nothing
+    _find_started_drag(layout) === nothing && return nothing
+    constraints = GraphConstraint[]
+    pinned = Set{UInt}()
+    for constraint in graph.constraints
+        constraint.kind === :start && continue
+        if constraint.kind === :pin
+            constraint.target === drag.vertex && continue
+            push!(pinned, objectid(constraint.target))
+        end
+        push!(constraints, constraint)
+    end
+    for (i, vertex_layout) in enumerate(layout.vertex_layouts)
+        vertex_layout isa VertexLayout || continue
+        if i == drag.index
+            push!(constraints, GraphConstraint(drag.vertex, :pin,
+                                               _get_dragged_corner(vertex_layout, drag.offset)))
+        elseif !(objectid(vertex_layout.vertex) in pinned)
+            push!(constraints, GraphConstraint(vertex_layout.vertex, :start,
+                                               (Int(vertex_layout.x), Int(vertex_layout.y))))
+        end
+    end
+    ReplaceReferencedValueOperation(graph, "constraints", constraints)
+end
+
+# The drag of a vertex that has started, or `nothing`. A drag whose vertex is no
+# longer at its index, after an edit of the graph, moves nothing.
+function _find_started_drag(layout::GraphLayout)
+    drag = layout.drag
+    (drag === nothing || !drag.started) && return nothing
+    1 <= drag.index <= length(layout.vertex_layouts) || return nothing
+    vertex_layout = layout.vertex_layouts[drag.index]
+    (vertex_layout isa VertexLayout && vertex_layout.vertex === drag.vertex) || return nothing
+    drag
+end
+
+# The corner of a dragged box: its place in the layout moved by `offset`, and
+# never left of or above the drawing, where nothing is painted.
+_get_dragged_corner(vertex_layout::VertexLayout, offset) =
+    (max(0, Int(vertex_layout.x) + offset[1]), max(0, Int(vertex_layout.y) + offset[2]))
+
+# The box of each vertex, by its identity, with the vertex of `drag` at its
+# dragged corner.
+function _collect_dragged_boxes(layout::GraphLayout, drag)
+    boxes = Dict{UInt,NTuple{4,Int}}()
+    for (i, vertex_layout) in enumerate(layout.vertex_layouts)
+        vertex_layout isa VertexLayout || continue
+        x, y = i == drag.index ? _get_dragged_corner(vertex_layout, drag.offset) :
+                                 (Int(vertex_layout.x), Int(vertex_layout.y))
+        boxes[objectid(vertex_layout.vertex)] = (x, y, Int(vertex_layout.w), Int(vertex_layout.h))
+    end
+    boxes
+end
+
+# The route of `edge` between the boxes of its two ends in `boxes`, or `nothing`
+# when an end has no box.
+function _make_dragged_route(edge::GraphEdge, boxes)
+    source = get(boxes, objectid(edge.source), nothing)
+    target = get(boxes, objectid(edge.target), nothing)
+    (source === nothing || target === nothing) ? nothing : _make_straight_route(source, target)
 end
 
 function _route_click(iomap::GraphLayoutToGraphicsCanvasIoMap, g::MouseClick)
@@ -426,9 +658,11 @@ function _forward_to_selected(iomap::GraphLayoutToGraphicsCanvasIoMap, event)
     nothing
 end
 
+# @optional: the layout engine stands first, as the algorithm the pipeline runs;
+# the rest is its chrome.
 """
-    GraphToGraphics(engine = GridEmbedding(); extent = nothing, border = 0,
-                    constraints = nothing, theme = nothing) -> ChainingProjection
+    GraphToGraphics(engine = make_deferred_layout_engine(); extent = nothing,
+                    border = 0, constraints = nothing, theme = nothing) -> ChainingProjection
 
 The pipeline from a `GraphGraph` straight to a `GraphicsCanvas`, with no
 `TextToGraphics` step, like `TableToGraphics`: the chain of
@@ -437,9 +671,7 @@ The pipeline from a `GraphGraph` straight to a `GraphicsCanvas`, with no
 the content of a vertex prints through the recursion that encloses the chain,
 for example a `NestingProjection`.
 """
-# @optional: the layout engine stands first, as the algorithm the pipeline runs;
-# the rest is its chrome.
-GraphToGraphics(engine::GraphLayoutEngine = GridEmbedding();
+GraphToGraphics(engine::GraphLayoutEngine = make_deferred_layout_engine();
                 extent = nothing, border::Integer = 0, constraints = nothing,
                 theme = nothing) =
     ChainingProjection(GraphGraphToGraphLayout(engine; extent = extent, border = border,
@@ -459,4 +691,11 @@ function __init__()
                                          GraphLayoutToGraphicsCanvas(
                                              theme = get_scaled_theme!(appearance, GraphTheme))),
     ])
+    # The names a model draws a graph with: the vertices, the edges between them,
+    # and the graph that holds both.
+    register_assistant_api!(GraphModule => (:GraphGraph, :GraphVertex, :GraphEdge);
+        description = "A graph is `GraphGraph(vertices, edges)` of `GraphVertex(content)` " *
+                      "and `GraphEdge(source, target)`; the content of a vertex is a " *
+                      "document, such as `WidgetLabel(\"Paris\")`, and `open_pane!` draws " *
+                      "the graph.")
 end

@@ -41,9 +41,11 @@ export FileDocument, is_file_document,
        register_marker_function!, get_marker_function, evaluate_marker,
        get_pred_type, is_pred_constructible,
        parse_marker_text, get_document_section
-export FileProject, FileCutException, save_file!, load_file, parse_file_content,
+export FileProject, FileCutException, save_file!, save_file_text!, cut_file_text, load_file, parse_file_content,
+       find_file_extension,
        get_file_domain, is_file_domain_node, make_reference_leaf, find_reference_marker,
-       make_marker_text, is_own_content, make_file, is_written_in_file
+       make_marker_text, is_own_content, make_file, is_editable_file_type, read_file_content,
+       is_written_in_file
 export TextFile
 export parse_path_text, print_path_text
 export PredFile, parse_pred_text, print_pred_text, pred_arguments, make_pred_document,

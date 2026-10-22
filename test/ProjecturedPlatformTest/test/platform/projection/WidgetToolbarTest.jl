@@ -4,7 +4,7 @@
 # auto-sized item canvas (w=h=0) would take every point to its right, and the
 # first button would light wherever the pointer is.
 
-using ProjecturedKernel.CellModule: Cell, Computation, is_cell_up_to_date
+using ProjecturedKernel.CellModule: Cell, Computation, is_cell_valid
 
 function test_widget_toolbar()
 @testset "WidgetToolbar pointer routing" begin
@@ -55,9 +55,9 @@ end
         hidden = [r for r in rects if Int(r.w) == 0 && Int(r.h) == 0]
         @test length(hidden) == 1
         replace_mouse_target!(item, EmptyReference())
-        @test is_cell_up_to_date(getfield(c, :elements))
-        @test is_cell_up_to_date(getfield(c.elements, :elements))
-        @test is_cell_up_to_date(getfield(c, :w)) && is_cell_up_to_date(getfield(c, :h))
+        @test is_cell_valid(getfield(c, :elements))
+        @test is_cell_valid(getfield(c.elements, :elements))
+        @test is_cell_valid(getfield(c, :w)) && is_cell_valid(getfield(c, :h))
         layer = only(hidden)
         @test (Int(layer.w), Int(layer.h)) == (width, height)
         replace_mouse_target!(item, nothing)
@@ -270,9 +270,9 @@ end
     dwell(item) = let operation = read_gesture(item, MouseDwell(0, 0; time = 0.0))
         operation === nothing ? nothing : only(get_wrapped_operation(operation).layers)[2]
     end
-    @test dwell(WidgetToolbarItem("Gesture log"; icon = :keyboard)).value == "Gesture log"
-    @test dwell(WidgetToolbarItem("Gesture log"; icon = :keyboard,
-                                  tooltip = "Every gesture")).value == "Every gesture"
+    @test dwell(WidgetToolbarItem("Gesture log"; icon = :keyboard)).title == "Gesture log"
+    note = dwell(WidgetToolbarItem("Gesture log"; icon = :keyboard, tooltip = "Every gesture"))
+    @test (note.title, note.text) == ("Gesture log", "Every gesture")
     @test dwell(WidgetToolbarItem(""; icon = :keyboard)) === nothing
 end
 

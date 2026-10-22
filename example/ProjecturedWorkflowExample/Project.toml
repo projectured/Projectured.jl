@@ -1,0 +1,19 @@
+name = "ProjecturedWorkflowExample"
+uuid = "71334292-a0e7-448b-926e-a104a2d28203"
+version = "0.1.0"
+authors = []
+
+[deps]
+ProjecturedKernel = "a3e3499a-684d-4df9-a0d6-de2d1797b1f3"
+ProjecturedKernelExample = "b2967ee9-386e-4698-a92b-2bf5f698f2fd"
+ProjecturedPlatform = "b21cb890-5227-4e91-ae0e-8ab4d844f9f7"
+ProjecturedPlatformExample = "5049da3f-9201-47d6-95d8-24bb99c7096c"
+ProjecturedWorkflow = "d5e7b94b-cbe5-4b5c-9879-deb21bd10ab4"
+
+[compat]
+ProjecturedKernel = "0.2.0"
+ProjecturedKernelExample = "0.1.2"
+ProjecturedPlatform = "0.3.0"
+ProjecturedPlatformExample = "0.1.2"
+ProjecturedWorkflow = "0.1.0"
+julia = "1.12"

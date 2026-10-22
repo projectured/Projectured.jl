@@ -30,9 +30,16 @@ function _press!(editor, chord)
     op
 end
 
-_ctrl(key) = KeyDown(key, ModifierKeys(ctrl = true); time = 0.0)
-_ctrl_shift(key) = KeyDown(key, ModifierKeys(ctrl = true, shift = true); time = 0.0)
-_ctrl_alt(key) = KeyDown(key, ModifierKeys(ctrl = true, alt = true); time = 0.0)
+# The event that a key gives its meaning by: the KeyPress of the character it
+# types, or its KeyDown.
+function _pane_gesture_key(key, modifiers)
+    character = find_typed_character(key)
+    character === nothing ? KeyDown(key, modifiers; time = 0.0) :
+                            KeyPress(character, modifiers; time = 0.0)
+end
+_ctrl(key) = _pane_gesture_key(key, ModifierKeys(ctrl = true))
+_ctrl_shift(key) = _pane_gesture_key(key, ModifierKeys(ctrl = true, shift = true))
+_ctrl_alt(key) = _pane_gesture_key(key, ModifierKeys(ctrl = true, alt = true))
 
 # A tree of one group with two tabs, the first focused.
 function _seeded()
@@ -215,7 +222,7 @@ end
 
 @testset "Alt and an arrow walk from a whole tab, and stay inside its content" begin
     tree, group, editor = _seeded()
-    _alt(key) = KeyDown(key, ModifierKeys(alt = true); time = 0.0)
+    _alt(key) = _pane_gesture_key(key, ModifierKeys(alt = true))
     whole_tab(i) = strip_reference_types(get_selection(tree)) ==
                    strip_reference_types(get_pane_tab_reference(tree, group, i))
     whole_content(i) = strip_reference_types(get_selection(tree)) ==

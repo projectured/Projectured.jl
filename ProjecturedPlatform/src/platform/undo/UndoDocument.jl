@@ -62,6 +62,13 @@ taken back and can be put back. `capacity` bounds the first list; the oldest
 entry is dropped when a new one does not fit. It is a number, or the cell of a
 setting, such as `undo_capacity` of `HistorySettings`, which the buffer reads at
 each step.
+`saved_entry` is the step that was newest when the file that holds the buffer was
+last saved, or `nothing` when the file holds what the buffer held before its first
+step. A save notes it (`record_saved_state!`). `has_unsaved_edits` is whether the
+newest step is another step than `saved_entry`. Each change of the lists and of
+`saved_entry` writes it, and a write of the value that it holds changes nothing:
+a key that joins a run of typing in a file that has edits invalidates no reader
+of it.
 
 The buffer records nothing by itself. `UndoBufferToAnyProjection` is what wraps
 the operations that pass through it.
@@ -77,12 +84,14 @@ See also `UndoBufferToAnyProjection`, `UndoEntry` and `make_inverse_operation`.
     undo_entries::CellVector
     redo_entries::CellVector
     capacity::Int
+    saved_entry::Any
+    has_unsaved_edits::Bool
 end
 
 UndoBuffer(content::Document; capacity::Union{Integer, AbstractCell} = 100,
            selection = nothing) =
     UndoBuffer(content, CellVector(), CellVector(),
-               capacity isa AbstractCell ? capacity : Int(capacity), selection)
+               capacity isa AbstractCell ? capacity : Int(capacity), nothing, false, selection)
 
 # A buffer is transparent on the screen, and a real node in the tree. Anything
 # that reads the tree rather than the picture — saving a file is the case — asks
@@ -92,10 +101,15 @@ get_wrapped_document(buffer::UndoBuffer) = get_wrapped_document(buffer.content)
 # A person edits the document that a history keeps the steps of.
 get_edited_field(::UndoBuffer) = :content
 
+# A tab that holds a history is called after the document in it.
+get_document_title(buffer::UndoBuffer) = get_document_title(buffer.content)
+
 # A buffer survives its document being replaced, and forgets its history: the
-# steps of the old document say nothing about the new one.
+# steps of the old document say nothing about the new one. The document that it
+# holds takes the new one first, so a document that must survive the replacement
+# can, as in an arrangement.
 function replace_wrapped_document!(buffer::UndoBuffer, document)
-    buffer.content = document
+    buffer.content = replace_wrapped_document!(buffer.content, document)
     clear_undo_history!(buffer)
     buffer
 end
@@ -112,6 +126,7 @@ function push_undo_entry!(buffer::UndoBuffer, entry::UndoEntry)
     push!(buffer.undo_entries, entry)
     _empty_entries!(buffer.redo_entries)
     _trim_entries!(buffer.undo_entries, buffer.capacity)
+    _record_unsaved_edits!(buffer)
     buffer
 end
 
@@ -126,8 +141,28 @@ disk, say — because the steps of the old document say nothing about the new on
 function clear_undo_history!(buffer::UndoBuffer)
     _empty_entries!(buffer.undo_entries)
     _empty_entries!(buffer.redo_entries)
+    buffer.saved_entry = nothing
+    _record_unsaved_edits!(buffer)
     buffer
 end
+
+# The file that holds a history holds what the history holds now: the newest step
+# is the saved one, and a history with no step was saved before its first.
+function record_saved_state!(buffer::UndoBuffer)
+    buffer.saved_entry = _find_newest_entry(buffer)
+    _record_unsaved_edits!(buffer)
+    nothing
+end
+
+has_unsaved_edits(buffer::UndoBuffer) = buffer.has_unsaved_edits
+
+# A history has edits that its file does not hold when its newest step is not the
+# step that was newest at the save, or at the read when nothing was saved since.
+_record_unsaved_edits!(buffer::UndoBuffer) =
+    (buffer.has_unsaved_edits = _find_newest_entry(buffer) !== buffer.saved_entry; nothing)
+
+_find_newest_entry(buffer::UndoBuffer) =
+    (entries = buffer.undo_entries; isempty(entries) ? nothing : entries[end])
 
 # Deleting from the front, one at a time, is how the gesture log bounds its own
 # buffer: a `CellVector` write is what the readers of the collection follow.
@@ -262,7 +297,7 @@ make_undoable_operation(buffer::UndoBuffer, operation) =
 function evaluate_operation(editor, op::RecordUndoOperation)
     label = describe_operation(op.operation)
     before = copy_reference(get_selection(editor.document))
-    inverse = evaluate_invertible_operation!(editor, op.operation)
+    inverse = _drop_selection_moves(evaluate_invertible_operation!(editor, op.operation))
     # A step whose way back is to do nothing changed no document — a file that was
     # written, a zoom. It is not a step, so the history does not grow for it.
     inverse isa DoNothingOperation && return nothing
@@ -277,10 +312,25 @@ function evaluate_operation(editor, op::RecordUndoOperation)
         joined = inverse === nothing ? nothing : _join_inverses(inverse, last.inverse)
         buffer.undo_entries[end] = UndoEntry(last.label, joined, last.selection, caret, time())
         _empty_entries!(buffer.redo_entries)
+        _record_unsaved_edits!(buffer)
     else
         push_undo_entry!(buffer, UndoEntry(label, inverse, before, caret, time()))
     end
     nothing
+end
+
+# The way back of a step without its moves of the selection. The selection is view
+# state, which the history does not record: the entry keeps the selection from
+# before the step and puts it back after the edits, when the place that it names
+# exists again. A move inside the way back would run before an edit that it
+# follows is taken back, such as the selection of the neighbour of a deleted
+# element, and name a place that does not exist yet. A way back with no edit left
+# does nothing.
+_drop_selection_moves(operation) = operation
+_drop_selection_moves(::Union{ReplaceSelectionOperation,SelectNextInsertionOperation}) = DoNothingOperation()
+function _drop_selection_moves(operation::CompoundOperation)
+    kept = Any[_drop_selection_moves(member) for member in operation.operations]
+    all(member -> member isa DoNothingOperation, kept) ? DoNothingOperation() : CompoundOperation(kept)
 end
 
 """
@@ -303,10 +353,10 @@ _join_inverses(new::UndoOperation, old::UndoOperation) =
 _join_inverses(new, old) = CompoundOperation(Any[new, old])
 
 evaluate_operation(editor, op::UndoOperation) =
-    _step_undo_history!(editor, op.buffer.undo_entries, op.buffer.redo_entries)
+    _step_undo_history!(editor, op.buffer, op.buffer.undo_entries, op.buffer.redo_entries)
 
 evaluate_operation(editor, op::RedoOperation) =
-    _step_undo_history!(editor, op.buffer.redo_entries, op.buffer.undo_entries)
+    _step_undo_history!(editor, op.buffer, op.buffer.redo_entries, op.buffer.undo_entries)
 
 # One step of the history, in either direction. Undo and redo differ only in
 # which list a step is taken from and which one it goes to, because the way back
@@ -315,7 +365,7 @@ evaluate_operation(editor, op::RedoOperation) =
 # The caret is read before anything is applied, so the entry that goes on the
 # other list carries the place the reverse step starts from — the same rule the
 # entry being applied follows.
-function _step_undo_history!(editor, from, to)
+function _step_undo_history!(editor, buffer::UndoBuffer, from, to)
     length(from) == 0 && return nothing
     entry = from[end]
     is_undo_barrier(entry) && return nothing
@@ -323,6 +373,7 @@ function _step_undo_history!(editor, from, to)
     back = evaluate_invertible_operation!(editor, entry.inverse)
     deleteat!(from, length(from))
     push!(to, UndoEntry(entry.label, back, here))
+    _record_unsaved_edits!(buffer)
     entry.selection === nothing || _restore_selection!(editor.document, entry.selection)
     nothing
 end
@@ -365,8 +416,44 @@ step back there takes back the last thing that happened anywhere under it.
 """
 function find_undo_buffer(document)
     document isa UndoBuffer && return document
-    buffers = search_documents(document, node -> node isa UndoBuffer)
+    buffers = search_documents(document, node -> node isa UndoBuffer; limit = nothing)
     isempty(buffers) ? nothing : first(buffers)
+end
+
+"""
+    describe_undo_history(; editor = get_evaluation_editor()) -> Text
+
+The changes of the window that the tool `undo` and Ctrl+Z take back, and the
+changes that the tool `redo` puts back, newest last: one line each, in the words
+that say what the change did. The changes are those of the person and those of
+an assistant alike. A window with no history says so.
+
+Use it to answer "what did I just do?", to say what changed last, or to see what
+the tool `undo` would take back before you call it.
+
+# Example
+
+    println(describe_undo_history())
+
+See also `find_selected_part`, `print_natural_text`.
+"""
+function describe_undo_history end
+
+function describe_undo_history(; editor = get_evaluation_editor())
+    run_on_editor_task!(editor; description = "describe_undo_history") do
+        buffer = find_undo_buffer(getfield(editor, :document))
+        buffer === nothing && return Text("This window keeps no history.")
+        undo = [entry.label for entry in buffer.undo_entries]
+        redo = [entry.label for entry in buffer.redo_entries]
+        lines = String[isempty(undo) ? "Nothing to take back." :
+                       "To take back, newest last:"]
+        append!(lines, "  " .* undo)
+        if !isempty(redo)
+            push!(lines, "To put back, newest last:")
+            append!(lines, "  " .* redo)
+        end
+        Text(join(lines, "\n"))
+    end
 end
 
 """

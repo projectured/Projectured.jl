@@ -35,8 +35,8 @@ An XML element with a tag, attributes (`attrs`) and child nodes (`children`).
 """
 @document struct XmlElement <: XmlDocument
     tag::String
-    attrs::CellVector = CellVector()
-    children::CellVector = CellVector()  # holds XmlDocument children
+    attrs::CellVector{Document} = CellVector{Document}()
+    children::CellVector{Document} = CellVector{Document}()
     collapsed::Bool = false
 end
 
@@ -53,7 +53,7 @@ XmlElement(tag::AbstractString, children::Vector{<:XmlDocument}) =
     XmlElement(tag, XmlAttribute[], children)
 
 XmlElement(tag::AbstractString, attrs::Vector{<:XmlAttribute}, children::Vector{<:XmlDocument}) =
-    XmlElement(tag, CellVector(attrs), CellVector(children))
+    XmlElement(tag, CellVector{Document}(attrs), CellVector{Document}(children))
 
 # attributes as a name-keyed map
 @adapt_map_protocol on XmlElement to attrs with XmlAttribute(name, value)
@@ -115,7 +115,7 @@ _xml_insert_attr(e) = _xml_in_attr_context(getfield(e, :selection)[]) ?
     override(KeyPress('<')) => "Insert an element"       => _xml_insert_element(doc)
     override(KeyPress('"')) => "Insert text"             => _xml_insert_text(doc)
     KeyDown(:insert)        => "Insert a node"           => _xml_insert_node(doc)
-    KeyDown(:space)         => "Insert an attribute"     => _xml_insert_attr(doc)
+    override(KeyPress(' ')) => "Insert an attribute"     => _xml_insert_attr(doc)
     override(KeyPress('=')) => "Move to attribute value" => move_to_field(doc; from = :name, to = :value)
     # The way back has no key of its own. A rule with no gesture reaches the user by
     # name instead, through the command palette.

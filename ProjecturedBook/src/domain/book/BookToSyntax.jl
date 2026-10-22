@@ -448,7 +448,8 @@ end
 
 @projection UntrackedCell struct BookListToSyntaxNode
     bullet::StyleText = get_book_style(nothing, :bullet_text)
-    indentation::Int = 2
+    # The levels of the items, each on a line of its own.
+    indentation::Int = 1
 end
 
 
@@ -485,7 +486,8 @@ function print_document(p::BookListToSyntaxNode, recursion, b::BookList, ctx)
         ]
     end)
 
-    output = SyntaxNode(children_cv; indentation=p.indentation, collapsed=b.collapsed, selection=sel, mouse_target)
+    output = SyntaxNode(children_cv; open="\n", sep="\n", close="\n", indentation=p.indentation,
+                        collapsed=b.collapsed, selection=sel, mouse_target)
     iomap = ChildrenIoMap(p, b, output, element_iomaps)
     iomap_cell[] = iomap
     iomap
@@ -593,12 +595,12 @@ end
 # the fixed-node KeySlot mapping keys on the field name only, so it is agnostic to
 # whether the rendered value is a `TextString` or a `TextGraphics`.
 @projection_template BookPictureToSyntaxLeaf BookPicture (prj, doc) ->
-    SyntaxNode(nothing, nothing, TextString("\n", prj.placeholder),
+    SyntaxNode(
         [ SyntaxLeaf(bound(:title, String,
                            TextString(() -> isempty(doc.title) ? "untitled" : doc.title, prj.style))),
           SyntaxLeaf(bound(:content, String,
-                           _picture_leaf_value(doc.content, prj.placeholder))) ],
-        0, false, nothing)
+                           _picture_leaf_value(doc.content, prj.placeholder))) ];
+        sep=TextString("\n", prj.placeholder))
 
 # The newline `sep` between caption and figure is a projection-introduced position
 # with no input pre-image. The generic template `ReplaceSelectionOperation`

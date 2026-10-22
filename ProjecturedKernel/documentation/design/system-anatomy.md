@@ -144,7 +144,7 @@ The five backends (depend on the kernel and the platform):
   Web     (web/)       → opt-in, HTTP/JSON3                    WebBackend; assets in web/assets/
   Video   (video/)     → opt-in, FFMPEG; depends on Sdl         record_video method on the kernel seam
 
-The nine adapters (opt-in, loaded only when you `using` them):
+The ten adapters (opt-in, loaded only when you `using` them, or with `Projectured` when AutoIntegration loads them):
   Tulip      (tulip/) → Platform's layout slice      MathOptInterface/Tulip       the linear-programming constraint solver
   Odbc       (odbc/)  → Sql, DbCatalog, Database      ODBC/DBInterface/Tables      OdbcDatabaseAdapter, live-query projections
   Adaptagrams          → Graph                        native C++ shim              the graph layout engine
@@ -154,6 +154,7 @@ The nine adapters (opt-in, loaded only when you `using` them):
   Acp        (acp/)    → Kernel                       JSON3                        AcpConnection; make_agent_connection(:acp)
   OpenRouter           → Kernel                       HTTP/JSON3                   the relevance model on the Decisions API
   DataFrames           → Kernel, Platform; DataFrames.jl                           DataFrameView
+  LanguageServer       → Kernel, Platform               JSON3                    SourceFile, LanguageServerConnection; clangd
 ```
 
 The four-level division rule: **package** = one concept, or an
@@ -246,7 +247,7 @@ the HTTP clients of the model providers are in the opt-in `ProjecturedMCP`,
 | kernel `reference/` | `Reference`, `EmptyReference`, `ConcreteReference` (`ReferencePath.jl`); the kernel step structs `RangeReferenceStep`, `FieldReferenceStep`, `TypeReferenceStep` (`ReferenceStep.jl`). `ElementReferenceStep`/`PositionReferenceStep` are convenience constructors producing a `RangeReferenceStep`, not distinct structs. Step types owned by higher packages each live with their owner and register through the layer's seam: `ProjectionReferenceStep` (kernel `projection/`), `PointReferenceStep` (visual `graphics/`), `TextRangeReferenceStep`/`TextColumnReferenceStep`/`TextSpanReferenceStep` (visual `text/`) |
 | `JsonDocument.jl` | `JsonNull`, `JsonBool`, `JsonNumber`, `JsonString`, `JsonArray`, `JsonObject`, `JsonObjectEntry` |
 | `XmlDocument.jl` | `XmlText`, `XmlAttribute`, `XmlElement` |
-| `TextDocument.jl` | `TextBlock`, `TextString`, `TextNewline` |
+| `TextDocument.jl` | `TextBlock`, `TextLine`, `TextString` |
 | `SyntaxDocument.jl` | `SyntaxLeaf`, `SyntaxNode`; wrapper types `SyntaxDelimitation`, `SyntaxIndentation`, `SyntaxCollapsible`, `SyntaxNavigation`, `SyntaxConcatenation`, `SyntaxSeparation` |
 | `GraphicsDocument.jl` | `GraphicsText`, `GraphicsRect`, `GraphicsCanvas`, `GraphicsViewport`, `GraphicsImage`, `GraphicsFence` |
 | `WidgetDocument.jl` | Core: `WidgetInsertion`, `WidgetLabel`, `WidgetText`, `WidgetCheckbox`, `WidgetButton`, `WidgetTooltip`, `WidgetMenu`, `WidgetMenuItem`, `WidgetToolbarItem`, `WidgetComposite`, `WidgetToolbar`, `WidgetShell`, `WidgetTitlePane`, `WidgetSplitPane`, `WidgetTabbedPane`, `WidgetScrollPane`, `WidgetScrollBar`. Extension: `WidgetBadge`, `WidgetSeparator`, `WidgetCard`, `WidgetSwitch`, `WidgetProgressBar`, `WidgetProgressRing`, `WidgetSlider`, `WidgetRadioGroup`, `WidgetAvatar`, `WidgetAlert`, `WidgetSkeleton`, `WidgetSwatch`, `WidgetToggle`, `WidgetToggleGroup`, `WidgetSelect`, `WidgetTextarea`, `WidgetAccordion`, `WidgetTable`, `WidgetTree` |
@@ -288,7 +289,6 @@ composes with any higher-order projection.
 | `FaultCatchingProjection` | The fault barrier of one part at a recursion point: a fault in a cell that the part built draws the mark of the output domain in place of the part |
 | `TooltipDecoratorProjection` | Dispatches on `TooltipSource`; reader runs a show/hide state machine |
 | `DraggingProjection` | Dispatches on `DraggingState`; reader runs a press→drag→drop state machine emitting `MoveRangeOperation` |
-| `ProjectionConfiguringProjection` | Extends the inner projection's output with an editable parameter-control bar |
 
 **Generic** (`generic/`):
 
@@ -332,8 +332,8 @@ composes with any higher-order projection.
 | `WordWrapping` | `Text` → `Text` (domain-preserving) |
 | `PrimitiveToText` | `Primitive` → `Text` |
 | `ReferenceToText` | `Reference` → `Text` |
-| `TextFiltering` | `Text` → `Text` (filter rows) |
-| `TextHighlighting` | `Text` → `Text` (highlight matches) |
+| `FilteredTextToText` | `FilteredText` → `Text` (keep the lines that match) |
+| `HighlightedTextToText` | `HighlightedText` → `Text` (highlight matches) |
 | `SqlToSyntax` | `Sql` → `Syntax` |
 | `SqlToCellTable` | `Sql` → `CellTable` |
 | `CellTableToWidgetTable` | `CellTable` → `WidgetTable` |
@@ -385,7 +385,8 @@ ProjecturedKernel ◄── ProjecturedPlatform ◄── the 18 domains ◄─�
    Mcp, Anthropic,  Console, Pdf, AutoIntegration
    Ollama, Acp,     Sdl, Web,
    OpenRouter       Video, Tulip,
-                     DataFrames
+                     DataFrames,
+                     LanguageServer
 
 ProjecturedIntegrations ◄── Projectured, and the six packages above that own a
                              third-party dependency (Sdl, DataFrames, Video,
@@ -423,7 +424,7 @@ includes them in:
                Computation and @computation
  4 struct      @cell_struct, CellStructPlan and the builders of a struct of cells
  5 clock       the animation Clock (a @cell_struct with a reactive time field),
-               get_clock_time / set_clock_time!, start_wall_clock! / stop_wall_clock!
+               get_reactive_clock_time / get_clock_time / set_clock_time!
  6 event       the input events (Event, ModifierKeys, KeyDown/KeyPress/Mouse*/Window*,
                WindowInput)
  7 device      Device abstract + Keyboard / Mouse / Display devices (physical properties)

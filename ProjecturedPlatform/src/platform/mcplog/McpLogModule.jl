@@ -19,30 +19,39 @@ using ..CollectionModule
 using ..DocumentModule
 using ..DomainModule
 using ..EditorModule
+using ..ToolModule
 using ..FeedModule
+using ..GestureBindingModule
 using ..IoMapModule
 using ..LayoutModule
 using ..NaturalModule
+using ..OperationModule
 using ..PrimitiveModule
 using ..ProjectionAlgebraModule
 using ..ProjectionModule
 using ..ReferenceModule
+using ..RosterModule
 using ..SerializationModule
 using ..ShellModule
 using ..StyleModule
+using ..TooltipModule
 using ..WidgetModule
 
 # Imported to extend: this module adds a method to each of these.
 import ..DocumentModule: get_document_title
-import ..DomainModule: get_insertion_aliases, make_insertion_document
+import ..GestureBindingModule: get_document_gesture_bindings_own
+import ..DomainModule: get_insertion_aliases, make_insertion_document, get_document_decoration
 import ..FeedModule: drain_changes!, attach_wake_callback!
 import ..ProjectionModule: print_document
-import ..SerializationModule: pred_arguments
+import ..SerializationModule: pred_arguments, make_pred_document
 import ..EditorModule: wrap_editor!, get_wrapper_layers
 
-export McpCallEntry, McpLog, get_session_mcp_log, record_mcp_call!
-export McpLogStore, get_session_mcp_log_store, take_mcp_calls!, McpLogFeed, make_mcp_log_tool
-export McpLogTheme, ScaledMcpLogTheme, McpLogToWidget, make_mcp_log_projection
+export McpCallEntry, McpLog, record_mcp_call!, get_session_mcp_log
+export McpLogStore, read_mcp_calls, attach_mcp_log_wake!, detach_mcp_log_wake!, take_mcp_calls!,
+       get_session_mcp_log_store
+export McpLogFeed, make_mcp_log_tool
+export McpLogTheme, ScaledMcpLogTheme
+export McpLogToWidget, make_mcp_log_projection
 
 include("McpLogDocument.jl")
 include("McpLogStore.jl")

@@ -70,9 +70,10 @@ jobs:
           # longer than a key may be.
           include-matrix: false
           cache-name: julia-cache;package=${{ matrix.package }};julia=${{ matrix.julia }}
-      # AutoIntegration, AgentClientProtocol and ClaudeCodeACP are packages of
-      # other repositories, which no job develops. They come from
-      # ProjecturedRegistry, which the job adds beside General.
+      # AutoIntegration, AgentClientProtocol, ClaudeCodeACP and the fork of
+      # ModelContextProtocol are packages of other repositories, which no job
+      # develops. They come from ProjecturedRegistry, which the job adds
+      # beside General.
       - name: Add the registries
         run: >-
           julia --project="$RUNNER_TEMP/environment"

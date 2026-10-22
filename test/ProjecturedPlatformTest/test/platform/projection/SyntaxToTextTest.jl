@@ -24,9 +24,9 @@ lv = Cell("X")
 sl = SyntaxLeaf(() -> lv[]; open="[", close="]")
 sst3 = print_document(s2st, sl).output
 @test sst3.elements[1].elements[2].content == "X"
-@test is_cell_up_to_date(getfield(sst3.elements, :elements))  # spans structure still valid
+@test is_cell_valid(getfield(sst3.elements, :elements))  # spans structure still valid
 lv[] = "Y"
-@test is_cell_up_to_date(getfield(sst3.elements, :elements))  # still valid! only the text cell changed
+@test is_cell_valid(getfield(sst3.elements, :elements))  # still valid! only the text cell changed
 @test sst3.elements[1].elements[2].content == "Y"
 
 # structural incrementality
@@ -34,9 +34,9 @@ src2 = Cell(2)
 sn2 = SyntaxNode(() -> SyntaxDocument[SyntaxLeaf(string(i)) for i in 1:src2[]]; open="<", close=">", sep=",")
 sst4 = print_document(s2st, sn2).output
 _ = get_flat_string(sst4)  # force eval
-@test is_cell_up_to_date(getfield(sst4.elements, :elements))
+@test is_cell_valid(getfield(sst4.elements, :elements))
 src2[] = 3
-@test !is_cell_up_to_date(getfield(sst4.elements, :elements))  # children changed → spans rebuild
+@test !is_cell_valid(getfield(sst4.elements, :elements))  # children changed → spans rebuild
 
 end # @testset "SyntaxToText"
 
@@ -47,12 +47,15 @@ pipe = RecursiveProjection(SyntaxToText())
 p = _S2T.SyntaxCompoundToText()
 _pos_to_selection(iomap, k::Int) = map_reference_backward(iomap.projection, iomap,
     ConcreteReference(RangeReferenceStep(k, k), EmptyReference()))
+# The flat offset that the forward map of the IO map gives `selection`.
+_selection_to_pos(iomap, selection) =
+    _S2T._text_side_flat(map_reference_forward(iomap.projection, iomap, selection))
 _line_texts(block) = [" " ^ line.indentation * join(span.content for span in line.elements)
                       for line in block.elements]
 
 @testset "a node that indents puts each child on a line of its own" begin
     node = SyntaxNode(SyntaxDocument[SyntaxLeaf("a"), SyntaxLeaf("b")];
-                      open="[", close="]", sep=",", indentation=1)
+                      open="[\n", close="\n]", sep=",\n", indentation=1)
     output = print_document(pipe, node).output
     @test all(element -> element isa TextLine, output.elements)
     @test _line_texts(output) == ["[", "  a,", "  b", "]"]
@@ -60,19 +63,20 @@ _line_texts(block) = [" " ^ line.indentation * join(span.content for span in lin
 end
 
 @testset "an ancestor widens the lines of the chrome of its children" begin
-    inner = SyntaxNode(SyntaxDocument[SyntaxLeaf("x")]; open="(", close=")", indentation=1)
-    outer = SyntaxNode(SyntaxDocument[inner]; open="[", close="]", indentation=1)
+    inner = SyntaxNode(SyntaxDocument[SyntaxLeaf("x")]; open="(\n", close="\n)", indentation=1)
+    outer = SyntaxNode(SyntaxDocument[inner]; open="[\n", close="\n]", indentation=1)
     @test _line_texts(print_document(pipe, outer).output) == ["[", "  (", "    x", "  )", "]"]
 end
 
-@testset "a value with a break is one run, a row inside its line" begin
+@testset "a value with a break is lines, which follow the code around them" begin
     leaf = SyntaxLeaf("one\ntwo"; open="<", close=">")
-    node = SyntaxNode(SyntaxDocument[leaf]; open="[", close="]", indentation=1)
+    @test leaf.value isa TextBlock
+    node = SyntaxNode(SyntaxDocument[leaf]; open="[\n", close="\n]", indentation=1)
     iomap = print_document(pipe, node)
-    @test _line_texts(iomap.output) == ["[", "  <one\ntwo>", "]"]
-    @test get_flat_string(iomap.output) == "[\n  <one\ntwo>\n]"
-    for k in 0:_S2T._subtree_len(node, p, 0)
-        @test _S2T._syntax_to_flat(node, _pos_to_selection(iomap, k), p, 0) == k
+    @test _line_texts(iomap.output) == ["[", "  <one", "  two>", "]"]
+    @test get_flat_string(iomap.output) == "[\n  <one\n  two>\n]"
+    for k in 0:get_flat_length(iomap.output)
+        @test _selection_to_pos(iomap, _pos_to_selection(iomap, k)) == k
     end
     # The caret before the break is the caret before the '\n' of the value.
     @test strip_reference_types(_pos_to_selection(iomap, 8)) ==
@@ -84,12 +88,14 @@ end
     iomap = print_document(pipe, leaf)
     value_range(start, stop) = ConcreteReference(FieldReferenceStep("value"),
         ConcreteReference(RangeReferenceStep(start, stop), EmptyReference()))
-    edit = ReplaceStringRangeOperation(_S2T._make_span_range_path([1, 2], 5, 6), "W")
+    # The run "two" is on line 2, at offset 4 of the value.
+    edit = ReplaceStringRangeOperation(_S2T._make_span_range_path([2, 1], 1, 2), "W")
     result = read_intent(iomap.projection, iomap, edit)
     @test result isa ReplaceStringRangeOperation
     @test strip_reference_types(result.reference) == value_range(5, 6)
-    # The end of the value is the value, not the close delimiter.
-    edit = ReplaceStringRangeOperation(_S2T._make_span_range_path([1, 2], 7, 7), "!")
+    @test result.reference.tail.head isa RangeReferenceStep
+    @test result.reference.tail.type === TextBlock
+    edit = ReplaceStringRangeOperation(_S2T._make_span_range_path([2, 1], 3, 3), "!")
     result = read_intent(iomap.projection, iomap, edit)
     @test strip_reference_types(result.reference) == value_range(7, 7)
 end
@@ -98,15 +104,93 @@ end
     node = SyntaxNode(SyntaxDocument[SyntaxLeaf("a"), SyntaxLeaf("b")]; sep=";\n")
     iomap = print_document(pipe, node)
     @test _line_texts(iomap.output) == ["a;", "b"]
-    for k in 0:_S2T._subtree_len(node, p, 0)
-        @test _S2T._syntax_to_flat(node, _pos_to_selection(iomap, k), p, 0) == k
+    for k in 0:get_flat_length(iomap.output)
+        @test _selection_to_pos(iomap, _pos_to_selection(iomap, k)) == k
     end
+end
+
+@testset "a string with a break is a text of lines" begin
+    node = SyntaxNode(SyntaxDocument[SyntaxLeaf("a")]; open="[\n", sep=",", close="\n]")
+    @test node.open isa TextBlock && node.close isa TextBlock && node.sep isa TextString
+    @test get_flat_string(node.open) == "[\n"
+    style = StyleText(StyleFont("Ubuntu Mono", 20), color_red)
+    leaf = SyntaxLeaf(TextString("x\ny", style); open=TextString("<\n", style))
+    @test leaf.value isa TextBlock && leaf.open isa TextBlock
+    @test leaf.value.elements[2].elements[1].font_color == color_red
+    # A computed content is kept: only its value now could be read.
+    computed = SyntaxLeaf(TextString(() -> "p\nq", style))
+    @test computed.value isa TextString
+end
+
+@testset "a break in a text starts a line of the chrome" begin
+    leaves() = SyntaxDocument[SyntaxLeaf("a"), SyntaxLeaf("b")]
+    node = SyntaxNode(leaves(); open="[\n", sep=",\n", close="\n]", indentation=1)
+    iomap = print_document(pipe, node)
+    @test _line_texts(iomap.output) == ["[", "  a,", "  b", "]"]
+    @test get_flat_string(iomap.output) == "[\n  a,\n  b\n]"
+    for k in 0:get_flat_length(iomap.output)
+        @test _selection_to_pos(iomap, _pos_to_selection(iomap, k)) == k
+    end
+    # Just after a break, a caret stands after the indentation of the line.
+    @test _selection_to_pos(iomap, @reference(node, open{1})) == 1
+    @test _selection_to_pos(iomap, @reference(node, open{2})) == 4
+    @test _selection_to_pos(iomap, @reference(node, sep{2})) == 9
+    @test _selection_to_pos(iomap, @reference(node, close{0})) == 10
+    @test _selection_to_pos(iomap, @reference(node, close{2})) == 12
+    # `indentation` counts levels.
+    deeper = SyntaxNode(leaves(); open="[\n", sep=",\n", close="\n]", indentation=2)
+    @test _line_texts(print_document(pipe, deeper).output) == ["[", "    a,", "    b", "]"]
+end
+
+@testset "a node that shows no child prints its delimiters on one line" begin
+    texts = (open="[\n", sep=",\n", close="\n]", indentation=1)
+    empty_node = SyntaxNode(SyntaxDocument[]; texts...)
+    iomap = print_document(pipe, empty_node)
+    @test _line_texts(iomap.output) == ["[]"]
+    for k in 0:get_flat_length(iomap.output)
+        @test _selection_to_pos(iomap, _pos_to_selection(iomap, k)) == k
+    end
+    # An offset in a line that the node does not print stands at the nearest end.
+    @test _selection_to_pos(iomap, @reference(empty_node, open{2})) == 1
+    @test _selection_to_pos(iomap, @reference(empty_node, close{0})) == 1
+    # A node that the syntax folds.
+    folded = SyntaxNode(SyntaxDocument[SyntaxLeaf("a")]; texts...)
+    folded.collapsed = true
+    iomap = print_document(pipe, folded)
+    @test _line_texts(iomap.output) == ["[…]"]
+    for k in 0:get_flat_length(iomap.output)
+        @test _selection_to_pos(iomap, _pos_to_selection(iomap, k)) == k
+    end
+end
+
+@testset "a child is widened by the line it starts on" begin
+    inner = SyntaxNode(SyntaxDocument[SyntaxLeaf("x")]; open="(\n", close="\n)", indentation=1)
+    outer = SyntaxNode(SyntaxDocument[SyntaxLeaf("y"), inner]; open="[\n", sep=",\n", close="\n]",
+                       indentation=1)
+    iomap = print_document(pipe, outer)
+    @test _line_texts(iomap.output) == ["[", "  y,", "  (", "    x", "  )", "]"]
+    for k in 0:get_flat_length(iomap.output)
+        @test _selection_to_pos(iomap, _pos_to_selection(iomap, k)) == k
+    end
+end
+
+@testset "a node with no break in its closing delimiter keeps it on its last line" begin
+    # A Lisp call: the head inline, the body one level in, and the `)` after the
+    # last form.
+    body = SyntaxNode(SyntaxDocument[SyntaxLeaf("a"), SyntaxLeaf("b")]; open="\n", sep="\n", indentation=1)
+    call = SyntaxNode(SyntaxDocument[SyntaxLeaf("defun"), body]; open="(", sep=" ", close=")")
+    @test _line_texts(print_document(pipe, call).output) == ["(defun ", "  a", "  b)"]
+    # A YAML mapping under a key: no empty last line.
+    mapping = SyntaxNode(SyntaxDocument[SyntaxLeaf("x: 1"), SyntaxLeaf("y: 2")]; open="\n", sep="\n",
+                         indentation=1)
+    entry = SyntaxNode(SyntaxDocument[SyntaxLeaf("a:"), mapping])
+    @test _line_texts(print_document(pipe, entry).output) == ["a:", "  x: 1", "  y: 2"]
 end
 
 @testset "a structural edit keeps the lines that it does not change" begin
     src = Cell(2)
     leaves = SyntaxDocument[SyntaxLeaf(string(i)) for i in 1:3]
-    node = SyntaxNode(() -> leaves[1:src[]]; open="[", close="]", sep=",", indentation=1)
+    node = SyntaxNode(() -> leaves[1:src[]]; open="[\n", close="\n]", sep=",\n", indentation=1)
     output = print_document(pipe, node).output
     before = collect(output.elements)
     src[] = 3
@@ -123,9 +207,9 @@ let
     fold_line_texts(block) = [" " ^ line.indentation * join(span.content for span in line.elements)
                               for line in block.elements]
     inner = SyntaxNode(SyntaxDocument[SyntaxLeaf("x"), SyntaxLeaf("y")];
-                       open="[", close="]", sep=",", indentation=1)
+                       open="[\n", close="\n]", sep=",\n", indentation=1)
     entry = SyntaxNode(SyntaxDocument[SyntaxLeaf("k"), inner]; sep=": ")
-    outer = SyntaxNode(SyntaxDocument[entry]; open="{", close="}", indentation=1)
+    outer = SyntaxNode(SyntaxDocument[entry]; open="{\n", close="\n}", indentation=1)
     iomap = print_document(RecursiveProjection(SyntaxToText(text_folds = true)), outer)
     lines = iomap.output.elements
     @test fold_line_texts(iomap.output) == ["{", "  k: [", "    x,", "    y", "  ]", "}"]
@@ -156,12 +240,9 @@ end # @testset "SyntaxToText text folds"
 
 # Walk every flat character offset of a hand-built SyntaxNode and verify that
 # mapping the corresponding text-domain flat reference back through
-# `map_reference_backward` yields a selection whose forward map (`_syntax_to_flat`)
-# lands back on the same character. This guarantees that clicking on any
-# character of the rendered text resolves to a selection whose forward map
-# lands back on the same character. (The delegation refactor removed the
-# self-contained `_pos_to_selection` helper; its job now lives inside
-# `map_reference_backward`, which reads flat positions as a bare `{k}` ref.)
+# `map_reference_backward` yields a selection whose forward map lands back on the
+# same character. This guarantees that clicking on any character of the rendered
+# text resolves to a selection whose forward map lands back on the same character.
 let
 _S2T = SyntaxModule
 
@@ -170,11 +251,10 @@ _pos_to_selection(iomap, k::Int) = map_reference_backward(iomap.projection, ioma
 
 _check_roundtrip = function (label, node, p)
     iomap = print_document(RecursiveProjection(SyntaxToText()), node)
-    flat_len = _S2T._subtree_len(node, p, 0)
     @testset "$label" begin
-        for k in 0:flat_len
+        for k in 0:get_flat_length(iomap.output)
             sel = _pos_to_selection(iomap, k)
-            flat_back = _S2T._syntax_to_flat(node, sel, p, 0)
+            flat_back = _S2T._text_side_flat(map_reference_forward(iomap.projection, iomap, sel))
             @test flat_back == k
         end
     end
@@ -186,7 +266,7 @@ node = SyntaxNode(
     SyntaxDocument[
         SyntaxLeaf("hello"; open="\"", close="\""),
         SyntaxLeaf("world"; open="\"", close="\""),
-    ]; open="[", close="]", sep=", ", indentation=1)
+    ]; open="[\n", close="\n]", sep=",\n", indentation=1)
 _check_roundtrip("indented array", node, _S2T.SyntaxCompoundToText())
 
 # An inline (non-indented) node: child₁ sep child₂.
@@ -197,7 +277,7 @@ _check_roundtrip("inline node", inline_node, _S2T.SyntaxCompoundToText())
 inner_pair = SyntaxNode(
     SyntaxDocument[SyntaxLeaf("key"; open="\"", close="\""),
                     SyntaxLeaf("value"; open="\"", close="\"")]; sep=": ")
-outer = SyntaxNode(SyntaxDocument[inner_pair]; open="{", close="}", sep=", ", indentation=1)
+outer = SyntaxNode(SyntaxDocument[inner_pair]; open="{\n", close="\n}", sep=",\n", indentation=1)
 _check_roundtrip("nested key/value", outer, _S2T.SyntaxCompoundToText())
 end # let
 
@@ -250,9 +330,10 @@ iomap_e = print_document(pipe_on, empty_node)
 @test iomap_e.marker_index == 0
 
 # Offset shift: the marker adds exactly its length to the subtree, the marker
-# range maps to a projection-introduced position, and the round-trip identity
-# `map_reference_backward ∘ _syntax_to_flat` still holds with the marker on.
-@test _S2T._subtree_len(node, p_on, 0) == _S2T._subtree_len(node, p_off, 0) + 1
+# range maps to a projection-introduced position, and the round trip of the
+# backward and the forward map still holds with the marker on.
+@test get_flat_length(print_document(pipe_on, node).output) ==
+      get_flat_length(print_document(pipe_off, node).output) + 1
 
 _pos_to_selection(iomap, k::Int) = map_reference_backward(iomap.projection, iomap,
     ConcreteReference(RangeReferenceStep(k, k), EmptyReference()))
@@ -266,10 +347,9 @@ sel0 = _pos_to_selection(iomap_pon, 0)
 sel1 = _pos_to_selection(iomap_pon, 1)
 @test sel1.head isa FieldReferenceStep && sel1.head.name == "open"
 
-flat_len = _S2T._subtree_len(node, p_on, 0)
-for k in 0:flat_len
+for k in 0:get_flat_length(iomap_pon.output)
     sel = _pos_to_selection(iomap_pon, k)
-    @test _S2T._syntax_to_flat(node, sel, p_on, 0) == k
+    @test _S2T._text_side_flat(map_reference_forward(iomap_pon.projection, iomap_pon, sel)) == k
 end
 end # let
 
@@ -302,15 +382,14 @@ _pos_to_selection(iomap, k::Int) = map_reference_backward(iomap.projection, ioma
     ConcreteReference(RangeReferenceStep(k, k), EmptyReference()))
 
 iomap_c = print_document(pipe, node)   # node.collapsed = true above
-flat_len = _S2T._subtree_len(node, p, 0)
-for k in 0:flat_len
+for k in 0:get_flat_length(iomap_c.output)
     sel = _pos_to_selection(iomap_c, k)
-    @test _S2T._syntax_to_flat(node, sel, p, 0) == k
+    @test _S2T._text_side_flat(map_reference_forward(iomap_c.projection, iomap_c, sel)) == k
 end
 # The ellipsis (position after the open delimiter) has no source coordinate.
 @test _pos_to_selection(iomap_c, 1).head isa ProjectionReferenceStep
 # `.children[i]…` input references have no image while collapsed.
-@test _S2T._syntax_to_flat(node, (@reference(node, children[1].value{0})), p, 0) == -1
+@test map_reference_forward(iomap_c.projection, iomap_c, @reference(node, children[1].value{0})) === nothing
 
 # Toggling back restores the expanded output byte-for-byte.
 node.collapsed = false
@@ -325,9 +404,9 @@ empty_node.collapsed = true
 react_node = SyntaxNode(SyntaxDocument[SyntaxLeaf("x")]; open="[", close="]", sep=", ")
 out = print_document(pipe, react_node).output
 _ = get_flat_string(out)                                    # force the spans cell
-@test is_cell_up_to_date(getfield(out.elements, :elements))
+@test is_cell_valid(getfield(out.elements, :elements))
 react_node.collapsed = true
-@test !is_cell_up_to_date(getfield(out.elements, :elements))
+@test !is_cell_valid(getfield(out.elements, :elements))
 @test get_flat_string(out) == "[…]"
 end # let
 
@@ -341,7 +420,7 @@ node = SyntaxNode(
     SyntaxDocument[
         SyntaxLeaf("hello"; open="\"", close="\""),
         SyntaxLeaf("world"; open="\"", close="\""),
-    ]; open="[", close="]", sep=", ", indentation=1)
+    ]; open="[\n", close="\n]", sep=",\n", indentation=1)
 
 # Drive the SyntaxCompoundToText reader with `sel` as the current selection.
 read_key(sel, key, mods=ModifierKeys()) = begin
@@ -487,10 +566,10 @@ end
     p = _S2T.SyntaxCompoundToText()
     iomap = print_document(s2st, node)
     @test get_flat_string(iomap.output) == "(x,ab)"
-    for k in 0:_S2T._subtree_len(node, p, 0)
+    for k in 0:get_flat_length(iomap.output)
         sel = map_reference_backward(iomap.projection, iomap,
                   ConcreteReference(RangeReferenceStep(k, k), EmptyReference()))
-        @test _S2T._syntax_to_flat(node, sel, p, 0) == k
+        @test _S2T._text_side_flat(map_reference_forward(iomap.projection, iomap, sel)) == k
     end
 end
 
@@ -499,13 +578,13 @@ end
     # off the child's IoMap. A concatenation in between must still report them, or
     # everything beneath it silently stops being re-indented on splice.
     leaf   = SyntaxLeaf("k")
-    inner  = SyntaxNode(SyntaxDocument[leaf]; open="[", close="]", indentation=1)
+    inner  = SyntaxNode(SyntaxDocument[leaf]; open="[\n", close="\n]", indentation=1)
     outer  = SyntaxNode(SyntaxDocument[SyntaxConcatenation(SyntaxDocument[inner])];
-                        open="{", close="}", indentation=1)
+                        open="{\n", close="\n}", indentation=1)
     through = get_flat_string(print_document(s2st, outer).output)
     # The same tree with the concatenation removed must render identically —
     # a concatenation contributes no characters of its own.
-    direct = SyntaxNode(SyntaxDocument[inner]; open="{", close="}", indentation=1)
+    direct = SyntaxNode(SyntaxDocument[inner]; open="{\n", close="\n}", indentation=1)
     @test through == get_flat_string(print_document(s2st, direct).output)
     @test occursin("\n    k", through)   # k is indented twice: once per indenting node
 end
@@ -601,17 +680,17 @@ end
     p = _S2T.SyntaxCompoundToText()
     iomap = print_document(s2st, node)
     @test get_flat_string(iomap.output) == "(x,a|b)"
-    for k in 0:_S2T._subtree_len(node, p, 0)
+    for k in 0:get_flat_length(iomap.output)
         sel = map_reference_backward(iomap.projection, iomap,
                   ConcreteReference(RangeReferenceStep(k, k), EmptyReference()))
-        @test _S2T._syntax_to_flat(node, sel, p, 0) == k
+        @test _S2T._text_side_flat(map_reference_forward(iomap.projection, iomap, sel)) == k
     end
 end
 
 @testset "separation inside an indentation-bearing node" begin
     # SQL's `_comma_body` shape: a separated list laid out on indented lines.
     body = SyntaxSeparation(SyntaxDocument[SyntaxLeaf("1"), SyntaxLeaf("2")]; separator=",")
-    node = SyntaxNode(SyntaxDocument[body]; open="[", close="]", indentation=1)
+    node = SyntaxNode(SyntaxDocument[body]; open="[\n", close="\n]", indentation=1)
     @test occursin("\n  1,2", get_flat_string(print_document(s2st, node).output))
 end
 
@@ -666,9 +745,12 @@ end
     bare = print_document(s2st, SyntaxDelimitation(leaf)).output
     @test _s2t_span_texts(bare) == ["x"]
 
-    # The indentation wrapper puts its child on its own indented line.
-    ind = print_document(s2st, SyntaxIndentation(leaf; indentation=1)).output
-    @test occursin("\n  x", get_flat_string(ind))
+    # The indentation wrapper moves the lines that a break inside it starts, and
+    # makes no break of its own.
+    @test get_flat_string(print_document(s2st, SyntaxIndentation(leaf; indentation=1)).output) == "x"
+    lines = SyntaxSeparation(SyntaxDocument[SyntaxLeaf("x"), SyntaxLeaf("y")]; separator="\n")
+    ind = print_document(s2st, SyntaxIndentation(lines; indentation=1)).output
+    @test get_flat_string(ind) == "x\n  y"
 end
 
 @testset "only a collapsible wrapper can collapse" begin
@@ -695,10 +777,10 @@ end
     p = _S2T.SyntaxCompoundToText()
     iomap = print_document(s2st, node)
     @test get_flat_string(iomap.output) == "[x,(ab)]"
-    for k in 0:_S2T._subtree_len(node, p, 0)
+    for k in 0:get_flat_length(iomap.output)
         sel = map_reference_backward(iomap.projection, iomap,
                   ConcreteReference(RangeReferenceStep(k, k), EmptyReference()))
-        @test _S2T._syntax_to_flat(node, sel, p, 0) == k
+        @test _S2T._text_side_flat(map_reference_forward(iomap.projection, iomap, sel)) == k
     end
 end
 
@@ -706,37 +788,29 @@ end
     text(d) = get_flat_string(print_document(s2st, d).output)
     kids() = SyntaxDocument[SyntaxLeaf("1"), SyntaxLeaf("2")]
 
-    # A delimited, indented, separated list, stacked out of three wrappers.
-    stacked = SyntaxDelimitation(
+    # A delimited, indented, separated list, stacked out of wrappers. The breaks
+    # are text, and the indentation moves the lines that the breaks inside it
+    # start, so the break after `[` is inside the indentation.
+    stacked(separator) = SyntaxDelimitation(
                   SyntaxIndentation(
-                      SyntaxSeparation(kids(); separator=","),
+                      SyntaxDelimitation(SyntaxSeparation(kids(); separator); opening_delimiter = "\n"),
                       indentation = 1);
-                  opening_delimiter = "[", closing_delimiter = "]")
-    @test text(stacked) == "[\n  1,2\n]"
+                  opening_delimiter = "[", closing_delimiter = "\n]")
+    @test text(stacked(",")) == "[\n  1,2\n]"
 
-    # ── The stack is NOT a decomposition of the combined node ────────────────────
-    #
-    # `SyntaxNode`'s indentation puts EACH CHILD on its own indented line, emitting
-    # `sep, newline, indent, child` — separator and line chrome interleaved, by one
-    # node. `SyntaxIndentation` has exactly one child and indents THAT ONE THING.
-    # Split across two nodes the two spans cannot interleave: whichever wrapper is
-    # outer emits its spans outside the other's. So neither stacking order reproduces
-    # it, and that is inherent, not a bug.
-    #
-    # Which is the whole point of keeping the combined type: a per-child indented,
-    # separated list IS the combination fitting, and `SyntaxNode` is the right tool
-    # for it. The wrappers are for where it does not fit.
-    combined = SyntaxNode(kids(); open="[", close="]", sep=",", indentation=1)
+    # With a break in the separator, the stack lays out what the combined node does.
+    combined = SyntaxNode(kids(); open="[\n", close="\n]", sep=",\n", indentation=1)
     @test text(combined) == "[\n  1,\n  2\n]"
-    @test text(stacked) != text(combined)
+    @test text(stacked(",\n")) == text(combined)
 
-    # The other stacking order puts the separator on a line of its own — also not it.
+    # An indentation around each child indents nothing: each child starts on the
+    # line that the break before it made, and holds no break of its own.
     other = SyntaxDelimitation(
                 SyntaxSeparation(SyntaxDocument[SyntaxIndentation(SyntaxLeaf("1"); indentation=1),
                                                 SyntaxIndentation(SyntaxLeaf("2"); indentation=1)];
                                  separator=",");
                 opening_delimiter="[", closing_delimiter="]")
-    @test text(other) == "[\n  1\n,\n  2\n]"
+    @test text(other) == "[1,2]"
 end
 
 @testset "tree navigation walks into and out of a wrapper" begin

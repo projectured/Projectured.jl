@@ -1,6 +1,6 @@
 name = "ProjecturedFormulaExample"
 uuid = "e12fc55c-24d9-46de-99d8-255849114e23"
-version = "0.1.1"
+version = "0.1.2"
 authors = []
 
 [deps]
@@ -14,12 +14,12 @@ ProjecturedPlatform = "b21cb890-5227-4e91-ae0e-8ab4d844f9f7"
 ProjecturedPlatformExample = "5049da3f-9201-47d6-95d8-24bb99c7096c"
 
 [compat]
-ProjecturedConsole = "0.1.1"
-ProjecturedFormula = "0.1.1"
-ProjecturedJulia = "0.1.1"
-ProjecturedKernel = "0.1.1"
-ProjecturedKernelExample = "0.1.1"
-ProjecturedPDF = "0.1.1"
-ProjecturedPlatform = "0.2.0"
-ProjecturedPlatformExample = "0.1.1"
+ProjecturedConsole = "0.1.2"
+ProjecturedFormula = "0.2.0"
+ProjecturedJulia = "0.1.2"
+ProjecturedKernel = "0.2.0"
+ProjecturedKernelExample = "0.1.2"
+ProjecturedPDF = "0.1.2"
+ProjecturedPlatform = "0.3.0"
+ProjecturedPlatformExample = "0.1.2"
 julia = "1.12"

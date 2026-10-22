@@ -2,28 +2,30 @@
 
 > **Kind:** design · **Status:** current · **Stands on:** [agent.md](../../kernel/agent.md), [assistant.md](../../platform/assistant/assistant.md), [mcp.md](../mcp/mcp.md)
 
-`ProjecturedACP` connects the assistant to an external agent that speaks the Agent Client Protocol (ACP), version 1. Its built-in agent runs Claude Code: the package [ClaudeCodeACP.jl](https://github.com/projectured/ClaudeCodeACP.jl) runs in the process of the editor and starts the `claude` program that the person installed. Another agent, such as the adapter `claude-agent-acp`, runs in a child process. The agent owns its model, its tools and its history. It is an opt-in package that implements the external direction of the `agent` layer of the kernel. This document says how the package starts the agent, how it translates the messages of the agent into the events of the kernel, how a permission request reaches a person, and why the package is built so.
+`ProjecturedACP` connects the assistant to an external agent that speaks the Agent Client Protocol (ACP), version 1. Its built-in agent runs Claude Code: the package [ClaudeCodeACP.jl](https://github.com/projectured/ClaudeCodeACP.jl) runs in the process of the editor and starts the `claude` program that the person installed. Another agent, such as the adapter `claude-agent-acp`, runs in a child process. The agent owns its model, its tools and its history. It is an opt-in package that implements the external direction of the `agent` layer of the kernel. This document says how the package starts the agent, how it translates the messages of the agent into the events of the kernel, where an event goes during a prompt and between two prompts, how a permission request reaches a person, and why the package is built so.
 
 ## How it works
 
 ### The seam
 
-The kernel declares seven generics for a connection in `source/kernel/agent/AgentConnectionInterface.jl`; [agent.md](../../kernel/agent.md) describes them. The package adds a method to each one for `AcpConnection`.
+The kernel declares the generics of a connection in `source/kernel/agent/AgentConnectionInterface.jl`; [agent.md](../../kernel/agent.md) describes them. The package adds a method to each one for `AcpConnection`.
 
 | Generic | What the ACP connection does |
 | --- | --- |
 | `make_agent_connection(::Val{:acp}; command, environment, directory, session_meta, streams)` | makes an `AcpConnection`; it starts nothing |
 | `start_agent_connection!` | starts the process of the agent and sends `initialize` with `protocolVersion: 1` |
-| `open_agent_session!` | with a `session_id`, sends `session/resume` when the answer to `initialize` has `sessionCapabilities.resume`, and returns that id; else, or when the answer to the resume is an error, sends `session/new`. Either request goes with the working directory, the MCP servers and, in the `_meta`, the `instructions` as `claudeCode.options.systemPrompt.append`, the key where the Claude agents of ACP read an addition to the system prompt; gives the `configOptions` of the answer to `on_event`, and returns the session id |
+| `open_agent_session!` | with a `session_id`, sends `session/resume` when the answer to `initialize` has `sessionCapabilities.resume`, and returns that id; else, or when the answer to the resume is an error, sends `session/new`. Either request goes with the working directory, the MCP servers and, in the `_meta`, the `instructions` as `claudeCode.options.systemPrompt.append`, the key where the Claude agents of ACP read an addition to the system prompt; gives the `configOptions` of the answer to `on_event`, keeps `events`, the queue of the session, and returns the session id |
 | `send_agent_prompt!` | sends `session/prompt` and waits for its answer; returns the stop reason |
 | `cancel_agent_prompt!` | sends the notification `session/cancel` and answers each waiting request as cancelled |
+| `cancel_agent_subagent!` | sends the notification `session/cancel` with the session id of the child session of the subagent |
+| `stop_agent_background_task!` | sends the extension request `_session/stop_background_task {sessionId, taskId}`; answers `true` when the answer is an object, `false` for an error answer |
 | `set_agent_option!` | sends `session/set_config_option` and gives the options of the answer to `on_event` |
 | `close_agent_session!` | sends `session/close`, when the agent lists that capability |
 | `stop_agent_connection!` | ends the agent and its process group |
 
 `command` is the program of the agent and its arguments, such as `["claude-agent-acp"]`. An empty `command` starts the built-in agent: `ClaudeCodeACP.serve_agent` on a task of this process, on two `Base.BufferStream`s, so the connection talks to it as to any other agent. The close of the connection ends the input of the built-in agent, which then ends each of its sessions and their `claude`. `environment` adds variables to the environment of the agent. `session_meta` is the `_meta` object that `session/new` sends, for an agent that reads options there: a dictionary, or its JSON text. `streams` is a pair of `IO` objects that replaces the process; a test uses it for an agent in the same process.
 
-The capabilities of `initialize` give the agent no file access and no terminal: `fs.readTextFile`, `fs.writeTextFile` and `terminal` are `false`. A request for one of them gets the error "method not found". The client names itself `projectured` and sends its package version. When the agent answers with another protocol version, `start_agent_connection!` stops the agent and throws an error.
+The capabilities of `initialize` give the agent no file access and no terminal: `fs.readTextFile`, `fs.writeTextFile` and `terminal` are `false`. A request for one of them gets the error "method not found". They take the work of an agent: `subagents: {}`, `plan: {}` and `session: {notices: {}, compaction: {}}`, which are unstable types of the schema, and `_meta.backgroundTasks: {}` for the extension notification `_session/background_task`. An agent sends these updates only to a client that advertises them. The client names itself `projectured` and sends its package version. When the agent answers with another protocol version, `start_agent_connection!` stops the agent and throws an error.
 
 **The registration is a method.** The package adds `make_agent_connection(::Val{:acp}; …)` and has no `__init__`. `get_agent_connection_names()` reads the loaded connections from the method table, so `:acp` exists exactly while the package is loaded. Without the package, `make_agent_connection(:acp)` throws an error that lists the loaded kinds and says to load the package.
 
@@ -42,6 +44,10 @@ The end of the agent process closes the connection, so a request does not wait f
 
 The requests that the package sends are the typed requests of `AgentClientProtocol`, such as `PromptRequest`. The translation of the updates reads the JSON object of each update with the defaults of its fields, so a field that an agent leaves out gives no error.
 
+### A picture in a prompt
+
+`_make_prompt_blocks(connection, prompt)` writes an `LlmImage` as `ACP.ImageContent(data = base64, mime_type)` when the agent advertises `promptCapabilities.image` (`_has_prompt_capability`). Otherwise it writes the text line "(A picture is left out: the agent takes no pictures.)". A prompt and a steer (`_session/steering`) both use it. ClaudeCodeACP 0.1.7 advertises `image = true` and gives Claude a png, jpeg, gif or webp picture as an image block of the user message. Another type gets `INVALID_PARAMS`.
+
 ### The translation of an update
 
 The agent reports its work as `session/update` notifications. `AcpUpdate.jl` translates each one into the events of the kernel, so no caller reads the wire format.
@@ -51,34 +57,99 @@ The agent reports its work as `session/update` notifications. `AcpUpdate.jl` tra
 | `agent_message_chunk` | `LlmTextStart` at the first chunk, then `LlmTextDelta` |
 | `agent_thought_chunk` | `LlmThinkingStart` at the first chunk, then `LlmThinkingDelta` |
 | `tool_call`, `tool_call_update` | one `AgentToolCallUpdate` |
-| `plan` | one `AgentPlanUpdate` with the whole plan |
+| `plan` | one `AgentPlanUpdate` with the whole plan and the empty id |
+| `plan_update` | one `AgentPlanUpdate` with the `planId`: its `items` give `entries`, its `markdown` gives `markdown`, its `file` gives `uri` |
+| `plan_removed` | one `AgentPlanUpdate` with the `planId` and `is_removed` |
+| `notice` | one `AgentNoticeUpdate` |
+| `compaction_update` | one `AgentCompactionUpdate`; its `summary` blocks are its text, one on each line, else the summary that its chunks gave |
+| `compaction_summary_chunk` | one `AgentCompactionUpdate` whose summary has the text of the chunk on a new line |
+| `subagent_update` | one `AgentSubagentUpdate`; the connection keeps its child session |
+| a `session/update` of a child session | each of its events, as the `event` of an `AgentSubagentUpdate` of the child, one level for each parent |
+| `user_message_chunk` of a child session | an `LlmMessage(:user, …)`, the prompt of the subagent |
+| `session_message`, `session_message_chunk` to a child session | an `LlmMessage(:user, …)` of the child, as its prompt |
+| `session_info_update` | one `AgentSessionInfoUpdate` with its `title` and `_meta.processId` |
+| the notification `_session/background_task` | one `AgentBackgroundTaskUpdate` |
 | any other kind | no event |
 
 ACP sends text with no frame around it, and the events of the kernel frame a block with a start and a stop. So an `AcpTurn` keeps the kind of the open block and the `messageId` of the message. A chunk of another kind or of another `messageId`, a new tool call and a plan close the open block first. Only the reader task changes this state. A permission request arrives on a task of its own and leaves it as it is; the assistant closes its own open block before it draws the card. The end of the prompt closes the last block. An `available_commands_update` becomes an `AgentCommandsUpdate`, with the `hint` of the `input` of each command as its `input_hint`.
 
-**The usage and the title.** A `usage_update` becomes an `AgentUsageUpdate` with `used`, `size`, and the `amount` and `currency` of its optional `cost`. A `session_info_update` becomes an `AgentSessionInfoUpdate` with its `title`. Between two prompts, the connection keeps the latest update of each of the session kinds — options, usage, title, commands — in `waiting_session_events`, and gives them to the next prompt first, under the lock that registers the prompt, so a newer update comes after them.
+**The usage and the title.** A `usage_update` becomes an `AgentUsageUpdate` with `used`, `size`, and the `amount` and `currency` of its optional `cost`. A `session_info_update` becomes an `AgentSessionInfoUpdate` with its `title`, and with the integer of its `_meta.processId` as `process_id`.
 
 **The options of a session.** The connection reads the `configOptions` of `session/new`, of the answer to `session/set_config_option` and of a `config_option_update`, and keeps the last ones of each session, also outside a prompt. A group of values shows as values. A `current_mode_update` names only the new mode, so the connection answers it as the kept options with the option of the category `mode` set to it. Each of these updates reaches the prompt that runs as an `AgentOptionsUpdate`. The connection keeps no `on_event` of `open_agent_session!` or `set_agent_option!` after the call.
 
-An `AgentToolCallUpdate` takes its `name` from the field `name`, or else from `_meta.claudeCode.toolName`, where `claude-agent-acp` puts it. The `output` is the text of the content of the call. A diff becomes its path and its lines marked `-` and `+`.
+An `AgentToolCallUpdate` takes its `name` from the field `name`, or else from `_meta.claudeCode.toolName`, where `claude-agent-acp` and `claude-code-acp` put it. The `output` is the text of the content of the call. A diff becomes its path and its lines marked `-` and `+`. When the content is one `resource` block, the `output` is its `text`, and `output_mime_type` and `output_uri` are its `mimeType` and its `uri`. `claude-code-acp` gives the clean text of a file that `Read` read so, with the media type of its extension.
+
+### Where an event goes
+
+A connection keeps no `on_event` of a session, because the caller captures the editor in it. So an event of a session goes to one of two places:
+
+- **During a prompt**, to the `on_event` of `send_agent_prompt!`, through the outbox of the prompt: one task gives the events to `on_event` in their order, with no lock held, so an `on_event` that waits for the editor never holds the reader. The prompt answers after each of its events reached `on_event`.
+- **Between two prompts**, to the `AgentEventQueue` that `open_agent_session!` took as `events`, after the same translation. The caller drains the queue. A session that opened with no queue drops these events. The options of a session stay current in the connection in either case, for `set_agent_option!` and a `current_mode_update`.
+
+A prompt takes the events of its session only after the last event of the time before it is in the queue. So a caller that puts the events of `on_event` into the same queue has all the events of the session in their order. A frame passes each event on at once, under the lock: its `on_event` puts it into a queue or wraps it for its parent, and never waits. So an update that comes after the answer of a prompt can reach the queue before the last events of that prompt reach `on_event`, while its outbox still delivers.
+
+The text of a session between two prompts has its own frame, as an `AcpTurn` in `session_frames`, so `claude` that starts a turn by itself after a background task ends gives framed text to the queue. The start of the next prompt closes that frame, and its last stop goes to the queue. A frame that goes for another reason also ends its open block in its queue first: at the close of its session, at a second open of the same id, and at the stop of the agent, which forgets every session of the agent.
+
+An agent can send an update of a new session just after its answer to `session/new`, before the call of `open_agent_session!` has the id; `claude-agent-acp` sends its commands so. While an open waits for its answer, an update of a session with no queue and no parent goes to one frame for that id, in `opening_frames`, whose events wait in `opening_events`. The open puts the events into the queue of its session when it has the id, and hands the frame to the session, so the text keeps one block. The end of the last open drops the rest.
+
+### The work of an agent
+
+**Subagents.** A `subagent_update` on a session announces or changes a child session, the session of a subagent. The connection keeps the parent of each child in `session_parents`. A `session/update` whose `sessionId` is a child goes, after its translation, to its parent as the `event` of an `AgentSubagentUpdate` of the child, and on up to the session that the client opened, one level for each parent; from there it goes where an event of that session goes. Each child has its own `AcpTurn`, so the frame of its text is its own. An idle state of a child closes the block that the child left open. The `user_message_chunk` of a child is the prompt of its subagent, an `LlmMessage` of the role `:user`; the chunk of a session of the client is the prompt that the client sent, and gives no event. A close of a session forgets its children.
+
+A child whose state turns idle has ended its work. After its last events, the connection forgets its parent, its frame and its options, and keeps only its parent in `finished_parents`, so a late update reaches the session: `claude-code-acp` sends the summary of a subagent after its idle state. Each session of the client keeps at most `FINISHED_SUBAGENT_LIMIT` (256) such children, in `finished_children`, and its close forgets them. A late update of a finished child adds no entry; a state of work, `running` or `requires_action`, makes it a child again, as ACP lets an agent use an idle child again. A `subagent_update` on a session that the connection does not know, such as one that closed, adds nothing. A `subagent_update` that names its own session, or one of the parents of that session, as its child would make the updates go round; the connection ignores it and logs a warning once.
+
+The `state` of an `AgentSubagentUpdate` comes from `state.state` (`running`, `idle`, `requires_action`, `unknown`), its `stop_reason` from `state.stopReason`, and `can_cancel` from `capabilities.cancel`. A key that the update leaves out gives `nothing`, which keeps the value before. A `null` clears: a title or a description becomes empty, a state `:unknown`, and `can_cancel` `false`.
+
+**Messages between sessions.** A `session_message` or a `session_message_chunk` whose `recipientSessionId` is a child session is a prompt of its subagent, an `LlmMessage` of the role `:user` of the child, one for each update. A chunk that leaves out its recipient continues the last message of its session with the same `messageId`. A message to a session of the client, to a session that the connection does not know, or to none, is dropped: the client sends its own prompts, and the kernel has no event for a message between two sessions.
+
+**Requests of a child.** A `session/request_permission` or an `elicitation/create` of a child session goes where a request of the session of the client goes, as the event of an `AgentSubagentUpdate` of each child on the way. The `reply` of the request works the same inside the update.
+
+**Compactions.** The connection keeps the summary of a compaction while it is in progress, in `compaction_summaries`. A `compaction_summary_chunk` adds the text of its block on a line of its own, and gives an `AgentCompactionUpdate` with the summary so far. A `compaction_update` without a `summary` carries the summary that the chunks gave. The end of the compaction, the close of its session and the stop of the agent forget it.
+
+**Background tasks.** ACP has no type for them, so the extension notification `_session/background_task` carries them, with the params `{sessionId, taskId, kind, title, status, startTime, canStop, toolCallId?, subagentId?, outputUri?, summary?, endTime?}`. The first notification of a task carries its whole state, and a later one only the keys that changed, so an absent key is `nothing`. The times come in milliseconds since 1970, and the event holds seconds. A `null` clears a text, which becomes empty: the title, the tool call, the subagent, the output and the summary. The kernel has no empty value for the kind, the status, the times and `canStop`, so a `null` there keeps the value before. The handler takes it with the method of `ACP.receive_notification` for a method that the protocol does not name, and sends it where an update of its session goes.
+
+**The process of a session.** `claude-code-acp` sends the process id of the `claude` of a session in `session_info_update._meta.processId`, in the first prompt after each start of `claude`. An agent in a child process (`command` not empty) gets the id of that process, once, as `AgentSessionInfoUpdate(nothing; process_id)` at the head of the queue of each session that opens. The built-in agent runs in this process, so it gets an id only from `_meta`.
+
+### The keys of `_meta.claudeCode`
+
+ACP has no field for some data that a Claude agent of ACP sends, and the agent puts it in `_meta.claudeCode`. The package reads these keys there, and no other:
+
+| Object | Key | Gives |
+| --- | --- | --- |
+| a tool call | `toolName` | `name`, when the call has no field `name` |
+| a plan entry | `taskId` | `id` of the `AgentPlanEntry` |
+| | `description` | `description` |
+| | `activeForm` | `active_title` |
+| | `blockedBy` | `blocked_by` |
+| a `subagent_update` | `usage.totalTokens` | `token_count`; else the `usage.totalTokens` of an idle state |
+| | `usage.toolUses` | `tool_call_count` |
+| | `usage.durationMs` | `duration`, in seconds |
+| | `lastToolName` | `last_tool` |
+| | `summary` | `summary` |
 
 ### The permission request
 
 A `session/request_permission` request of the agent waits on a task of its own. The method of `answer_request` for `AcpClientHandler` does this:
 
-1. It looks for the prompt that runs in the session. A request outside a prompt is answered as cancelled.
+1. It looks for where an update of the session goes: the prompt that runs in the session of the client, else its queue between two prompts. A request of a child session goes there as the event of an `AgentSubagentUpdate` of each child on the way. A request of a session with no prompt and no queue is answered as cancelled.
 2. It makes an `AgentPermissionRequest` with the tool call, the options of the agent and a `reply` function.
-3. It sends the request to `on_event` and waits on a channel.
+3. It sends the request to `on_event`, or puts it into the queue, and waits on a channel.
 4. The first call of `reply` puts the id of the chosen option, or `nothing`, into the channel, and answers `true`. A later call does nothing and answers `false`, so the assistant can show that an answer came after a cancel.
 5. The answer is `selected` with the option id, or `cancelled` for `nothing`.
 
-The wait has a bound. `cancel_agent_prompt!`, the end of the prompt and `stop_agent_connection!` each call `reply(nothing)` for every request that waits. So a request never waits after its turn. The agent can also withdraw one request with the notification `$/cancel_request` and its JSON-RPC id: the handler gives `reply(nothing)` to `add_cancel_callback!` of the request, and the agent gets the valid answer `cancelled`. A request that the agent withdrew before the handler shows it does not reach the person.
+The wait has a bound. `cancel_agent_prompt!`, the end of the prompt, `close_agent_session!` and `stop_agent_connection!` each call `reply(nothing)` for every request that waits. A request that waits in the queue waits on in the next prompt, so the end of that prompt ends its wait. So a request never waits after its turn. The agent can also withdraw one request with the notification `$/cancel_request` and its JSON-RPC id: the handler gives `reply(nothing)` to `add_cancel_callback!` of the request, and the agent gets the valid answer `cancelled`. A request that the agent withdrew before the handler shows it does not reach the person.
 
 A worked example: the agent asks to run `execute_julia_code` with the options `allow_once` and `reject_once`. The assistant draws a card with two buttons. The person clicks the first one, `reply("allow_once")` runs, and the agent gets `{"outcome": {"outcome": "selected", "optionId": "allow_once"}}`. If the person presses Escape before the click, the turn is cancelled, `reply(nothing)` runs, and the agent gets `{"outcome": {"outcome": "cancelled"}}`.
 
 ### A sign-in that is missing
 
-`session/new` can answer the error code `-32000`. The package then throws an error with the title of the agent and the way to sign in that the agent gave in `initialize`, for example "Run `claude /login` in the terminal". The package starts no sign-in itself.
+`session/new`, `session/resume` and `session/prompt` can answer the error code `-32000`. The package then throws an `AgentSignInException` with the title of the agent, the way to sign in that the agent gave in `initialize` as a sentence, for example "Run `claude /login` in the terminal", and one `AgentSignInMethod` for each method of the type `terminal`. The command of a method is the command of the agent with the `args` of the method added and its `env` over the environment of the agent, in the folder of the agent. The built-in agent runs in this process and has no command line. Its program answers the argument `--login` with the command of `ClaudeCodeACP.make_login_command()`, `claude auth login`, so that command stands for its method `claude-login`. The client says in `initialize` that it runs a sign-in in a terminal (`clientCapabilities.auth.terminal`). The package starts no sign-in itself.
+
+`has_agent_sign_out` answers whether the agent advertises `agentCapabilities.auth.logout`, and `sign_out_agent!` then sends `logout`.
+
+### A question in a form
+
+The client advertises `clientCapabilities.elicitation.form`. An `elicitation/create` of the mode `form` becomes an `AgentQuestionRequest`, which goes where a permission request goes. Its fields come from the properties of the schema: a string with `oneOf`, `anyOf` or `enum` is a choice, an array of such items a choice of several, a number, an integer and a boolean are what they say, and any other property is a text. The library reads a JSON object into a `Dict`, which keeps no order, so the fields come in the order of their names. Values accept the form, `nothing` declines it, and a cancel of the turn or of the request cancels it. A form of a session with no prompt and no queue, and a request of the mode `url`, which the client does not offer, are cancelled.
 
 ## How it fits
 
@@ -86,7 +157,7 @@ The package depends on the kernel and on `AgentClientProtocol`, a package of its
 
 The assistant slice builds the connection and drives a turn; [assistant.md](../../platform/assistant/assistant.md) describes that. The agent reaches the tools of the editor through the MCP server of [mcp.md](../mcp/mcp.md). The assistant gives that server to `open_agent_session!` as an entry of `mcp_servers`: a named tuple `(name, url, headers)` that `get_agent_server_access` returns. The package renders each entry as `{"type": "http", "name", "url", "headers": [{"name", "value"}]}`. So ACP carries the conversation, and MCP carries the tools.
 
-The test double `ScriptedAgentConnection` is in `ProjecturedKernelExample`, and never in a package of the main stack. It implements the same seven generics, so a test of the assistant needs no agent and no ACP.
+The test double `ScriptedAgentConnection` is in `ProjecturedKernelExample`, and never in a package of the main stack. It implements the same generics and keeps the queue of each session, so a test of the assistant needs no agent and no ACP.
 
 ## Usage
 
@@ -107,10 +178,11 @@ The default `agent_command` is empty, which starts the built-in agent. It needs 
 - **The client handles no credential.** It sends no key and reads no token. The agent signs in with its own flow. The agent can send the custom notification `_auth/status_update` with the plan name and the account email; the client drops it unread, and the transport logs no content.
 - **ACP carries the conversation and MCP carries the tools.** The agent runs its own tools, but the edits of the editor must stay operations, so that undo works. The agent calls `execute_julia_code` and the other tools through the MCP server of the editor, which runs them on the editor task.
 - **The MCP server of a session has a secret.** The server runs Julia code. The assistant starts it on a free port with a random secret, and gives the secret to the agent in the `headers` of the session. Without the secret, any program on the machine could run code. See [mcp.md](../mcp/mcp.md).
-- **The agent is not an `Llm`.** `stream_turn` answers one round, and `run_turn!` then runs the tool calls. An ACP agent runs its own tools, so an `Llm` wrapper would run each call twice. The connection is a separate direction of the `agent` layer. See [plan/pending/the-assistant-talks-to-an-acp-agent.md](../../../../plan/pending/the-assistant-talks-to-an-acp-agent.md).
+- **The agent is not an `Llm`.** `stream_turn` answers one round, and `run_turn!` then runs the tool calls. An ACP agent runs its own tools, so an `Llm` wrapper would run each call twice. The connection is a separate direction of the `agent` layer. See [plan/done/the-assistant-talks-to-an-acp-agent.md](../../../../plan/done/the-assistant-talks-to-an-acp-agent.md).
 - **The package has no AutoIntegration trigger.** The owner chose that a person loads it by name. The backend `:acp` without the package gives an error that says which package to load.
 - **The package speaks version 1.** ACP v2 is a draft. The client sends `protocolVersion: 1` and stops when the agent answers another version.
-- **Options of one agent are data, not code.** The `_meta` of a session is a setting of the assistant, `agent_session_meta`, as JSON text. The package reads no option of a particular agent, except the name of a tool that `claude-agent-acp` gives in `_meta.claudeCode.toolName`.
+- **Options of one agent are data, not code.** The `_meta` of a session is a setting of the assistant, `agent_session_meta`, as JSON text. The package reads no option of a particular agent, except the keys of `_meta.claudeCode` that its table lists and `_meta.processId` of a `session_info_update`.
+- **One path for an event outside a prompt.** Every event between two prompts goes through the queue of its session, the options, the usage, the title and the commands as well as the work of a subagent or a background task. The queue holds no function, so the document that holds the connection does not hold the editor through it.
 - **The events are neutral.** The text and the thinking use `LlmTextDelta` and `LlmThinkingDelta`, so the handlers that draw a model answer also draw an agent answer.
 - **Each connection has its own process.** Two assistants run two agents. The process group end makes sure that no agent outlives its connection.
 
@@ -127,7 +199,7 @@ The design follows six rules. They are facts of the code, and they are not legal
 
 ## Tests
 
-- `test_acp()` runs the layering guard, `test_acp_update()`, `test_acp_connection()` and `test_acp_transport()`. It needs no network, no Node.js, no `claude` and no sign-in. The transport test also starts the built-in agent and checks that it answers `initialize`, which starts no `claude`.
+- `test_acp()` runs the layering guard, `test_acp_update()`, `test_acp_connection()` and `test_acp_transport()`. It needs no network, no Node.js, no `claude` and no sign-in. The transport test also starts the built-in agent and checks that it answers `initialize`, which starts no `claude`, and checks that a child agent gives the id of its process to the queue of a session.
 - `ClaudeCodeACP` has its own tests: a fake `claude` that plays recorded turns, driven through ACP.
 - `test/adapter/acp/FakeAcpAgent.jl` is a fake agent that runs in the test process, on two `Base.BufferStream`s. Each test gives it the handlers of its methods, so it can also ask the client a question.
 - `AgentClientProtocol` has its own tests: the types, a client against an agent in one process, a process, and the recorded messages of `claude-agent-acp`.
@@ -136,7 +208,8 @@ The design follows six rules. They are facts of the code, and they are not legal
 
 ## Limits
 
-- The package covers a turn and the state of a session: text, thinking, tool calls, the plan, permission requests, cancel, close, the config options (model, effort, mode), the slash commands, the usage meter and the session title. Saved sessions, the sign-in in a terminal, forms and an image in a prompt are not implemented.
+- The package covers a turn and the state of a session: text, thinking, tool calls, the plans, permission requests, cancel, close, the config options (model, effort, mode), the slash commands, the usage meter and the session title; and the work of an agent: its subagents, its background tasks, its notices, its compactions and the process of a session. Saved sessions, the sign-in in a terminal, forms and an image in a prompt are not implemented.
+- A message between two sessions shows only as the prompt of a child; one to the session of the client is dropped.
 - The thinking of Claude arrives only as a summary. The setting `showThinkingSummaries` of the built-in agent turns it on. For the adapter, the `_meta` of the session names it: `claude-agent-acp` spreads `_meta.claudeCode.options` of `session/new` over its own SDK options, and a recent model streams no text of its reasoning unless `thinking.display` is `"summarized"`. The assistant sends `{"claudeCode": {"options": {"thinking": {"type": "adaptive", "display": "summarized"}}}}` by default (`agent_session_meta`). Another agent ignores this `_meta`.
 - The prompt carries text only. `send_agent_prompt!` throws an `ArgumentError` for another kind of content.
 - No test runs the real `claude` or the adapter. A change that only the real agent would catch needs a live check with a signed-in Claude Code.

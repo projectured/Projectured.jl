@@ -51,6 +51,17 @@ end
 @test place_of("Fields")[2] < place_of("Columns")[2] < place_of("Rows")[2] < place_of("Values")[2]
 @test place_of("Fields")[2] <= place_of("quarter")[2] < place_of("Columns")[2]
 
+# A badge of a zone says what it holds, and how to move it.
+badges(field) = ProjecturedPlatformTest._find_widgets_below(
+    PivotModule._make_pivot_zone_row(PivotTableToWidget(), pivot, field), WidgetBadge)
+note_of(badge) = ProjecturedPlatformTest._read_widget_note(badge)
+dimension_note = note_of(first(badges("row_dimensions")))
+@test dimension_note.title == "region"
+@test first.(dimension_note.facts) == ["Distinct values", "Order", "Limit"]
+@test !isempty(dimension_note.keys) && dimension_note.hint !== nothing
+measure_note = note_of(first(badges("measures")))
+@test measure_note.title == "sum(amount)" && measure_note.facts == ["Aggregate" => "sum", "Column" => "amount"]
+
 # ── The headers ──────────────────────────────────────────────────────────────
 
 @test count(==("2024"), drawn) == 1 && count(==("2025"), drawn) == 1
@@ -110,6 +121,16 @@ replace_selection!(pivot, run_op.path)
 @test strip_reference_types(table.selection) ==
       ConcreteReference(FieldReferenceStep("row_headers"), ConcreteReference(RangeReferenceStep(2, 3),
           ConcreteReference(RangeReferenceStep(0, 1), EmptyReference())))
+
+# ── The part under the pointer lights in the table ──────────────────────────
+
+# The table holds the cell that the mouse target of the pivot names, so it lights
+# the row of that cell. A badge of the bar is no part of the table.
+replace_mouse_target!(pivot, cell_path(2, 1))
+@test strip_reference_types(table.mouse_target) == cell_path(2, 1)
+replace_mouse_target!(pivot, PivotModule._make_pivot_zone_item_path("row_dimensions", 1))
+@test table.mouse_target === nothing
+replace_mouse_target!(pivot, nothing)
 
 # ── A pivot with no dimension on an axis ────────────────────────────────────
 

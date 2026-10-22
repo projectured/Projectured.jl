@@ -2,8 +2,7 @@
     ConversationModule
 
 This slice of `ProjecturedPlatform` holds the evaluator documents — a code
-form paired with the result of evaluating it. Modeled on the Common Lisp
-ProjecturEd `evaluator.lisp`:
+form paired with the result of evaluating it:
 
 - `EvaluatorForm`     — one `form` (the code, e.g. a `JuliaDocument`) and its
                         `result` (a result document; `TextBlock` of the output
@@ -19,12 +18,14 @@ a fold of its own.
 module ConversationModule
 
 using ..AgentModule
+using ..BackendModule
 using ..CellModule
 using ..CollectionModule
 using ..DocumentModule
 using ..DomainModule
 using ..EventModule
 using ..EventModule
+using ..FaultModule
 using ..FocusModule
 using ..GestureBindingModule
 using ..GestureModule
@@ -38,30 +39,36 @@ using ..ProjectionAlgebraModule
 using ..ProjectionModule
 using ..ReferenceModule
 using ..SelectionModule
+using ..SerializationModule
 using ..StyleModule
 using ..TextModule
 using ..ToolModule
+using ..TooltipModule
 using ..WidgetModule
 
 # Imported to extend: this module adds a method to each of these.
 import ..CellModule: set_cell_computation!
 import ..DocumentModule: copy_document, get_document_title, has_document_duplicate
-import ..DomainModule: accepts_pasted_document, accepts_pasted_text,
-                       get_insertion_aliases
+import ..DomainModule: accepts_pasted_document, accepts_pasted_text, make_pasted_document_operation,
+                       get_insertion_aliases, get_document_decoration
 import ..FocusModule: is_selection_walk_stop
 import ..SelectionModule: has_dormant_selection
 import ..OperationModule: evaluate_operation
 import ..SerializationModule: pred_arguments, make_pred_document
 import ..ProjectionModule: get_projection_gesture_bindings
 import ..ProjectionModule: print_document, read_intent, map_reference_forward, map_reference_backward
+import ..TreeModule: get_tree_children_steps, format_tree_node_label
 
 export EvaluatorDocument, make_evaluator_result_text, get_evaluation_kind_label, find_form_document,
        get_evaluation_title, get_evaluation_section_labels, make_evaluator_arguments_text,
        ToggleEvaluatorSectionOperation, EvaluateSelectedFormOperation,
-       ToggleEvaluatorOptionOperation,
+       ToggleEvaluatorOptionOperation, StopEvaluatorFormOperation,
        RecallEvaluatorFormOperation
 export ConversationDocument, make_conversation_thinking_part
 export ConversationPermissionRequest, is_permission_request_open, answer_permission_request!
+export ConversationSignInRequest
+export ConversationQuestionForm, ConversationQuestionRequest, is_question_request_open, find_question_values,
+       answer_question_request!
 export ConversationTheme, ScaledConversationTheme
 export ConversationConversationToWidgetComposite,
        ConversationTurnToWidgetComposite,
@@ -78,7 +85,7 @@ export ConversationComposerToWidget, make_conversation_composer_projection,
        ComposerInputOperation, ComposerBackspaceOperation, ComposerNewlineOperation,
        ComposerInsertPartOperation, ComposerCommitChooserOperation,
        ComposerCommitSourceOperation, ComposerEvaluateOperation,
-       ComposerRevertOperation, ComposerSubmitOperation
+       ComposerRevertOperation, ComposerSubmitOperation, InsertDraftDocumentOperation, has_text_form
 export ConversationConversation, EvaluatorForm, EvaluatorToplevel, ConversationTurn,
        ConversationPart, ConversationDraft
 
@@ -90,5 +97,6 @@ include("ConversationToWidget.jl")
 include("EvaluatorToWidget.jl")
 include("ConversationEditor.jl")
 include("ConversationRows.jl")
+include("ConversationTree.jl")
 
 end # module

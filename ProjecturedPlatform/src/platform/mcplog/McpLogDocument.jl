@@ -42,8 +42,10 @@ end
 get_document_title(::McpLog) = "MCP log"
 get_insertion_aliases(::Type{McpLog}) = ["mcp log"]
 
-# A file keeps the size of the log and not the calls of a session.
-pred_arguments(log::McpLog) = (), Pair{Symbol,Any}[:capacity => log.capacity]
+# A file keeps that it shows the log of the session, and not the calls of a
+# session. A load gives the log of the session of its editor, and a load with no
+# editor a new log.
+pred_arguments(::McpLog) = (), Pair{Symbol,Any}[]
 
 """
     record_mcp_call!(log, entry) -> McpLog
@@ -62,14 +64,42 @@ function record_mcp_call!(log::McpLog, entry::McpCallEntry)
     log
 end
 
-# One log for the session, as there is one server for the editor.
-const _SESSION_MCP_LOG = McpLog()
-
 """
-    get_session_mcp_log() -> McpLog
+    get_session_mcp_log(; editor = find_evaluation_editor()) -> McpLog
 
-The one MCP log of the session. Every MCP log a person opens is this document.
+The MCP log of the session of `editor`: by default the editor of the evaluation,
+or of the loop that runs the calling code. Each editor has its own, which its
+[`McpLogFeed`](@ref) fills; with no editor, a new empty log, which nothing keeps
+and nothing fills. Every MCP log that a person opens in a window of the editor is
+this document.
 """
-get_session_mcp_log() = _SESSION_MCP_LOG
+get_session_mcp_log(; editor = find_evaluation_editor()) =
+    editor isa Editor ? get_session_document!(McpLog, editor, McpLog) : McpLog()
 
 make_insertion_document(::Type{McpLog}) = get_session_mcp_log()
+make_pred_document(::Type{<:McpLog}, positional, keywords) = get_session_mcp_log()
+
+# The log of the calls of a client fails while one of its calls was a fault.
+function get_document_decoration(log::McpLog)
+    faults = log.faults
+    tooltip = () -> _make_mcp_log_note(log)
+    faults == 0 && return DocumentDecoration(; icon = :plug, tooltip)
+    DocumentDecoration(; icon = :plug, conditions = [DocumentCondition(:failed)],
+                       counts = [DocumentCount(string(faults, faults == 1 ? " fault" : " faults"); role = :error)],
+                       tooltip)
+end
+
+# What a row of the log says when the pointer rests on it: what it holds, and how
+# many calls it kept, recorded and how many failed.
+_make_mcp_log_note(log::McpLog) =
+    TooltipNote(; title = "MCP log", text = "The calls that a client made to this editor.",
+                facts = ["Kept" => string(length(log.entries)), "Capacity" => string(log.capacity),
+                         "Recorded" => string(log.count), "Faults" => string(log.faults)])
+
+# The command of the log, with no key: a person runs it from the command palette
+# or the menu of its row, and the count of the faults goes back to zero.
+@gestures McpLog begin
+    nothing => "Clear the MCP log" =>
+        CompoundOperation(Any[ReplaceReferencedValueOperation(doc, "entries", CellVector()),
+                              ReplaceReferencedValueOperation(doc, "faults", 0)])
+end

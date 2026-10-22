@@ -149,6 +149,31 @@ end
 
 # ── The table ──────────────────────────────────────────────────────────────
 
+# The document that a tab shows, through the layers that only record its edits,
+# such as its history. The document of a file is the document, and not the data
+# in it.
+function _get_tab_document(tab::PaneTab)
+    document = tab.content
+    for _ in 1:_TAB_DOCUMENT_LAYERS
+        is_file_document(document) && return document
+        field = get_edited_field(document)
+        field === nothing && return document
+        document = getproperty(document, field)
+    end
+    document
+end
+
+const _TAB_DOCUMENT_LAYERS = 8
+
+# The document of the focused tab, as a new entry of the explorer of the editor.
+function _make_add_tab_operation(tree::PaneTree)
+    focus = get_pane_focus(tree)
+    focus === nothing && return nothing
+    (group, index) = focus
+    index == 0 && return nothing
+    AddExplorerEntryOperation(_get_tab_document(group.tabs[index]))
+end
+
 @gestures PaneTree begin
     KeyDown(:t; ctrl) => "Open a new tab" => _open_tab(doc)
     KeyDown(:w; ctrl) => "Close the focused tab" => _close_tab(doc)
@@ -160,20 +185,23 @@ end
     when(KeyDown(k; ctrl, alt), k in (:left, :right, :up, :down)) =>
         "Move the focus to the group in that direction" =>
             _move_focus(doc, k)
-    override(KeyDown(:tab; ctrl)) => "Focus the next group" => _traverse(doc, false)
-    override(KeyDown(:tab; ctrl, shift)) => "Focus the previous group" => _traverse(doc, true)
+    override(KeyPress('\t'; ctrl)) => "Focus the next group" => _traverse(doc, false)
+    override(KeyPress('\t'; ctrl, shift)) => "Focus the previous group" => _traverse(doc, true)
     KeyDown(:page_down; ctrl) => "Focus the next tab" => _sibling_tab(doc, 1)
     KeyDown(:page_up; ctrl) => "Focus the previous tab" => _sibling_tab(doc, -1)
     when(KeyDown(k; alt), k in (:left, :right, :up, :down)) =>
         "Walk from a whole tab to its neighbour or into its content" =>
             _walk_tab(doc, k)
     KeyDown(:f2;) => "Put the caret in the tab name" => _rename(doc)
+    KeyDown(:f; ctrl) => "Find in the collection that holds the selection" => _make_first_find(doc)
+    nothing => "Add the tab to the explorer" => _make_add_tab_operation(doc)
     # The four rules of a rename. Each answers `nothing` unless the caret is in a
     # name, so a key that means something else keeps meaning it — the rule body
-    # is the guard, because a `when(…)` guard sees only the event's own fields.
+    # is the guard, because a `when(…)` guard sees only the event's own fields. A
+    # name is one line, so it takes printable text only.
     KeyDown(:escape;) => "Leave the tab name" => _leave_title(doc)
-    KeyPress(c, t) => "Type in the tab name" => _title_edit(doc, KeyPress(c, t, _NO_MODIFIERS;
-                                                                          time = time()))
+    when(KeyPress(c, t), !any(iscntrl, t)) =>
+        "Type in the tab name" => _title_edit(doc, KeyPress(c, t, _NO_MODIFIERS; time = time()))
     KeyDown(:backspace;) =>
         "Delete backward in the tab name" => _title_edit(doc, KeyDown(:backspace, _NO_MODIFIERS;
                                                                       time = time()))

@@ -19,6 +19,28 @@ struct InsertionReflectionProbe <: Document
 end
 InsertionReflectionProbe() = InsertionReflectionProbe(nothing)
 
+# A place narrower than the JSON domain, as no domain has one yet: a JSON string or
+# number, and the intermediate states.
+@document struct _JsonNarrowPlace <: Document
+    value::Union{JsonString, JsonNumber, JsonInsertion, JsonNothing} = JsonNothing()
+end
+
+# An editor that draws a document through the natural syntax table, which holds every
+# loaded domain and the insertion of every domain.
+function _make_natural_insertion_editor(document)
+    table = RecursiveProjection(TypeDispatchingProjection(
+        make_natural_to_syntax_dispatch(; appearance = Appearance())...))
+    projection = ChainingProjection(table, RecursiveProjection(SyntaxToText()),
+                                    TextToGraphics(measure = FixedMeasure(8, 12, 4, 0)))
+    backend = HeadlessBackend()
+    editor = build_editor(document, projection; backend,
+                          devices = Device[Keyboard(), Mouse(), Display()],
+                          window = false, tabs = false, appearance = false, settings = false)
+    run_frame!(editor)
+    press!(event) = (push_event!(backend, event); run_frame!(editor))
+    (editor, press!)
+end
+
 
 # The colour of a role of the colour theme in the default appearance: the colour
 # of the typed text of an insertion while it names nothing (`text`), one thing
@@ -195,14 +217,13 @@ function test_document_insertion()
             DS = DomainModule
             # Every committed candidate must land with a usable cursor. The Text
             # container is the regression: without its `@insertion` factory the
-            # generic fallback built a bare `TextBlock()` — no spans, no selection —
+            # generic fallback built a bare `TextBlock()` — no lines, no selection —
             # and every character gesture declined for want of a caret, so the
             # freshly inserted text took no keystrokes.
             text = DS.make_insertion_document(TextBlock)
             @test length(text.elements) == 1
-            @test text.elements[1] isa TextString
-            @test string(getfield(text, :selection)[]) ==
-                  "::TextBlock.elements::CellVector[1]::TextString.content::String{0}::Position"
+            @test text.elements[1] isa TextLine
+            @test get_flat_caret(text, getfield(text, :selection)[]) == 0
             @test make_text_insert_operation(text, "a") isa ReplaceStringRangeOperation
         end
 
@@ -260,7 +281,7 @@ function test_document_insertion()
 
             # Enter commits via the factory → a JuliaInsertion.
             ins.selection = _ins_vpath(length(ins.value))
-            commit = read_intent(proj, iom, KeyDown(:return, ModifierKeys(); time = 0.0))
+            commit = read_intent(proj, iom, KeyPress('\n'; time = 0.0))
             @test commit isa CompoundOperation
             @test _written_doc(commit) isa JuliaInsertion
 
@@ -277,26 +298,26 @@ function test_document_insertion()
             ins = DocumentInsertion("jso")
             ins.selection = _ins_vpath(3)
             iom = print_document(proj, proj, ins, nothing)
-            @test read_intent(proj, iom, KeyDown(:return, ModifierKeys(); time = 0.0)) === nothing
-            tab = read_intent(proj, iom, KeyDown(:tab, ModifierKeys(); time = 0.0))
+            @test read_intent(proj, iom, KeyPress('\n'; time = 0.0)) === nothing
+            tab = read_intent(proj, iom, KeyPress('\t'; time = 0.0))
             @test tab isa ReplaceStringRangeOperation
             evaluate_operation((document = ins,), tab)
             @test ins.value == "json"
             # Fully ambiguous ("json" extends nowhere): Tab declines so the
             # gesture keeps propagating; Enter commits the exact alias.
             ins.selection = _ins_vpath(4)
-            @test read_intent(proj, iom, KeyDown(:tab, ModifierKeys(); time = 0.0)) === nothing
-            @test _written_doc(read_intent(proj, iom, KeyDown(:return, ModifierKeys(); time = 0.0))) isa JsonInsertion
+            @test read_intent(proj, iom, KeyPress('\t'; time = 0.0)) === nothing
+            @test _written_doc(read_intent(proj, iom, KeyPress('\n'; time = 0.0))) isa JsonInsertion
             # Unambiguous prefix: Tab accepts the whole remainder; Enter
             # commits without accepting first.
             ins.value = "json str"
             ins.selection = _ins_vpath(8)
-            tab2 = read_intent(proj, iom, KeyDown(:tab, ModifierKeys(); time = 0.0))
+            tab2 = read_intent(proj, iom, KeyPress('\t'; time = 0.0))
             evaluate_operation((document = ins,), tab2)
             @test ins.value == "json string"
-            @test _written_doc(read_intent(proj, iom, KeyDown(:return, ModifierKeys(); time = 0.0))) isa JsonString
+            @test _written_doc(read_intent(proj, iom, KeyPress('\n'; time = 0.0))) isa JsonString
             ins.value = "json str"
-            @test _written_doc(read_intent(proj, iom, KeyDown(:return, ModifierKeys(); time = 0.0))) isa JsonString
+            @test _written_doc(read_intent(proj, iom, KeyPress('\n'; time = 0.0))) isa JsonString
         end
 
         @testset "domain-constrained insertions (prefix-free)" begin
@@ -313,7 +334,7 @@ function test_document_insertion()
             leaf = jiom.output.content
             @test leaf.close.content == "ing"
             @test leaf.value.font_color == _insertion_role(:success_text)
-            commit = read_intent(jproj, jiom, KeyDown(:return, ModifierKeys(); time = 0.0))
+            commit = read_intent(jproj, jiom, KeyPress('\n'; time = 0.0))
             @test _written_doc(commit) isa JsonString
             # Escape aborts to the domain's own placeholder.
             esc = read_intent(jproj, jiom, KeyDown(:escape, ModifierKeys(); time = 0.0))
@@ -323,7 +344,7 @@ function test_document_insertion()
             xins = XmlInsertion("elem")
             xins.selection = _ins_vpath(4)
             xiom = print_document(xproj, xproj, xins, nothing)
-            @test _written_doc(read_intent(xproj, xiom, KeyDown(:return, ModifierKeys(); time = 0.0))) isa XmlElement
+            @test _written_doc(read_intent(xproj, xiom, KeyPress('\n'; time = 0.0))) isa XmlElement
             @test _written_doc(read_intent(xproj, xiom, KeyDown(:escape, ModifierKeys(); time = 0.0))) isa XmlNothing
             # The scaffold keywords are candidates too: `julia function` from
             # the top level builds the keyword scaffold (holes + cursor).
@@ -352,7 +373,7 @@ function test_document_insertion()
             ji.selection = _ins_vpath(length("factorial(5)"))
             jproj = JuliaInsertionToSyntaxLeaf()
             jiom = print_document(jproj, jproj, ji, nothing)
-            commit = read_intent(jproj, jiom, KeyDown(:return, ModifierKeys(); time = 0.0))
+            commit = read_intent(jproj, jiom, KeyPress('\n'; time = 0.0))
             @test commit isa CompoundOperation
             @test _written_doc(commit) isa JuliaDocument
 
@@ -360,7 +381,7 @@ function test_document_insertion()
             empty_ji = JuliaInsertion("")
             empty_ji.selection = _ins_vpath(0)
             eiom = print_document(jproj, jproj, empty_ji, nothing)
-            @test read_intent(jproj, eiom, KeyDown(:return, ModifierKeys(); time = 0.0)) === nothing
+            @test read_intent(jproj, eiom, KeyPress('\n'; time = 0.0)) === nothing
         end
 
         @testset "SqlInsertion commits source via parse_sql_text" begin
@@ -368,7 +389,7 @@ function test_document_insertion()
             si.selection = _ins_vpath(length("SELECT * FROM persons"))
             sproj = SqlInsertionToSyntaxLeaf()
             siom = print_document(sproj, sproj, si, nothing)
-            commit = read_intent(sproj, siom, KeyDown(:return, ModifierKeys(); time = 0.0))
+            commit = read_intent(sproj, siom, KeyPress('\n'; time = 0.0))
             @test commit isa CompoundOperation
             @test _written_doc(commit) isa SqlStatement
 
@@ -376,7 +397,60 @@ function test_document_insertion()
             empty_si = SqlInsertion("")
             empty_si.selection = _ins_vpath(0)
             esiom = print_document(sproj, sproj, empty_si, nothing)
-            @test read_intent(sproj, esiom, KeyDown(:return, ModifierKeys(); time = 0.0)) === nothing
+            @test read_intent(sproj, esiom, KeyPress('\n'; time = 0.0)) === nothing
+        end
+
+        @testset "an insertion offers only what the declared type of its place admits" begin
+            narrow = Union{JsonString, JsonNumber, JsonInsertion, JsonNothing}
+            holder = _JsonNarrowPlace(; value = JsonInsertion("n"))
+            # The place of a field, and of an element of a list.
+            @test find_declared_place_type(@reference(holder, value)) == narrow
+            array = JsonArray(Document[JsonNumber(1)])
+            @test find_declared_place_type(@reference(array, elements[1])) == Document
+            call = parse_julia("f(x)")
+            @test find_declared_place_type(@reference(call, arguments[1])) == JuliaDocument
+            @test find_declared_place_type(_ins_vpath(0)) === nothing
+            # `n` names a JSON number and null; the narrow place admits the number only.
+            @test complete_insertion(JsonDocument, "n").state === :ambiguous
+            @test complete_insertion(JsonDocument, "n"; place = narrow).state === :unambiguous
+            @test resolve_insertion(JsonDocument, "n"; place = narrow) === JsonNumber
+            # The printed insertion reads its place from the reference of its context.
+            leaf = JsonInsertionToSyntaxLeaf()
+            ins = holder.value
+            ins.selection = _ins_vpath(1)
+            context = PrinterContext(@reference(holder, value), Cell(800), Cell(600), Dict{Symbol,Any}())
+            iomap = print_document(leaf, nothing, ins, context)
+            @test iomap.projection.place == narrow
+            @test iomap.output.content.close.content == "umber"
+            @test _written_doc(read_intent(leaf, iomap, KeyPress('\n'; time = 0.0))) isa JsonNumber
+            # The place admits no `DocumentInsertion`, so Insert is not offered.
+            @test read_intent(leaf, iomap, KeyDown(:insert, ModifierKeys(); time = 0.0)) === nothing
+        end
+
+        @testset "Insert widens an insertion, and an XML element goes into a JSON array" begin
+            array = JsonArray(Document[JsonNumber(1)])
+            editor, press! = _make_natural_insertion_editor(array)
+            set_selection!(array, @reference(array, elements[1]))
+            run_frame!(editor)
+            press!(KeyPress(','; time = 0.0))
+            @test array.elements[2] isa JsonInsertion
+            press!(KeyDown(:insert, ModifierKeys(); time = 0.0))
+            @test array.elements[2] isa DocumentInsertion
+            foreach(c -> press!(KeyPress(c; time = 0.0)), "xml element")
+            @test array.elements[2].value == "xml element"
+            press!(KeyPress('\n'; time = 0.0))
+            @test array.elements[2] isa XmlElement
+            @test array.elements[1] isa JsonNumber
+        end
+
+        @testset "Insert does not widen a hole of Julia code" begin
+            call = parse_julia("f(x)")
+            call.arguments[1] = JuliaInsertion("y")
+            editor, press! = _make_natural_insertion_editor(call)
+            set_selection!(call, @reference(call, arguments[1].value{1}))
+            run_frame!(editor)
+            press!(KeyDown(:insert, ModifierKeys(); time = 0.0))
+            @test call.arguments[1] isa JuliaInsertion
         end
     end
 end

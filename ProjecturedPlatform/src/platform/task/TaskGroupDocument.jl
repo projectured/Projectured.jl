@@ -44,9 +44,12 @@ See also `start_task_group_document!`, `stop_task_group_document!` and
 - `identifier::String` — `T1`, `T2`, …: the name of the group that never
   changes, whatever the title becomes.
 - `selected::Int` — the task the detail of the pane shows, `-1` for the
-  preparation of the group, or 0 for none.
-- `groups` — the `TaskGroupDocument` of each task that is a group, by its place:
-  the pane shows it in the detail of that task.
+  preparation of the group, or 0 for none. A press on a row of the table writes
+  it, and the table marks the row of that task.
+- `anchor::Int` — the task whose row is at the head of the list of rows of the
+  table of the pane. When the choice of rows does not show that task, the head is
+  the first row after it. It is view state: a scroll far from the head moves it
+  to the task at the top, and the list starts again from there.
 - `row_filter` — which rows the pane shows: `"all"`, `"running"` or
   `"unexpected"`, as a `PrimitiveString` that the choice of the pane writes.
 - `preparation` — the document of the preparation of the group: a
@@ -62,8 +65,8 @@ See also `start_task_group_document!`, `stop_task_group_document!` and
     shadow::Any
     identifier::String
     selected::Int
+    anchor::Int
     row_filter::Any
-    groups::Any
     preparation::Any
 end
 
@@ -79,6 +82,15 @@ make_task_group_identifier() = "T" * string(Threads.atomic_add!(_TASK_GROUP_COUN
 
 """The engine `TaskGroup` the document holds."""
 get_task_group(doc::TaskGroupDocument) = getfield(doc, :group)[]
+
+# A group is called by its title.
+get_document_title(doc::TaskGroupDocument) = getfield(doc, :title)[]
+
+# The facet of a group in a roster of tasks, which the tasks reach as `within.kind`:
+# the name of the group, which the list of groups shows as its kind.
+get_item_facets(::Type{TaskGroupDocument}) = [
+    "kind" => "the kind of the group, its name, such as smoke test or fingerprint test"]
+compute_item_facet(doc::TaskGroupDocument, ::Val{:kind}) = get_task_group(doc).name
 
 """The `TaskGroupSummary` of the group at the last sync of its shadow."""
 get_task_group_document_summary(doc::TaskGroupDocument) = getfield(doc, :shadow)[].summary
@@ -96,10 +108,13 @@ its tasks. Nothing runs yet.
 function wrap_task_group_document(group::TaskGroup; title::AbstractString = group.name,
                                   identifier::AbstractString = make_task_group_identifier())
     documents = TaskDocument[TaskDocument(task) for task in group.tasks]
-    # An inner group is a document of its own, named by its place in the group.
-    groups = Dict{Int,Any}(index => wrap_task_group_document(task; title = task.name,
-                                                             identifier = string(identifier, ".", index))
-                           for (index, task) in enumerate(group.tasks) if task isa TaskGroup)
+    # An inner group is a document of its own, which its task holds, named by its
+    # place in the group.
+    for (index, task) in enumerate(group.tasks)
+        task isa TaskGroup || continue
+        set_cell_value!(getfield(documents[index], :inner_group),
+                        wrap_task_group_document(task; title = task.name, identifier = string(identifier, ".", index)))
+    end
     # The preparation has the place 0, before the first task.
     preparation = group.preparation === nothing ? nothing :
                   group.preparation isa TaskGroup ?
@@ -109,9 +124,13 @@ function wrap_task_group_document(group::TaskGroup; title::AbstractString = grou
     doc = TaskGroupDocument(Cell(String(title)), Cell(group.jobs), Cell(:pending),
                             CellVector(Cell[Cell(d) for d in documents]),
                             Cell(group), Cell(make_task_group_shadow(group)),
-                            Cell(String(identifier)), Cell(0),
-                            Cell(PrimitiveString("all")), Cell(groups), Cell(preparation))
+                            Cell(String(identifier)), Cell(0), Cell(1),
+                            Cell(PrimitiveString("all")), Cell(preparation))
     group.runtime.on_start = _make_task_group_wiring(doc)
+    # Each task knows its group and its place, so its page acts through the group.
+    for (index, document) in enumerate(documents)
+        getfield(document, :group)[][] = (doc, index)
+    end
     preparation === nothing ||
         (group.runtime.on_preparation = _make_preparation_wiring(preparation))
     doc
@@ -121,15 +140,32 @@ end
     find_task_group_document(doc, index) -> TaskGroupDocument or nothing
 
 The document of task `index` of the group when that task is a group itself, or
-`nothing` when it is not.
+`nothing` when it is not, or when the group has no task `index`. The task
+document holds it (`inner_group`), so it has the path `tasks[index].inner_group`.
 """
-find_task_group_document(doc::TaskGroupDocument, index::Integer) =
-    get(getfield(doc, :groups)[], Int(index), nothing)
+function find_task_group_document(doc::TaskGroupDocument, index::Integer)
+    documents = getfield(doc, :tasks)[]
+    1 <= index <= length(documents) || return nothing
+    getfield(documents[index], :inner_group)[]
+end
 
 # The task documents, in the order the group was made. The field holds a
 # `CellVector`, so the cell is read first and its elements after.
 _task_documents(doc::TaskGroupDocument) =
     TaskDocument[document for document in getfield(doc, :tasks)[]]
+
+"""
+    remove_task_output_files!(doc::TaskGroupDocument) -> doc
+
+Remove the files of the streams of every task of the group, at every depth, and
+of its preparation.
+"""
+function remove_task_output_files!(doc::TaskGroupDocument)
+    foreach(remove_task_output_files!, _task_documents(doc))
+    preparation = getfield(doc, :preparation)[]
+    preparation === nothing || remove_task_output_files!(preparation)
+    doc
+end
 
 # Each task of the group is watched from the moment it starts: the session
 # `TaskFeedStore` syncs the shadow of its execution, and tells the slot of the
@@ -147,6 +183,9 @@ struct _TaskGroupSlot
     index::Int
 end
 
+_drain_task_process_tree!(slot::_TaskGroupSlot, now) =
+    _drain_task_process_tree!(getfield(slot.group, :tasks)[][slot.index], now)
+
 # The first sync of an execution adds its shadow to the document of the task. A
 # task that is a group starts its own tasks again: that first sync also puts the
 # tasks of its document back to waiting, before their own syncs come. Each sync
@@ -161,7 +200,7 @@ function record_task_execution_sync!(slot::_TaskGroupSlot, execution, shadow,
         add_task_execution!(document, execution, shadow)
         inner = find_task_group_document(doc, slot.index)
         if inner !== nothing
-            _reset_tasks!(inner, eachindex(get_task_group(inner).tasks))
+            _reset_earlier_tasks!(inner)
             _sync_task_group_shadow!(inner)
         end
     elseif get_current_task_execution(document) !== shadow
@@ -190,7 +229,7 @@ end
 function record_task_execution_sync!(preparation::_TaskGroupPreparation, execution, shadow,
                                      before::Symbol, made::Bool)
     doc = preparation.group
-    made && _reset_tasks!(doc, eachindex(get_task_group(doc).tasks))
+    made && _reset_earlier_tasks!(doc)
     _sync_task_group_shadow!(doc)
     nothing
 end
@@ -247,6 +286,21 @@ function _reset_tasks!(doc::TaskGroupDocument, indices)
     doc
 end
 
+# At the first sync of a start of the group, put back to waiting each task whose
+# document shows an execution of an earlier start. The driver of a group runs on a
+# task of its own, so the first sync of a task of this start can come before the
+# first sync of the group, and its document keeps what it shows.
+function _reset_earlier_tasks!(doc::TaskGroupDocument)
+    documents = _task_documents(doc)
+    runs = _get_task_group_runs(get_task_group(doc))
+    for (index, document) in enumerate(documents)
+        current = getfield(document, :running)[]
+        current !== nothing && current === runs[index] && continue
+        reset_task_document!(document)
+    end
+    doc
+end
+
 # Called whenever a task starts or ends, so it must not count the tasks. It reads
 # the counts of the shadow of the group, which the tally of the scheduler makes
 # without a walk. A count is one walk of every task per change: on 18,500 tasks,
@@ -270,13 +324,23 @@ function _refresh_status!(doc::TaskGroupDocument)
 end
 
 """
-    start_task_group_document!(doc) -> doc
+    start_task_group_document!(doc; editor = find_evaluation_editor(), end_operation = nothing) -> doc
 
 Start every task of the group, `doc.jobs` at a time, and answer at once. Each
-task reports into its own document while it goes. The group goes to the top of
-the list of the session that the Tasks pane shows.
+task reports into its own document while it goes. The group joins the end of the
+list of the session of `editor`, which the Tasks pane shows
+([`get_session_task_group_list`](@ref)); with no editor, it joins no list. A verb
+that names its editor passes it, because a call that runs at once binds no
+editor of the evaluation.
+
+`end_operation` is an operation that `editor` evaluates when the group ends:
+its tasks ended, or it stopped. A build passes the operation that reads again
+what the build changes, such as the configurations of a project. A task of its
+own waits for the group and posts the operation, so no document holds the
+editor; with no editor, nothing is posted.
 """
-function start_task_group_document!(doc::TaskGroupDocument)
+function start_task_group_document!(doc::TaskGroupDocument; editor = find_evaluation_editor(),
+                                    end_operation = nothing)
     group = get_task_group(doc)
     # A group that runs goes on as it is: its Run is off while it goes.
     group.runtime.scheduler !== nothing && !istaskdone(group.runtime.scheduler) && return doc
@@ -285,28 +349,53 @@ function start_task_group_document!(doc::TaskGroupDocument)
     _reset_tasks!(doc, eachindex(group.tasks))
     start_task_group!(group)
     _sync_task_group_shadow!(doc)
-    add_task_group!(get_session_task_group_list(), doc)
+    add_task_group!(get_session_task_group_list(; editor), doc)
+    _post_at_group_end!(editor, group, end_operation)
     doc
 end
 
+# Post `operation` to `editor` when the scheduler of `group` ends: its tasks
+# ended, or it stopped. A waiter task waits for the scheduler, so nothing stores
+# the editor; an editor whose loop ended takes no post.
+function _post_at_group_end!(editor, group, operation)
+    (operation === nothing || !(editor isa Editor)) && return nothing
+    scheduler = group.runtime.scheduler
+    scheduler === nothing && return nothing
+    errormonitor(@async begin
+        try
+            wait(scheduler)
+        catch exception
+            exception isa TaskFailedException || rethrow()
+        end
+        try
+            post_operation!(editor, operation)
+        catch exception
+            exception isa InvalidStateException || rethrow()
+        end
+    end)
+    nothing
+end
+
+# @optional: which follows the document, as what a rerun command names next.
 """
-    rerun_task_group_document!(doc, which = :failed) -> doc
+    rerun_task_group_document!(doc, which = :failed; editor = find_evaluation_editor()) -> doc
 
 Run part of the group again, in place. `which` is what
 [`compute_task_group_indices`](@ref) understands: `:all`, `:failed`,
 `:unexpected`, `:unfinished`, or the places of the tasks to repeat. A group whose
-row was closed in the Tasks pane gets its row back.
+row was closed in the Tasks pane gets its row back, in its place, in the list of
+`editor`.
 """
-function rerun_task_group_document!(doc::TaskGroupDocument, which = :failed)
+function rerun_task_group_document!(doc::TaskGroupDocument, which = :failed; editor = find_evaluation_editor())
     group = get_task_group(doc)
-    group.start_time === nothing && return start_task_group_document!(doc)
+    lock(() -> group.start_time, group.runtime.lock) === nothing && return start_task_group_document!(doc; editor)
     indices = compute_task_group_indices(group, which)
     isempty(indices) && return doc
     set_cell_value!(getfield(doc, :status), :running)
     _reset_tasks!(doc, indices)
     rerun_task_group!(group, indices)
     _sync_task_group_shadow!(doc)
-    add_task_group!(get_session_task_group_list(), doc)
+    add_task_group!(get_session_task_group_list(; editor), doc)
     doc
 end
 

@@ -80,6 +80,7 @@ _resolve_selection(sel, document) = sel
 
 # ── Drivers ────────────────────────────────────────────────────────────────
 
+# @optional: the output file stands second, as the destination named at a command line.
 """
     record_live_example(live::LiveExample, filename=tempname()*".mp4"; kwargs...) -> String
 
@@ -88,7 +89,6 @@ example's bare document/projection (same content origin as the live window, so a
 single timeline's mouse coordinates work in both). Extra `kwargs` pass through to
 `record_video` (e.g. `supersample`, `final_hold`, `wait_for`).
 """
-# @optional: the output file stands second, as the destination named at a command line.
 function record_live_example(live::LiveExample, filename::AbstractString=tempname()*".mp4"; kwargs...)
     document   = live.example.make_document()
     projection = live.example.make_projection()
@@ -184,8 +184,7 @@ const json_insert_live = LiveExample("json_insert", json_example,
         [timed_event(KeyPress(',';
                               time = time()); hold=0.6)],               # add a new entry, cursor on its key
         make_typein_gestures("role"),                          # type the key
-        [timed_event(KeyDown(:tab, ModifierKeys();
-                             time = time()); hold=0.6),    # Tab: key → value (whole)
+        [timed_event(KeyPress('\t'; time = time()); hold=0.6),    # Tab: key → value (whole)
          timed_event(KeyPress('"';
                               time = time()); hold=0.5)],                # start a string value
         make_typein_gestures("admin"),                         # type the value
@@ -223,7 +222,7 @@ const json_build_example = Example("json_build", () -> JsonInsertion(), make_jso
 # bool.
 _jb_right() = timed_event(KeyDown(:right, ModifierKeys(); time = time()); hold=0.25)
 _jb_down()  = timed_event(KeyDown(:down, ModifierKeys(); time = time()); hold=0.3)
-_jb_tab()   = timed_event(KeyDown(:tab, ModifierKeys(); time = time()); hold=0.32)
+_jb_tab()   = timed_event(KeyPress('\t'; time = time()); hold=0.32)
 _jb_comma() = timed_event(KeyPress(','; time = time()); hold=0.40)
 _jb_open(c) = timed_event(KeyPress(c; time = time()); hold=0.40)            # '{' or '['
 _jb_key(s)  = make_typein_gestures(s)                        # caret already on the (empty) key

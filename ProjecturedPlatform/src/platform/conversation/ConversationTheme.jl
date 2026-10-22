@@ -31,39 +31,41 @@ with no styles holds the plain values of the default theme.
     "The font that the code and the prompts of this theme follow: its family, its weight and its size."
     code_font::StyleFont = StyleFont("Ubuntu Mono", 14)
     "The label beside a turn whose role is the user."
-    user_role_text::TextRole = TextRole(:accent_text; weight = 700, relative_size = 0.9)
+    user_role_text::ThemeText = TextRole(:accent_text; weight = 700, relative_size = 0.9)
     "The label beside a turn whose role is the assistant."
-    assistant_role_text::TextRole = TextRole(PaletteColor(:teal, 11; minimum_contrast = 4.5); weight = 700, relative_size = 0.9)
+    assistant_role_text::ThemeText = TextRole(PaletteColor(:teal, 11; minimum_contrast = 4.5); weight = 700, relative_size = 0.9)
     "The label beside a turn whose role is neither the user nor the assistant."
-    other_role_text::TextRole = TextRole(:text_muted; weight = 700, relative_size = 0.9)
+    other_role_text::ThemeText = TextRole(:text_muted; weight = 700, relative_size = 0.9)
     "The glyph beside a turn whose role is the user."
-    user_role_icon::TextRole = TextRole(:accent_text; family = "Lucide")
+    user_role_icon::ThemeText = TextRole(:accent_text; family = "Lucide")
     "The glyph beside a turn whose role is the assistant."
-    assistant_role_icon::TextRole = TextRole(PaletteColor(:teal, 11; minimum_contrast = 4.5); family = "Lucide")
+    assistant_role_icon::ThemeText = TextRole(PaletteColor(:teal, 11; minimum_contrast = 4.5); family = "Lucide")
     "The glyph beside a turn whose role is neither the user nor the assistant."
-    other_role_icon::TextRole = TextRole(:text_muted; family = "Lucide")
+    other_role_icon::ThemeText = TextRole(:text_muted; family = "Lucide")
     "The tag that names a part's kind: a code's language, \"thinking\", or the name of a tool."
-    kind_text::TextRole = TextRole(:text_muted; weight = 700, relative_size = 0.8)
+    kind_text::ThemeText = TextRole(:text_muted; weight = 700, relative_size = 0.8)
     "The title of a section of an evaluation: its code or its result."
-    section_text::TextRole = TextRole(:text_muted; relative_size = 0.8)
+    section_text::ThemeText = TextRole(:text_muted; relative_size = 0.8)
     "The title of a section of an evaluation whose result is an error."
-    error_text::TextRole = TextRole(:error_text; weight = 700, relative_size = 0.8)
+    error_text::ThemeText = TextRole(:error_text; weight = 700, relative_size = 0.8)
     "The `>`/`=` prompt before the code or the result of a form."
-    prompt_text::TextRole = TextRole(:text_muted; base = :code_font)
+    prompt_text::ThemeText = TextRole(:text_muted; base = :code_font)
     "The `=` prompt before the result of a form whose evaluation failed."
-    error_prompt_text::TextRole = TextRole(:error_text; base = :code_font)
+    error_prompt_text::ThemeText = TextRole(:error_text; base = :code_font)
     "The typed text of an editable part of the composer."
-    plain_color::StyleColor = ColorRole(:text)
+    plain_color::ThemeColor = ColorRole(:text)
     "The placeholder of an empty part, and the static words of a kind chooser."
-    placeholder_color::StyleColor = ColorRole(:text_faint)
+    placeholder_color::ThemeColor = ColorRole(:text_faint)
     "The value of a kind chooser that names a known kind."
-    valid_color::StyleColor = ColorRole(:success_text)
+    valid_color::ThemeColor = ColorRole(:success_text)
     "The value of a kind chooser that names no kind."
-    invalid_color::StyleColor = ColorRole(:error_text)
+    invalid_color::ThemeColor = ColorRole(:error_text)
     "The hint that completes the value of a kind chooser."
-    completion_hint_color::StyleColor = ColorRole(:text_faint)
+    completion_hint_color::ThemeColor = ColorRole(:text_faint)
     "The gap between the parts of one turn, and between the cards of the composer."
     part_gap::Spacing = Spacing(8)
+    "The height of a picture in a part, at most; its width follows the shape of the picture."
+    picture_height::Int = 160
     "The gap between the turns of a transcript."
     turn_gap::Spacing = Spacing(8)
     "The gap between the icon and the label of a turn's role."

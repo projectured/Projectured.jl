@@ -30,9 +30,16 @@ function press!(event)
     operation
 end
 
-ctrl(key) = KeyDown(key, ModifierKeys(ctrl = true); time = 0.0)
-ctrl_shift(key) = KeyDown(key, ModifierKeys(ctrl = true, shift = true); time = 0.0)
-ctrl_alt(key) = KeyDown(key, ModifierKeys(ctrl = true, alt = true); time = 0.0)
+# The event that a key gives its meaning by: the KeyPress of the character it
+# types, or its KeyDown.
+function _pane_construct_key(key, modifiers)
+    character = find_typed_character(key)
+    character === nothing ? KeyDown(key, modifiers; time = 0.0) :
+                            KeyPress(character, modifiers; time = 0.0)
+end
+ctrl(key) = _pane_construct_key(key, ModifierKeys(ctrl = true))
+ctrl_shift(key) = _pane_construct_key(key, ModifierKeys(ctrl = true, shift = true))
+ctrl_alt(key) = _pane_construct_key(key, ModifierKeys(ctrl = true, alt = true))
 
 # Rename whatever tab has the focus: into the name, clear it, type the new one.
 function rename!(name)

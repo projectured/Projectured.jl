@@ -47,6 +47,7 @@ using ..StyleModule
 
 # Imported to extend: this module adds a method to each of these.
 import ..CellModule: set_cell_computation!
+import ..DocumentModule: replace_wrapped_document!
 import ..OperationModule: splice_value!, evaluate_operation, operation_reference,
                           retarget_operation
 import ..ProjectionModule: print_document, read_intent, map_reference_forward, map_reference_backward
@@ -54,9 +55,9 @@ import ..ProjectionModule: print_document, read_intent, map_reference_forward, m
 export TextSpanReferenceStep
 export TextColumnReferenceStep
 export TextRangeReferenceStep, is_text_caret
-export set_cell_computation!, get_flat_length, get_flat_offsets, get_flat_string, get_flat_selection, make_hinted_text,
+export set_cell_computation!, get_flat_length, get_flat_offsets, get_flat_string, get_flat_selection, make_hinted_text, make_text_block, append_text!,
        get_selection_substring, make_text_insert_operation, ReplaceTextRangeOperation,
-       convert_flat_offset_to_element, convert_element_to_flat_offset, get_flat_caret, _lower_text_range
+       get_flat_caret, get_flat_range, _lower_text_range
 export SpanPath, get_flat_base, make_flat_caret_reference, make_flat_range_reference,
        get_flat_cursor_coordinate, is_structural_selection, is_text_element_write
 export TextTheme, ScaledTextTheme
@@ -64,17 +65,19 @@ export ReferenceTheme, ScaledReferenceTheme
 export TextToGraphics, TextToGraphicsIoMap
 export TextGutter, TextGutterToGraphics, TextBlockToScrollLayout, TextBlockToScrollLayoutIoMap
 export TextFold, TextFolding, TextFoldingIoMap
-export TextBlockToString, TextStringToString, TextNewlineToString, TextSpacingToString, TextGraphicsToString,
+export TextBlockToString, TextStringToString, TextSpacingToString, TextGraphicsToString,
        TextLineToString, TextToString
 export TextLineNumbering, LineNumbering
-export WordWrapping, WordWrappingIoMap, WrapSegment
-export TextFiltering, TextFilteringIoMap
+export WordWrapping, WordWrappingIoMap
+export make_text_pattern
+export FilteredText, FilteredTextToText, FilteredTextToTextIoMap
 export TextFirstLine, TextFirstLineIoMap
-export TextHighlighting, TextHighlightingIoMap, HighlightSegment
+export HighlightedText, HighlightedTextToText, HighlightedTextToTextIoMap, HighlightSegment
+export MarkedText, TextMark, MarkedTextToText, compute_moved_text_marks
 export SelectionInverting, SelectionInvertingIoMap, SelectionSegment
 export PrimitiveBoolToText, PrimitiveNumberToText, PrimitiveStringToTextBlock, PrimitiveInsertionToText, PrimitiveToText
 export ReferenceToText, ReferenceToHumanReadableText
-export TextBlock, TextLine, TextString, TextNewline, TextGraphics, TextDocument, UNSTYLED_TEXT_FONT
+export TextBlock, TextLine, TextString, TextGraphics, TextDocument, UNSTYLED_TEXT_FONT
 export FaultToText
 
 
@@ -91,9 +94,11 @@ include("FaultToText.jl")
 include("TextLineNumbering.jl")
 include("TextFolding.jl")
 include("WordWrapping.jl")
-include("TextFiltering.jl")
+include("TextPattern.jl")
+include("FilteredTextToText.jl")
 include("TextFirstLine.jl")
-include("TextHighlighting.jl")
+include("HighlightedTextToText.jl")
+include("MarkedTextToText.jl")
 include("SelectionInverting.jl")
 include("PrimitiveToText.jl")
 include("ReferenceTheme.jl")

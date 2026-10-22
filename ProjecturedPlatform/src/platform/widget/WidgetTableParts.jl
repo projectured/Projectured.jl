@@ -83,7 +83,16 @@ end
 
 # ── What a list needs, said before anything is drawn ─────────────────────────
 
+# The check reads the form of the rows and of the row headers. It runs in a cell
+# of its own that nothing reads again, so these reads are no dependency of the
+# print that checks: a new list of rows is a new head of the grid of the cells,
+# and no new print of the table.
 function _check_table_parts(w::WidgetTable, height)
+    peek(Cell(@computation _check_table_list_form(w, height)))
+    nothing
+end
+
+function _check_table_list_form(w::WidgetTable, height)
     height === nothing &&
         error("WidgetTable: a table whose rows are a list needs an offered height, ",
               "because a list has no extent to size it by")
@@ -91,9 +100,9 @@ function _check_table_parts(w::WidgetTable, height)
     headers isa ListNode || isempty(headers) ||
         error("WidgetTable: a table whose rows are a list takes its row headers as a list")
     body = _get_body_rows(w)
-    body isa ListNode || isempty(body) ||
+    body isa ListNode || body === nothing || isempty(body) ||
         error("WidgetTable: a table with a corner draws its rows as a list, and takes a list ",
-              "of rows or an empty vector")
+              "of rows, `nothing` or an empty vector")
     if headers isa ListNode || w.corner !== nothing
         policy = w.row_policy
         (policy isa SizePolicy && policy.preferred !== nothing &&
@@ -147,7 +156,7 @@ end
 # cell and a rule as its own padding. It has no fill, because the table draws
 # its bands behind it, and no bar.
 _make_part_pane(grid, offset::Cell, padding::Inset) =
-    WidgetScrollPane(Cell(grid), Cell(nothing), Cell(nothing), offset, Cell(false),
+    WidgetScrollPane(Cell(grid), Cell(nothing), Cell(nothing), offset, Cell(false), Cell(nothing),
                      Cell(nothing), Cell(nothing), Cell(true),
                      Cell(nothing), Cell(nothing), Cell(padding),
                      Cell(WidgetStyle(; content_color = color_transparent)), Cell(nothing))
@@ -167,9 +176,9 @@ _make_part_pane(grid, offset::Cell, padding::Inset) =
 function _make_cells_pane(w::WidgetTable, grid, offset::Cell, padding::Inset)
     target = Cell(@computation _get_table_bar_target(w))
     # Positional: content, position, size, scroll_position, follow_end,
-    # vertical_scroll_bar, horizontal_scroll_bar, visible, margin, border,
-    # padding, style, tooltip, selection, mouse_target.
-    WidgetScrollPane(Cell(grid), Cell(nothing), Cell(nothing), offset, Cell(false),
+    # wheel_run, vertical_scroll_bar, horizontal_scroll_bar, visible, margin,
+    # border, padding, style, tooltip, selection, mouse_target.
+    WidgetScrollPane(Cell(grid), Cell(nothing), Cell(nothing), offset, Cell(false), Cell(nothing),
                      getfield(w, :vertical_scroll_bar), getfield(w, :horizontal_scroll_bar), Cell(true),
                      Cell(nothing), Cell(nothing), Cell(padding),
                      Cell(WidgetStyle(; content_color = color_transparent)), Cell(nothing),
@@ -260,8 +269,7 @@ function _read_cells_wheel(table, pane, x::Int, y::Int, evt::MouseScroll)
     view_h = max(1, Int(pane.output.h) - ty)
     point_x = clamp(evt.x - x, cox, cox + view_w - 1)
     point_y = clamp(evt.y - y, coy, coy + view_h - 1)
-    read_intent(pane.projection, pane, MouseScroll(evt.dx, evt.dy, point_x, point_y, evt.modifiers;
-                                                   time = evt.time))
+    read_intent(pane.projection, pane, shift_event_position(evt, point_x - evt.x, point_y - evt.y))
 end
 
 # The rows that the grid of the cells walks: the list of rows, or `nothing`, a
@@ -319,19 +327,16 @@ _get_place_cell(::Nothing) = nothing
 function _make_turned_row_node(places)
     node = ListNode(nothing)
     set_cell_computation!(getfield(node, :value), () -> _make_turned_row(places))
-    set_cell_computation!(getfield(node, :next), () -> _make_turned_neighbour(node, places, 1))
-    set_cell_computation!(getfield(node, :prev), () -> _make_turned_neighbour(node, places, -1))
+    set_lazy_link!(node, :next, () -> _make_turned_neighbour(places, 1))
+    set_lazy_link!(node, :prev, () -> _make_turned_neighbour(places, -1))
     node
 end
 
-# The node of the row `d` rows from `node`, the row at `places`, or nothing past
-# an end.
-function _make_turned_neighbour(node::ListNode, places, d::Int)
+# The node of the row `d` rows from the row at `places`, or nothing past an end.
+function _make_turned_neighbour(places, d::Int)
     stepped = _step_places(places, d)
     _has_turned_row(stepped) || return nothing
-    neighbour = _make_turned_row_node(stepped)
-    set_cell_value!(getfield(neighbour, d > 0 ? :prev : :next), node)
-    neighbour
+    _make_turned_row_node(stepped)
 end
 
 _step_places(places::ListNode, d::Int) = _make_mapped_node(places, place -> _step_place(place, d))
@@ -346,26 +351,10 @@ _make_turned_row(places::ListNode) = _make_mapped_node(places, _get_place_cell)
 _make_turned_row(places) = CellVector(Cell[Cell(@computation _get_place_cell(place)) for place in places])
 
 # A list that mirrors `source`, whose node holds `f` of the value of its node of
-# `source`, built when a walk first reaches it.
-function _make_mapped_node(source::ListNode, f)
-    node = ListNode(nothing)
-    set_cell_computation!(getfield(node, :value), () -> f(source.value))
-    set_cell_computation!(getfield(node, :next), () -> begin
-        following = source.next
-        following === nothing && return nothing
-        next_node = _make_mapped_node(following, f)
-        set_cell_value!(getfield(next_node, :prev), node)
-        next_node
-    end)
-    set_cell_computation!(getfield(node, :prev), () -> begin
-        preceding = source.prev
-        preceding === nothing && return nothing
-        prev_node = _make_mapped_node(preceding, f)
-        set_cell_value!(getfield(prev_node, :next), node)
-        prev_node
-    end)
-    node
-end
+# `source`, built when a walk first reaches it, and computed again when that value
+# changes.
+_make_mapped_node(source::ListNode, f) =
+    make_mapped_list((node, _, _, _) -> f(node.value), source; computed = true)
 
 # The writes that move the head of the body of `w` to its row `k`: `cells` to
 # node `k` of a list of rows. In a column-major table, `cells` to a list that
@@ -402,25 +391,43 @@ _print_table_corner(recursion, w::WidgetTable, inner) =
                             :x),
                         :y))
 
+# The rows of one cell that hold the row headers, by the header, for the head of
+# the list now and for the head before it. A header that the new head reaches
+# again keeps its row, so the grid keeps the print of the row; a row that no head
+# reaches goes with the head after it.
+mutable struct _HeaderRows
+    current::IdDict{Any,Any}
+    before::IdDict{Any,Any}
+end
+_HeaderRows() = _HeaderRows(IdDict{Any,Any}(), IdDict{Any,Any}())
+
+# A new head of the list of the row headers.
+function _start_header_rows!(rows::_HeaderRows)
+    rows.before = rows.current
+    rows.current = IdDict{Any,Any}()
+    nothing
+end
+
+# The row of one cell that holds `header`: the row of the head before, or a new one.
+_take_header_row!(rows::_HeaderRows, header) =
+    get!(() -> something(pop!(rows.before, header, nothing), CellVector(Cell[Cell(header)])),
+         rows.current, header)
+
 # The node of a list that mirrors the headers of `header_node` as rows of one
-# cell, the form of a row of a grid. A node is built when a walk first reaches
-# it, so the header column reaches as far as the rows do.
-function _make_header_row_node(header_node::ListNode)
+# cell, the form of a row of a grid, each kept in `rows`. A node is built when a
+# walk first reaches it, so the header column reaches as far as the rows do.
+function _make_header_row_node(header_node::ListNode, rows::_HeaderRows)
     header = header_node.value
-    node = ListNode(CellVector(Cell[Cell(header === nothing ? _wt_empty_cell() : header)]))
-    set_cell_computation!(getfield(node, :next), () -> begin
+    node = ListNode(header === nothing ? CellVector(Cell[Cell(_wt_empty_cell())]) : _take_header_row!(rows, header))
+    set_lazy_link!(node, :next, () -> begin
         following = header_node.next
         following === nothing && return nothing
-        next_node = _make_header_row_node(following)
-        set_cell_value!(getfield(next_node, :prev), node)
-        next_node
+        _make_header_row_node(following, rows)
     end)
-    set_cell_computation!(getfield(node, :prev), () -> begin
+    set_lazy_link!(node, :prev, () -> begin
         preceding = header_node.prev
         preceding === nothing && return nothing
-        prev_node = _make_header_row_node(preceding)
-        set_cell_value!(getfield(prev_node, :next), node)
-        prev_node
+        _make_header_row_node(preceding, rows)
     end)
     node
 end
@@ -443,8 +450,12 @@ function _print_header_column(recursion, w::WidgetTable, inner, corner, height::
         cell = grid === nothing ? nothing : find_grid_list_cell(grid, 1, 1)
         max(_get_part_child_width(corner), cell === nothing ? 0 : _get_part_child_width(cell[3]))
     end)
-    rows = Cell(@computation (headers = w.row_headers;
-                              headers isa ListNode ? _make_header_row_node(headers) : nothing))
+    kept = _HeaderRows()
+    rows = Cell(@computation begin
+        headers = w.row_headers
+        _start_header_rows!(kept)
+        headers isa ListNode ? _make_header_row_node(headers, kept) : nothing
+    end)
     grid = GridLayout(rows, Cell(1), Cell(:left), Cell(:top), Cell(hgap), Cell(vgap), Cell(Symbol[]),
                       Cell(@computation Fixed(width[])), getfield(w, :row_policy), Cell(Any[]),
                       Cell(Any[]), Cell(Bool[false]), Cell(Bool[]), Cell(nothing))
@@ -504,19 +515,15 @@ end
 function _make_header_column_graphics_node(p::WidgetTableToGraphicsCanvas, w::WidgetTable,
                                            st::WidgetTablePartsState, k::Int, row_node::ListNode)
     node = ListNode(_make_header_column_row_graphics(p, w, st, k, row_node))
-    set_cell_computation!(getfield(node, :next), () -> begin
+    set_lazy_link!(node, :next, () -> begin
         following = row_node.next
         following === nothing && return nothing
-        next_node = _make_header_column_graphics_node(p, w, st, k + 1, following)
-        set_cell_value!(getfield(next_node, :prev), node)
-        next_node
+        _make_header_column_graphics_node(p, w, st, k + 1, following)
     end)
-    set_cell_computation!(getfield(node, :prev), () -> begin
+    set_lazy_link!(node, :prev, () -> begin
         preceding = row_node.prev
         preceding === nothing && return nothing
-        prev_node = _make_header_column_graphics_node(p, w, st, k - 1, preceding)
-        set_cell_value!(getfield(prev_node, :next), node)
-        prev_node
+        _make_header_column_graphics_node(p, w, st, k - 1, preceding)
     end)
     node
 end
@@ -841,19 +848,15 @@ end
 function _make_row_graphics_node(p::WidgetTableToGraphicsCanvas, w::WidgetTable,
                                  st::WidgetTablePartsState, k::Int, row_node::ListNode)
     node = ListNode(_make_row_graphics(p, w, st, k, row_node))
-    set_cell_computation!(getfield(node, :next), () -> begin
+    set_lazy_link!(node, :next, () -> begin
         following = row_node.next
         following === nothing && return nothing
-        next_node = _make_row_graphics_node(p, w, st, k + 1, following)
-        set_cell_value!(getfield(next_node, :prev), node)
-        next_node
+        _make_row_graphics_node(p, w, st, k + 1, following)
     end)
-    set_cell_computation!(getfield(node, :prev), () -> begin
+    set_lazy_link!(node, :prev, () -> begin
         preceding = row_node.prev
         preceding === nothing && return nothing
-        prev_node = _make_row_graphics_node(p, w, st, k - 1, preceding)
-        set_cell_value!(getfield(prev_node, :next), node)
-        prev_node
+        _make_row_graphics_node(p, w, st, k - 1, preceding)
     end)
     node
 end
@@ -1067,20 +1070,18 @@ function _make_column_policy_node(header_node::ListNode, k::Int, width::Int, hea
         cell = grid === nothing ? nothing : find_grid_list_cell(grid, 1, k)
         Fixed(max(width, cell === nothing ? 0 : _get_part_child_width(cell[3])))
     end)
-    set_cell_computation!(getfield(node, :next), () -> begin
+    set_lazy_link!(node, :next, () -> begin
         following = header_node.next
         following === nothing && return nothing
         next_node = _make_column_policy_node(following, k + 1, width, header_grid,
                                              given isa ListNode ? given.next : nothing)
-        set_cell_value!(getfield(next_node, :prev), node)
         next_node
     end)
-    set_cell_computation!(getfield(node, :prev), () -> begin
+    set_lazy_link!(node, :prev, () -> begin
         preceding = header_node.prev
         preceding === nothing && return nothing
         prev_node = _make_column_policy_node(preceding, k - 1, width, header_grid,
                                              given isa ListNode ? given.prev : nothing)
-        set_cell_value!(getfield(prev_node, :next), node)
         prev_node
     end)
     node
@@ -1095,19 +1096,15 @@ function _make_column_align_node(column_node::ListNode)
         align = column isa WidgetTableColumn ? column.align : nothing
         align === nothing ? :left : align
     end)
-    set_cell_computation!(getfield(node, :next), () -> begin
+    set_lazy_link!(node, :next, () -> begin
         following = column_node.next
         following === nothing && return nothing
-        next_node = _make_column_align_node(following)
-        set_cell_value!(getfield(next_node, :prev), node)
-        next_node
+        _make_column_align_node(following)
     end)
-    set_cell_computation!(getfield(node, :prev), () -> begin
+    set_lazy_link!(node, :prev, () -> begin
         preceding = column_node.prev
         preceding === nothing && return nothing
-        prev_node = _make_column_align_node(preceding)
-        set_cell_value!(getfield(prev_node, :next), node)
-        prev_node
+        _make_column_align_node(preceding)
     end)
     node
 end
@@ -1138,19 +1135,15 @@ function _make_column_rules_node(st::WidgetTablePartsState, column_node::ListNod
                             Cell(@computation Int32(Int(column.w) + hgap)), Cell(Int32(0)), elements,
                             layout_none, true, Cell(nothing))
     node = ListNode(canvas)
-    set_cell_computation!(getfield(node, :next), () -> begin
+    set_lazy_link!(node, :next, () -> begin
         following = column_node.next
         following === nothing && return nothing
-        next_node = _make_column_rules_node(st, following, top, height, color; edge_regions)
-        set_cell_value!(getfield(next_node, :prev), node)
-        next_node
+        _make_column_rules_node(st, following, top, height, color; edge_regions)
     end)
-    set_cell_computation!(getfield(node, :prev), () -> begin
+    set_lazy_link!(node, :prev, () -> begin
         preceding = column_node.prev
         preceding === nothing && return nothing
-        prev_node = _make_column_rules_node(st, preceding, top, height, color; edge_regions)
-        set_cell_value!(getfield(prev_node, :next), node)
-        prev_node
+        _make_column_rules_node(st, preceding, top, height, color; edge_regions)
     end)
     node
 end
@@ -1333,6 +1326,33 @@ function _find_table_row_at(st::WidgetTablePartsState, y::Int)
         k += 1
     end
     k
+end
+
+# The rows whose boxes meet the view from `top` down to `bottom`, in the
+# coordinates of the rules of the cells, counted from the head, as `_find_table_row_at`
+# counts: from the row at `top` to the last row that starts at or above
+# `bottom`. `nothing` when `top` is past an end.
+function _compute_table_shown_rows(st::WidgetTablePartsState, top::Int, bottom::Int)
+    first_row = _find_table_row_at(st, top)
+    first_row === nothing && return nothing
+    node = get_grid_list_head(st.cells_pane.content_iomap)
+    for _ in 1:abs(first_row - 1)
+        node = first_row > 1 ? node.next : node.prev
+    end
+    last_row = first_row
+    while node.next !== nothing && Int(node.next.value.y) <= bottom
+        node = node.next
+        last_row += 1
+    end
+    first_row:last_row
+end
+
+# The height of the view of the cells: the pane of the cells less its insets.
+function _get_table_view_height(st::WidgetTablePartsState)
+    # A fault barrier can wrap the pane, as in the print of a window.
+    pane = get_content_iomap(st.cells_pane)
+    pane isa WidgetScrollPaneToGraphicsCanvasIoMap || return Int(st.cells_pane.output.h)
+    last(_get_pane_scroll_view(get_iomap_projection(pane), pane))
 end
 
 # The IO map of the cell in row `k` and column `c`, and the place of its canvas
@@ -1587,43 +1607,62 @@ end
 # keeps more rows reachable from the head.
 const _TABLE_RELOCATION_DISTANCE = 200
 
-# The offset that a scroll writes, or `nothing` for any other answer.
-function _find_written_offset(op)
+# The offset that a scroll of the pane `pane` writes, also inside a compound, or
+# `nothing` for any other answer. The scroll of a pane inside a cell is not it.
+function _find_written_offset(op, pane)
+    if op isa CompoundOperation
+        for operation in op.operations
+            offset = _find_written_offset(operation, pane)
+            offset === nothing || return offset
+        end
+        return nothing
+    end
     op isa ReplaceViewStateOperation || return nothing
     inner = get_wrapped_operation(op)
-    (inner isa ReplaceReferencedValueOperation && inner.value isa Point2D &&
+    (inner isa ReplaceReferencedValueOperation && inner.document === pane && inner.value isa Point2D &&
      inner.reference isa ConcreteReference && inner.reference.head isa FieldReferenceStep &&
      inner.reference.head.name == "scroll_position") || return nothing
     inner.value::Point2D
 end
 
-# A scroll of the cells, and the write of the row at the top of the offset it
-# writes when that row changes. When the row is more than
-# `_TABLE_RELOCATION_DISTANCE` rows from the head, the answer moves the head of
-# the body (`_write_body_head`), and of `row_headers` when they are a list, to
-# it instead, and moves the offset by the place of that row, so the same row
-# stays at the same place on the screen; a selection of a row moves with it. A projection that owns
-# the rows turns the write of `cells` into an edit of its own.
+# A scroll of the cells, and the writes of the row at the top of the offset it
+# writes and of the rows in view (`shown`), each when it changes. When the row
+# at the top is more than `_TABLE_RELOCATION_DISTANCE` rows from the head, the
+# answer moves the head of the body (`_write_body_head`), and of `row_headers`
+# when they are a list, to it instead, and moves the offset by the place of that
+# row, so the same row stays at the same place on the screen; a selection of a
+# row moves with it, and the rows in view count from the new head. A projection
+# that owns the rows turns the write of `cells` into an edit of its own.
 function _add_top_row(iomap::WidgetTableListIoMap, op)
     w = iomap.input
-    offset = _find_written_offset(op)
+    pane = iomap.state.cells_pane.input
+    offset = _find_written_offset(op, pane)
     offset === nothing && return op
     st = iomap.state
     x, y = Int(offset.x[]), Int(offset.y[])
-    k = _find_table_row_at(st, y + st.pad_y + st.bw)
-    k === nothing && return op
+    shown = _compute_table_shown_rows(st, y + st.pad_y + st.bw, y + _get_table_view_height(st) - 1)
+    shown === nothing && return op
+    k = first(shown)
+    # The writes of the answer but the scroll, such as the run of the wheel, stay
+    # beside a move of the head.
+    others = op isa CompoundOperation ?
+        Any[o for o in op.operations if _find_written_offset(o, pane) === nothing] : Any[]
     if abs(k - 1) <= _TABLE_RELOCATION_DISTANCE
+        writes = Any[]
+        k == w.top_row || push!(writes, _write_view_state(w, "top_row", k))
+        shown == w.shown || push!(writes, _write_view_state(w, "shown", shown))
         moved = st.column_list ? _move_head_column(iomap, x, y) : nothing
-        moved === nothing || return moved
-        k == w.top_row && return op
-        return CompoundOperation(Any[op, _write_view_state(w, "top_row", k)])
+        moved === nothing || return CompoundOperation(Any[others..., moved.operations..., writes...])
+        isempty(writes) && return op
+        return CompoundOperation(Any[op, writes...])
     end
     writes = _write_body_head(w, k)
     found = find_grid_list_row(st.cells_pane.content_iomap, k)
     (writes === nothing || found === nothing) && return op
-    moved = Any[writes...,
+    moved = Any[others..., writes...,
                 _write_view_state(w, "scroll_position", Point2D(x, y - Int(found[1].y))),
-                _write_view_state(w, "top_row", 1)]
+                _write_view_state(w, "top_row", 1),
+                _write_view_state(w, "shown", 1:(last(shown) - k + 1))]
     # The row headers move in step with the rows.
     header = _find_list_node(w.row_headers, k)
     header === nothing || push!(moved, _write_view_state(w, "row_headers", header))
@@ -1667,19 +1706,15 @@ function _make_advanced_row_node(row_node, c::Int)
     row_node isa ListNode || return row_node
     node = ListNode(nothing)
     set_cell_computation!(getfield(node, :value), () -> _find_list_node(row_node.value, c))
-    set_cell_computation!(getfield(node, :next), () -> begin
+    set_lazy_link!(node, :next, () -> begin
         following = row_node.next
         following === nothing && return nothing
-        next_node = _make_advanced_row_node(following, c)
-        set_cell_value!(getfield(next_node, :prev), node)
-        next_node
+        _make_advanced_row_node(following, c)
     end)
-    set_cell_computation!(getfield(node, :prev), () -> begin
+    set_lazy_link!(node, :prev, () -> begin
         preceding = row_node.prev
         preceding === nothing && return nothing
-        prev_node = _make_advanced_row_node(preceding, c)
-        set_cell_value!(getfield(prev_node, :next), node)
-        prev_node
+        _make_advanced_row_node(preceding, c)
     end)
     node
 end
@@ -1737,6 +1772,22 @@ end
 # cell, from a column to its cell in the row at the top, and from a cell into
 # its content; Shift+Space and Ctrl+Space select in the row and the column
 # direction.
+# Return on a selected column selects its top cell, on a row its first cell, and
+# on a cell enters the cell; any other typed character is no navigation.
+function _read_table_parts_key(iomap::WidgetTableListIoMap, evt::KeyPress)
+    evt.char == '\n' || return nothing
+    st = iomap.state
+    st.columns == 0 && !st.column_list && return nothing
+    named = _find_named_part(iomap.input, iomap.input.selection)
+    named === nothing && return nothing
+    shape, k, c = named
+    shape === :column &&
+        return ReplaceSelectionOperation(_wt_cell_ref(iomap.input, iomap.input.top_row, c))
+    shape in (:column_header, :row_header, :table, :header_row, :header_column) && return nothing
+    c == 0 && return ReplaceSelectionOperation(_wt_cell_ref(iomap.input, k, 1))
+    _enter_table_cell(iomap.input, st, k, c)
+end
+
 function _read_table_parts_key(iomap::WidgetTableListIoMap, evt::KeyDown)
     st = iomap.state
     st.columns == 0 && !st.column_list && return nothing
@@ -1770,17 +1821,12 @@ function _read_table_parts_key(iomap::WidgetTableListIoMap, evt::KeyDown)
     shape in (:table, :header_row, :header_column) && return nothing
     if shape === :column
         top = iomap.input.top_row
-        evt.key === :return && return ReplaceSelectionOperation(_wt_cell_ref(iomap.input, top, c))
         evt.key === :down && return ReplaceSelectionOperation(_wt_cell_ref(iomap.input, top, c))
         evt.key === :left && return ReplaceSelectionOperation(_wt_col_ref(step_column(c, -1)))
         evt.key === :right && return ReplaceSelectionOperation(_wt_col_ref(step_column(c, 1)))
         return nothing
     end
     c == 0 && (c = nothing)
-    if evt.key === :return
-        c === nothing && return ReplaceSelectionOperation(_wt_cell_ref(iomap.input, k, 1))
-        return _enter_table_cell(iomap.input, st, k, c)
-    end
     if line_key
         c === nothing && return nothing
         return ReplaceSelectionOperation(row_direction ? _wt_row_ref(k) : _wt_col_ref(c))
@@ -1942,7 +1988,7 @@ function _read_table_column_edge_dwell(p::WidgetTableToGraphicsCanvas, iomap::Wi
     (found === nothing || found[1] !== :header) && return nothing
     edge = _find_table_column_edge_at(iomap.state, found[2])
     edge === nothing && return nothing
-    tooltip = make_tooltip_operation(iomap.input, PrimitiveString("Drag to set the width"), g)
+    tooltip = make_tooltip_operation(iomap.input, TooltipNote(; text = "Drag to set the width."), g)
     reroot_operation(tooltip, (FieldReferenceStep("columns"), RangeReferenceStep(first(edge) - 1, first(edge)),
                               FieldReferenceStep("policy")))
 end
@@ -1984,6 +2030,77 @@ function read_table_column_drag(w::WidgetTable, g)
     CompoundOperation(Any[width(drag.width), ending, shape])
 end
 
+# ── A route into a part ──────────────────────────────────────────────────────
+
+# A change whose route names a cell, a header or the corner goes to the document
+# there, with the point in the frame of its canvas wherever the pointer is, and
+# its answer is rooted under the part. So the parts of a drag that a document in
+# a cell started, such as the rubber band of a chart, come back to it. `nothing`
+# when the route names no part that the table shows.
+function _read_routed_table_part(p::WidgetTableToGraphicsCanvas, recursion, change::Intent,
+                                 iomap::WidgetTableListIoMap)
+    found = _find_routed_table_part(p, iomap, change.route)
+    found === nothing && return nothing
+    cim, steps, x, y = found
+    routed = follow_intent_route(change, steps...)
+    routed === nothing && return nothing
+    answer = read_routed_child_in_frame(recursion, routed, cim;
+                                        move_in = (px, py) -> (px - x, py - y),
+                                        move_out = (px, py) -> (px + x, py + y))
+    Intent(change.gesture, reroot_operation(answer.operation, steps))
+end
+
+# The IO map of the part that `route` names, the steps of the route to it, and
+# the place of its canvas in the table: a cell `cells[r][c]`, a header at its
+# last level or a label of a level of the header column, and the corner.
+# `nothing` for any other route, and for a part that the table does not show.
+function _find_routed_table_part(p::WidgetTableToGraphicsCanvas, iomap::WidgetTableListIoMap, route)
+    st = iomap.state
+    steps = get_reference_steps(route)
+    head = first(steps)
+    head isa FieldReferenceStep || return nothing
+    content_x, content_y = _content_offset(p, iomap.input)
+    header_w, header_h = Int(st.header_width[]), Int(st.header_height[])
+    if head.name == "corner"
+        st.corner === nothing && return nothing
+        return (st.corner, (head,), content_x + st.bw + st.pad_x, content_y + st.bw + st.pad_y)
+    end
+    index(n) = (length(steps) >= n && steps[n] isa RangeReferenceStep) ? steps[n].stop : nothing
+    first_index, second_index = index(2), index(3)
+    first_index === nothing && return nothing
+    if head.name == "cells"
+        second_index === nothing && return nothing
+        k, c = _is_column_major(iomap.input) ? (second_index, first_index) : (first_index, second_index)
+        return _find_routed_part_place(st, st.cells_pane, _find_table_cell(st, k, c), steps[1:3],
+                                       content_x + header_w, content_y + header_h)
+    elseif head.name == "row_headers" && st.row_header_pane !== nothing
+        levels = st.levels.row_levels
+        levels == 0 && return _find_routed_part_place(st, st.row_header_pane, _find_table_row_header(st, first_index),
+                                                      steps[1:2], content_x, content_y + header_h)
+        second_index === nothing && return nothing
+        return _find_routed_part_place(st, st.row_header_pane,
+                                       _find_part_cell(st, st.row_header_pane, first_index, second_index),
+                                       steps[1:3], content_x, content_y + header_h)
+    elseif head.name == "column_headers" && st.column_header_pane !== nothing
+        levels = st.levels.column_levels
+        count = levels == 0 ? 2 : 3
+        (levels == 0 || second_index == levels) || return nothing
+        return _find_routed_part_place(st, st.column_header_pane, _find_table_header_cell(st, first_index),
+                                       steps[1:count], content_x + header_w, content_y)
+    end
+    nothing
+end
+
+# The part of the table in `cell`, `(iomap, left, top)` in the coordinates of the
+# rules of `pane`, whose region lies at `(x, y)` in the table: its IO map,
+# `steps`, and the place of its canvas in the table. `nothing` for no cell.
+function _find_routed_part_place(st::WidgetTablePartsState, pane, cell, steps, x::Int, y::Int)
+    cell === nothing && return nothing
+    cim, left, top = cell
+    rule_x, rule_y = _get_rule_point(st, pane, 0, 0)
+    (cim, Tuple(steps), x - rule_x + left, y - rule_y + top)
+end
+
 function read_intent(p::WidgetTableToGraphicsCanvas, recursion, change::Intent,
                      iomap::WidgetTableListIoMap)
     g = change.gesture
@@ -1992,7 +2109,13 @@ function read_intent(p::WidgetTableToGraphicsCanvas, recursion, change::Intent,
         _is_table_bar_event(iomap.state.cells_pane, place, g) &&
             return Intent(g, _add_top_row(iomap, _read_table_bar_event(iomap.state.cells_pane, place, g)))
     end
-    g isa Union{DragMove,DragEnd,DragCancel} && return Intent(g, read_table_column_drag(iomap.input, g))
+    # The parts of a drag come by the path of the part that started it: the table
+    # itself for the width of a column, or a document in a cell.
+    if g isa Union{DragMove,DragEnd,DragCancel}
+        routed = change.route isa ConcreteReference ? _read_routed_table_part(p, recursion, change, iomap) : nothing
+        routed === nothing || return routed
+        return Intent(g, read_table_column_drag(iomap.input, g))
+    end
     if change.operation === nothing
         if g isa MouseDown && g.button === :left
             op = _read_table_column_edge_press(p, iomap, g)
@@ -2009,7 +2132,7 @@ function read_intent(p::WidgetTableToGraphicsCanvas, recursion, change::Intent,
         # is the backward map of the point. A dwell goes to the cell under it.
         g isa MouseMove && return Intent(g, nothing)
         g isa MouseScroll && return Intent(g, _read_table_parts_wheel(p, iomap, g))
-        if g isa KeyDown
+        if g isa KeyDown || g isa KeyPress
             op = _read_open_cell_key(iomap.input, g)
             op === nothing || return Intent(g, op)
             op = _read_table_parts_key(iomap, g)
@@ -2042,7 +2165,7 @@ function read_intent(p::WidgetTableToGraphicsCanvas, iomap::WidgetTableListIoMap
         op = _read_table_mark_dwell(p, iomap, event)
         op === nothing || return op
     end
-    if event isa MouseClick || event isa KeyDown || event isa MouseScroll ||
+    if event isa MouseClick || event isa KeyDown || event isa KeyPress || event isa MouseScroll ||
        event isa MouseMove
         return read_intent(p, nothing, Intent(event, nothing), iomap).operation
     end

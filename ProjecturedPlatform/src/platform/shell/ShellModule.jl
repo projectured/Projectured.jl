@@ -21,10 +21,12 @@ window records is there only when the wrapper that fills it is on.
 """
 module ShellModule
 
+using ..AgentModule
 using ..AppearanceModule
 using ..CellModule
 using ..ClipboardModule
 using ..DomainModule
+using ..ExplorerModule
 using ..FileFormatModule
 using ..FileSystemModule
 using ..PaneModule
@@ -59,6 +61,7 @@ using ..SettingsManagingModule
 using ..SettingsModule
 using ..SyntaxModule
 using ..TextModule
+using ..OperationModule: QuitEditorOperation
 
 # Imported to extend: this module adds a method to each of these.
 import ..EditorModule: wrap_editor!, get_wrapper_layers

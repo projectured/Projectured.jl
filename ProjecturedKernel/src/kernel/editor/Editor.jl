@@ -21,8 +21,14 @@ Holds the state for a read-eval-print loop:
                    process neither share a tool list nor evaluate code into each
                    other's namespace.
   - `inbox`      — operations posted from outside this editor's task; drained and
-                   applied once per frame by `run_editor!`. See
+                   applied once per frame by `run_editor!`. It holds at most
+                   `INBOX_CAPACITY`, so a fast producer waits. See
                    [`post_operation!`](@ref).
+  - `owner_posts` — operations that the owner of the editor posted: the task of
+                   its loop, its running code unit and the tasks that the unit
+                   started, and any task before the loop starts. It has no bound,
+                   so the owner never waits on its own inbox, and the next drain
+                   takes it first (internal).
   - `iomap`      — the latest IoMap from the printer (internal)
   - `operation`  — the latest operation from the reader (internal)
   - `faults`     — the per-editor `FaultStore` every barrier writes to, and the
@@ -73,7 +79,68 @@ Holds the state for a read-eval-print loop:
                    [`run_editor!`](@ref) ends, such as the removal of a log
                    capture that a wrapper of [`build_editor`](@ref) installed.
                    An editor whose loop never runs never runs them.
+  - `code_unit`  — the code unit that runs on a thread of its own and owns the
+                   documents and the state of this editor, or `nothing`; while
+                   one runs, the loop runs held frames ([`run_code_unit!`](@ref)).
+                   Atomic, because a task on any thread reads it to find the owner
+                   (internal).
+  - `held_faults` — the faults of the held frames of the code unit that runs:
+                   the loop records them in `faults` when the unit ends, because
+                   the unit writes that store meanwhile (internal).
+  - `unapplied_operations` — the operations that a drain of the inbox took and
+                   did not apply, because an exception that means stop ended the
+                   drain. The end of the loop treats them as the operations still
+                   in the inbox (internal).
+  - `has_loop_ended` — the loop of [`run_editor!`](@ref) ran and ended. An editor
+                   runs its loop once (internal).
+  - `frame_stages` — the stages of the frame that runs: the slowest stage with
+                   its work, the time and the cell counts of each part that the
+                   loop measures, and the time that the frame spent in held
+                   frames. A frame that is slow anyway is reported
+                   with them, and each frame records them (internal).
+  - `session_documents` — the documents of the session of this editor that a
+                   slice keeps for it, by their type, such as its message log;
+                   [`get_session_document!`](@ref) makes each one the first time.
+                   No other editor shows them, so no document has two owners.
 """
+# The parts of a frame that the loop measures: the five stages, and the read of
+# the input and the paint, which are parts of the read stage and of the print
+# stage. The record of a frame gives the reader and the print as their stage less
+# that part.
+const _MEASURED_FRAME_PARTS = (:feed, :report, :read, :input, :evaluate, :print, :paint)
+
+# The cell counts of the counters, in the order of the cell measures of a part.
+const _CELL_COUNT_KEYS = (:reads, :checks, :computes, :stops, :invalidations, :writes)
+
+# The stages of the frame that runs: its slowest stage with its work, the time and
+# the cell counts of each measured part without its held frames, the time that the
+# frame spent in the held frames of code units, and the counters of the process
+# when the frame started.
+mutable struct _FrameStages
+    seconds::Float64
+    stage::Symbol
+    work::Any
+    held_seconds::Float64
+    # One entry for each part of `_MEASURED_FRAME_PARTS`. The counts are those of
+    # `_CELL_COUNT_KEYS` that the part added, and zero while the counters are
+    # compiled out.
+    part_seconds::NTuple{length(_MEASURED_FRAME_PARTS),Float64}
+    part_counts::NTuple{length(_MEASURED_FRAME_PARTS),NTuple{length(_CELL_COUNT_KEYS),Int}}
+    started_bytes::Int64
+    started_collection_ns::UInt64
+    started_compile_ns::UInt64
+    # `nothing` when the process keeps no running time of the task.
+    started_running_ns::Union{UInt64,Nothing}
+end
+
+_FrameStages() = _FrameStages(0.0, :none, nothing, 0.0,
+                              map(_ -> 0.0, _MEASURED_FRAME_PARTS),
+                              map(_ -> map(_ -> 0, _CELL_COUNT_KEYS),
+                                  _MEASURED_FRAME_PARTS),
+                              Base.gc_bytes(), Base.gc_time_ns(),
+                              first(Base.cumulative_compile_time_ns()),
+                              Base.Experimental.task_running_time_ns(current_task()))
+
 mutable struct Editor
     backend::Backend
     document::Document
@@ -82,6 +149,7 @@ mutable struct Editor
     clock::Clock
     tools::ToolSet
     inbox::Channel{Operation}
+    owner_posts::Channel{Operation}
     iomap::Union{IoMap, Nothing}
     operation::Union{Operation, Nothing}
     faults::FaultStore
@@ -96,6 +164,12 @@ mutable struct Editor
     loop_task::Union{Task, Nothing}
     timers::Dict{Symbol, Float64}
     stop_steps::Vector{Any}
+    @atomic code_unit::Union{CodeUnit, Nothing}
+    held_faults::Vector{Any}
+    unapplied_operations::Vector{Operation}
+    has_loop_ended::Bool
+    frame_stages::_FrameStages
+    session_documents::IdDict{Type,Any}
 end
 
 # The inbox is bounded: a producer that outruns the editor should wait for it,
@@ -116,14 +190,15 @@ function Editor(document, projection; backend::Backend,
                 fault_policy::FaultPolicy = make_strict_fault_policy(),
                 feeds::Vector{Feed} = Feed[])
     editor = Editor(backend, document, projection, devices, clock, tools,
-                    Channel{Operation}(INBOX_CAPACITY),
+                    Channel{Operation}(INBOX_CAPACITY), Channel{Operation}(Inf),
                     nothing, nothing, faults, fault_policy, nothing,
                     Any[], WeakRef[], false,
                     # The wake starts pending: the first frame runs before the
                     # first wait, so the editor paints once before anything
                     # has happened.
                     Feed[InboxFeed(); feeds], Threads.Atomic{Bool}(true),
-                    FrameMeasurementStore(), nothing, Dict{Symbol, Float64}(), Any[])
+                    FrameMeasurementStore(), nothing, Dict{Symbol, Float64}(), Any[],
+                    nothing, Any[], Operation[], false, _FrameStages(), IdDict{Type,Any}())
     # Registration is the one moment a feed meets its editor. The callback is
     # the only handle a producer-side store gets: a store lives below the
     # editor layer and must not name `Editor`.
@@ -170,3 +245,19 @@ ReferenceModule.find_referenced_document(locator::DocumentLocator{<:Editor}) =
 # being able to name its type reaches them. The kernel's agent layer drives a
 # tool against a target it knows only as `Any`.
 FaultModule.get_fault_store(editor::Editor) = editor.faults
+
+# The documents of the sessions of the editors are made under one lock: a caller
+# on another task, such as a person at the REPL who opens the log of a window,
+# can ask while the loop asks.
+const _SESSION_DOCUMENTS_LOCK = ReentrantLock()
+
+"""
+    get_session_document!(make, editor, type) -> document
+
+The document of type `type` of the session of `editor`, such as its message log,
+which `make()` makes the first time that it is asked. Each editor has its own, so
+no document is shared by two editors: a feed of the editor fills it, and only
+the editor that shows it writes it.
+"""
+get_session_document!(make, editor::Editor, type::Type) =
+    lock(() -> get!(make, editor.session_documents, type), _SESSION_DOCUMENTS_LOCK)

@@ -29,7 +29,9 @@ make_window_command(label, callback; icon = nothing, shortcut = nothing,
     make_window_file_menu() -> WidgetMenuItem
 
 The File menu: the name on the bar, and the menu that opens below it. Its
-commands open a tab in the focused group and close the focused tab.
+commands open a tab in the focused group and close the focused tab. After a
+separator, **Exit** (Ctrl+Q) quits the editor, as the close button of the window
+does.
 """
 make_window_file_menu() =
     WidgetMenuItem("File"; submenu = WidgetMenu(Any[
@@ -37,6 +39,10 @@ make_window_file_menu() =
                             shortcut = Shortcut(:t; ctrl = true)),
         make_window_command("Close tab", _close_tab!;
                             shortcut = Shortcut(:w; ctrl = true)),
+        WidgetSeparator(),
+        make_window_command("Exit", editor -> evaluate_operation(editor, QuitEditorOperation());
+                            shortcut = Shortcut(:q; ctrl = true),
+                            tooltip = "Close the window and quit."),
     ]))
 
 """
@@ -69,15 +75,15 @@ make_window_view_menu(; recorded = RECORDED_TOOLS) =
         (:gesture_log in recorded ? (make_window_command("Gesture log",
                                          editor -> _reach_tool!(editor, GestureLog,
                                                                 _make_default_tool(GestureLog));
-                                         tooltip = "Every gesture of this session, and what each one did"),) :
+                                         tooltip = "Every gesture of this session, and what each one did."),) :
                     ())...,
         make_window_command("Appearance",
                             editor -> _reach_tool!(editor, Appearance, _make_appearance_tool);
                             shortcut = Shortcut(:comma; ctrl = true),
-                            tooltip = "The zoom and the scales of this window"),
+                            tooltip = "The zoom and the scales of this window."),
         make_window_command("Settings",
                             editor -> _reach_tool!(editor, Settings, _find_tool_settings);
-                            tooltip = "How this editor works"),
+                            tooltip = "Change how this editor works."),
     ]))
 
 """
@@ -101,31 +107,33 @@ is open. The wrapper keeps its tool, so the command sends
 the content of the shell. The wrapper is around the shell, so it finds the
 operation on its way up and answers what its key answers. The item carries no
 shortcut, because the key reaches the wrapper itself, and its tooltip names the
-key.
+key from the binding of the wrapper.
 """
 make_window_help_menu(; about = _ -> AboutPage(), gesture_help = false, command_palette = false) =
     WidgetMenuItem("Help"; submenu = WidgetMenu(Any[
         (gesture_help ? (make_window_command("Gestures",
                              editor -> _post_shell_content_operation!(
                                  editor, ToggleGestureHelpOperation(), "Open or close the gesture help");
-                             tooltip = "The gestures that work where the selection is (F1)"),) :
+                             tooltip = TooltipNote(; title = "Gestures", keys = Any[HELP_GESTURE],
+                                                   text = "The gestures that work where the selection is.")),) :
                         ())...,
         (command_palette ? (make_window_command("Command palette",
                                 editor -> _post_shell_content_operation!(
                                     editor, ToggleCommandPaletteOperation(),
                                     "Open or close the command palette");
-                                tooltip = "Find a command that works here, and run it (Ctrl+Shift+P)"),) :
+                                tooltip = TooltipNote(; title = "Command palette", keys = Any[COMMAND_PALETTE_GESTURE],
+                                                      text = "Find a command that works here, and run it.")),) :
                            ())...,
         make_window_command("Documents",
                             editor -> _reach_tool!(editor, DocumentTypeList,
                                                    _make_scrolling_tool(DocumentTypeList));
-                            tooltip = "Every document type that an empty tab can make"),
+                            tooltip = "Every document type that an empty tab can make."),
         make_window_command("Projections",
                             editor -> _reach_tool!(editor, ProjectionList,
                                                    _make_scrolling_tool(ProjectionList));
-                            tooltip = "Every projection: the views of a document, and the projections that combine them"),
+                            tooltip = "Every projection: the views of a document, and the projections that combine them."),
         make_window_command("About", editor -> _reach_tool!(editor, AboutPage, about);
-                            tooltip = "What this program is, and its version"),
+                            tooltip = "What this program is, and its version."),
     ]))
 
 """
@@ -161,11 +169,11 @@ make_window_menu_bar(; recorded = RECORDED_TOOLS, extra = [], about = _ -> About
                orientation = :horizontal)
 
 """
-    make_window_toolbar(; assistant = nothing, explorer = nothing, recorded = RECORDED_TOOLS,
-                        extra = []) -> WidgetToolbar
+    make_window_toolbar(; assistant = nothing, explorer = nothing, files = nothing,
+                        recorded = RECORDED_TOOLS, assistant_list = false, extra = []) -> WidgetToolbar
 
-The tools of the window, one button each: the explorer, the assistant, the
-evaluator, the message log, the gesture log, the fault log, the frame
+The tools of the window, one button each: the explorer, the files, the
+assistant, the evaluator, the message log, the gesture log, the fault log, the frame
 statistics, the frame times, the selection, the appearance and the settings.
 Each button shows a picture and says its name as a tooltip, and a press reaches
 the tool or opens it — see
@@ -175,15 +183,18 @@ The tools are what a person looks for and cannot type the name of. A new tab is
 not here: the tab strip of every group has a button for it, beside the group
 that gets the tab.
 
-Two tools need what only the window knows, and the window gives them as
+Three tools need what only the window knows, and the window gives them as
 functions of the editor:
 
 - `assistant` makes the assistant of this window, with its backend, its model and
   its greeting. When it is `nothing` the window has no assistant, and the
   toolbar has no button for one: a blank assistant with no backend answers
   nothing.
-- `explorer` makes the file explorer of this window, over its folder. When it is
-  `nothing` the button opens what `Ctrl+T` and `explorer` open: the working
+- `explorer` makes the explorer of this window. When it is `nothing` the button
+  opens what `Ctrl+T` and `explorer` open: an explorer of the content of the
+  editor.
+- `files` makes the file explorer of this window, over its folder. When it is
+  `nothing` the button opens what `Ctrl+T` and `files` open: the working
   directory.
 
 Five tools show what the window records, and each fills only when a wrapper of
@@ -192,29 +203,40 @@ Five tools show what the window records, and each fills only when a wrapper of
 times with `frame_statistics`. `recorded` holds the keywords of the wrappers that
 are on, and the toolbar has no button for a tool that stays empty.
 
+`assistant_list = true` adds the button of the Assistants pane after the
+settings. The wrapper `assistant_list` of `build_editor` links the list to the
+tabs of the window, and without it the pane lists nothing.
+
 A host appends its own buttons with `extra`, which is where a command that only
 one binary has belongs.
 """
-make_window_toolbar(; assistant = nothing, explorer = nothing, recorded = RECORDED_TOOLS, extra = []) =
+make_window_toolbar(; assistant = nothing, explorer = nothing, files = nothing, recorded = RECORDED_TOOLS,
+                    assistant_list::Bool = false, extra = []) =
     WidgetToolbar(Any[
-        make_window_tool_command("Explorer", Workspace; icon = :folder,
-                                 tooltip = "Explorer: the files of this window's folder",
-                                 make = something(explorer, _make_default_tool(Workspace))),
+        make_window_tool_command("Explorer", Explorer; icon = :folder_tree,
+                                 tooltip = "The files, the tasks, the assistants and the tools of this editor.",
+                                 make = something(explorer, _make_default_tool(Explorer))),
+        make_window_tool_command("Files", WorkspaceExplorer; icon = :folder,
+                                 tooltip = "The files of the folder of this window.",
+                                 make = something(files, _make_default_tool(WorkspaceExplorer))),
         (assistant === nothing ? () :
             (make_window_tool_command("Assistant", Assistant; icon = :chat,
-                                      tooltip = "Assistant: ask a model about what this window shows",
+                                      tooltip = "Ask a model about what this window shows.",
                                       make = assistant),))...,
         make_window_tool_command("Evaluator", EvaluatorToplevel; icon = :terminal,
-                                 tooltip = "Evaluator: type Julia, and Enter evaluates it"),
+                                 tooltip = "Type Julia code, and evaluate it."),
         _make_recorded_tool_commands(recorded)...,
         make_window_tool_command("Selection", SelectionInspector; icon = :crosshair,
-                                 tooltip = "Selection: what the selection of this window names"),
+                                 tooltip = "What the selection of this window names."),
         make_window_tool_command("Appearance", Appearance; icon = :palette,
-                                 tooltip = "Appearance: the zoom and the scales of this window",
+                                 tooltip = "The zoom and the scales of this window.",
                                  make = _make_appearance_tool),
         make_window_tool_command("Settings", Settings; icon = :settings,
-                                 tooltip = "Settings: how this editor works",
+                                 tooltip = "Change how this editor works.",
                                  make = _find_tool_settings),
+        (assistant_list ?
+            (make_window_tool_command("Assistants", AssistantList; icon = :chats,
+                 tooltip = "Every assistant conversation of this window."),) : ())...,
         extra...,
     ])
 
@@ -232,20 +254,20 @@ const RECORDED_TOOLS = (:message_log, :gesture_log, :fault_log, :frame_statistic
 # wrapper that fills it is in `recorded`.
 _make_recorded_tool_commands(recorded) = (
     (:message_log in recorded ?
-        (make_window_tool_command("Message log", MessageLog; icon = :list,
-                                  tooltip = "Message log: what the program said in this session"),) : ())...,
+        (make_window_tool_command("Message log", MessageLog; icon = :scroll_text,
+                                  tooltip = "What the program said in this session."),) : ())...,
     (:gesture_log in recorded ?
         (make_window_tool_command("Gesture log", GestureLog; icon = :keyboard,
-                                  tooltip = "Gesture log: every gesture of this session, and what each one did"),) :
+                                  tooltip = "Every gesture of this session, and what each one did."),) :
         ())...,
     (:fault_log in recorded ?
         (make_window_tool_command("Fault log", FaultLog; icon = :warning,
-                                  tooltip = "Fault log: what failed in this session, and how often"),) : ())...,
+                                  tooltip = "What failed in this session, and how often."),) : ())...,
     (:frame_statistics in recorded ?
-        (make_window_tool_command("Statistics", FrameStatistics; icon = :chart,
-                                  tooltip = "Statistics: how long the frames of this window take"),
+        (make_window_tool_command("Frame statistics", FrameStatistics; icon = :chart,
+                                  tooltip = "How long the frames of this window take."),
          make_window_tool_command("Frame times", FrameTimeSeries; icon = :chart_line,
-                                  tooltip = "Frame times: the time of each recent frame")) : ())...)
+                                  tooltip = "The time of each recent frame.")) : ())...)
 
 """
     make_window_tool_command(label, type; icon = nothing, tooltip = nothing,
@@ -264,7 +286,8 @@ wants a second one opens it with `Ctrl+T` and the name of the tool.
 A tab counts when the document it wraps is a `type`, so a tool kept inside a
 history counts too. `make` takes the editor, because a window can know the
 folder of its explorer only through the editor. By default it makes what
-`Ctrl+T` and the name of the tool make.
+`Ctrl+T` and the name of the tool make in that editor, such as the log of its
+session.
 
 The button shows `icon` alone and says `tooltip`; see [`WidgetToolbarItem`](@ref).
 """
@@ -274,7 +297,7 @@ make_window_tool_command(label, type::Type; icon = nothing, tooltip = nothing,
                                              callback = editor -> _reach_tool!(editor, type, make)),
                              tooltip = tooltip)
 
-_make_default_tool(type::Type) = _ -> make_insertion_document(type)
+_make_default_tool(type::Type) = editor -> run_with_evaluation_editor(() -> make_insertion_document(type), editor)
 
 # The appearance tab shows the `Appearance` of the editor. An editor with no
 # `appearance` wrapper has none, and the tab shows a new one.

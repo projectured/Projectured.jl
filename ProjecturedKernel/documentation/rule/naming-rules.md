@@ -235,6 +235,11 @@ alongside it.
   fields are plain. That is the whole of what distinguishes `MCFoo` from `MFoo`: the
   first is an immutable struct holding one `MutableCell` box per field, the
   second a single mutable object with its fields inline.
+- **A view document of one kind of content takes the `View` suffix**:
+  `DataFrameView`, `FindBarView`. It keeps how one view shows its content, apart
+  from the content ([architecture-rules.md](architecture-rules.md)). A view that is a
+  tool of its own keeps its own name: `DocumentTree`, `Navigator`,
+  `WorkspaceExplorer`.
 - **Operations are verb-first phrases with the `Operation` suffix**:
   `ReplaceSelectionOperation`, `OpenWindowOperation`,
   `ReplaceNumberRangeOperation`. Even the null operation is verb-first:
@@ -353,7 +358,7 @@ read of external state takes none, so `read_os_clipboard` has no `!`.
 - **Factories are `make_*`**: `make_agent_server`,
   `make_child_context`, `make_scripted_say`.
 - **Predicates start with `is_`** (`is_valid_reference`,
-  `is_reference_equal`, `is_cell_up_to_date`) or are plain verbs that read as
+  `is_reference_equal`, `is_cell_valid`) or are plain verbs that read as
   questions at the call site (`matches(pattern, gesture)`,
   `would_create_cycle(env, from, to)`). Keep the plain verb where `is_` would
   change the meaning: `would_create_cycle` asks what adding an edge *would*
@@ -374,7 +379,7 @@ read of external state takes none, so `read_os_clipboard` has no `!`.
 
 ### Words
 
-- **snake_case with underscores between all words**: `is_cell_up_to_date`, not
+- **snake_case with underscores between all words**: `is_cell_valid`, not
   `isuptodate`; `insert_row!`, not `insertrow!`.
 - **No ad-hoc abbreviated words inside names**: `value` not `val`, `function`
   not `fn`, `reference` not `ref`, `operation` not `op`, `performance` not
@@ -395,6 +400,14 @@ read of external state takes none, so `read_os_clipboard` has no `!`.
   which carry `"pred-ref"`, `"pred:ref"` and `"pred_ref"` for Markdown, XML and
   Julia. This is the same exemption a Base generic gets: a name that comes from
   outside keeps its spelling.
+- **An exported name usually carries the noun of its layer or slice**, so a reader
+  can tell at the call site where the name comes from, and a search finds it there:
+  `is_cell_valid`, `record_cell_fault!`, `is_fault_exception`. This is advice,
+  not a strict rule. A word that is the vocabulary of the layer, and that appears
+  almost only beside a name of the layer, can go without it: `Computation` and
+  `@computation` stand in `Cell(@computation x)`. A name whose words point to
+  another layer needs the noun most: in the cell layer, `get_fault_scope` reads as
+  a name of the fault layer, so it is `get_cell_fault_scope`.
 - This convention governs exported names. Local and argument names are
   outside its scope, though full words are encouraged there too
   (`context` over `ctx`).

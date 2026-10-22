@@ -88,9 +88,11 @@ function test_console_backend()
         @test _parse(0x1b, UInt8('['), UInt8('F')) == KeyDown(:end, ModifierKeys(); time = 0.0)
         @test _parse(0x03) isa WindowQuit           # Ctrl-C
         @test _parse(0x00) == KeyDown(:space, ModifierKeys(ctrl=true); time = 0.0)  # Ctrl-Space
-        @test _parse(0x0d) == KeyDown(:return, ModifierKeys(); time = 0.0)
+        # Return and Tab type a character, so they are a KeyPress, as a letter is.
+        @test _parse(0x0d) == KeyPress('\n'; time = 0.0)
+        @test _parse(0x0a) == KeyPress('\n'; time = 0.0)
         @test _parse(0x7f) == KeyDown(:backspace, ModifierKeys(); time = 0.0)
-        @test _parse(0x09) == KeyDown(:tab, ModifierKeys(); time = 0.0)
+        @test _parse(0x09) == KeyPress('\t'; time = 0.0)
         # A Ctrl byte that no row above reads is its letter with Ctrl: 0x1A is Ctrl+Z.
         @test _parse(0x1a) == KeyDown(:z, ModifierKeys(ctrl=true); time = 0.0)
         @test _parse(0x01) == KeyDown(:a, ModifierKeys(ctrl=true); time = 0.0)
@@ -147,7 +149,7 @@ function test_console_backend()
         @test csi("2~") == KeyDown(:insert, ModifierKeys(); time = 0.0)
         @test csi("15;5~") == KeyDown(:f5, ModifierKeys(ctrl = true); time = 0.0)
         @test csi("1;2P") == KeyDown(:f1, ModifierKeys(shift = true); time = 0.0)
-        @test csi("Z") == KeyDown(:tab, ModifierKeys(shift = true); time = 0.0)
+        @test csi("Z") == KeyPress('\t', ModifierKeys(shift = true); time = 0.0)
         @test _parse(ESC, UInt8('O'), UInt8('Q')) == KeyDown(:f2, ModifierKeys(); time = 0.0)
         # The parser takes the whole sequence, so no stray character follows it.
         buffer = collect(UInt8, "\e[1;5Dx")
@@ -182,12 +184,13 @@ function test_console_backend()
         @test q == KeyPress('q'; time = q.time)
     end
 
-    # ── the editor quits on Escape, and an Alt chord does not quit ────────
+    # ── Escape quits an editor that quits on Escape, as `run_console_example`
+    # does, and an Alt chord does not quit ─────────────────────────────────
     @testset "escape quits the editor" begin
         function read_operation(bytes)
             backend = ConsoleBackend(; io=IOBuffer(), input=IOBuffer(bytes), ansi=true, clear=false)
             editor = Editor(make_json_document_example(),
-                            make_json_console_projection_example();
+                            EscapeQuittingProjection(inner = make_json_console_projection_example());
                             backend = backend, devices = Device[Keyboard()])
             Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
                 _ED.run_print_stage!(editor)
@@ -345,6 +348,31 @@ function test_console_backend()
         elapsed = @elapsed wait_for_input(gated, Device[], 0.05)
         @test elapsed >= 0.04
         @test elapsed < 5.0
+    end
+
+    # ── held frames ─────────────────────────────────────────────────────
+    # While a code unit runs, a held frame writes a status line on the bottom
+    # row from half a second on, keeps the bytes that arrive, and takes a lone
+    # Escape that comes while the line shows as the stop.
+    @testset "held frames" begin
+        input = Base.BufferStream()
+        output = IOBuffer()
+        held = ConsoleBackend(; io = output, input)
+        run(seconds) = run_held_frame!(held, Device[], HeldFrameState(seconds, 1, false, false))
+        prepare_held_frames!(held, Device[], ["Run the code: sleep(10)"])
+        write(input, "ab")
+        @test run(0.2) === :none
+        @test isempty(take!(output))                # no line before half a second
+        @test run(0.6) === :none
+        @test occursin("Run the code: sleep(10) · 0 s · Esc stops", String(take!(output)))
+        write(input, "\e")
+        @test run(0.7) === :stop
+        @test held.inbuf == UInt8['a', 'b']         # the bytes before it stay
+        write(input, "\e[A")                        # an arrow key is a key
+        @test run(0.8) === :none
+        @test held.inbuf == UInt8['a', 'b', 0x1b, UInt8('['), UInt8('A')]
+        end_held_frames!(held, Device[])
+        @test occursin("\e[2K", String(take!(output)))   # the line is gone
     end
 
 end

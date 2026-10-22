@@ -57,7 +57,7 @@ A buffer above a buffer keeps a copy of each step below. A run joins in both or 
 
 ### The reader wraps and never records
 
-`PAR-READER-IS-PURE` in [architecture-invariants.md](../../../rule/architecture-invariants.md) forbids a reader to change anything. So the reader returns `RecordUndoOperation(buffer, operation)`, and its `evaluate_operation` takes the label and the caret, applies the operation through `evaluate_invertible_operation!` and pushes the entry. A new entry empties `redo_entries` and drops the oldest entry above `capacity`.
+`PAR-READER-IS-PURE` in [architecture-invariants.md](../../../rule/architecture-invariants.md) forbids a reader to change anything. So the reader returns `RecordUndoOperation(buffer, operation)`, and its `evaluate_operation` takes the label and the caret, applies the operation through `evaluate_invertible_operation!`, keeps its way back without the moves of the selection (see the keys below), and pushes the entry. A new entry empties `redo_entries` and drops the oldest entry above `capacity`.
 
 `RecordUndoOperation` is a `WrappingOperation`: `get_wrapped_operation` and `rewrap_operation` reach the operation inside it. Every seam that maps a `CompoundOperation` member by member uses these two, so the wrapper needs no special case anywhere. `UndoOperation` and `RedoOperation` hold the buffer itself, so `is_self_contained_operation` is `true` for both and they need no rerooting.
 
@@ -81,6 +81,8 @@ Four rules make the two work together, and a run of typing keeps them (see above
 
 `make_history_wrap(settings)` puts a document into a buffer whose capacity is the cell of `undo_capacity` of `HistorySettings`. When the editor has settings, the evaluation of the open of a file gives the file such a history, whatever started the open (the Files pane, the menu Open, a link): around the part that the opener puts around the file document, such as a navigator, so the buffer records every edit of that part, and else around the content inside the file, as a file tab of the application has it.
 
+So every editor that has settings can hold a history, and every editor must draw one. The slice registers the row `UndoBuffer => UndoBufferToAnyProjection()` with the natural renderer when it loads, and each `NaturalToGraphics` draws a history as what it holds. A renderer that does not draw through the natural renderer needs the row in its own table.
+
 ### The keys
 
 | Key | What it does |
@@ -89,6 +91,8 @@ Four rules make the two work together, and a run of typing keeps them (see above
 | Ctrl+Y, Ctrl+Shift+Z | put the last step back |
 
 A key with an empty list returns `nothing`, so the key goes on to the next reader. After a step, the caret goes back to the place saved in the entry. A saved path that no longer matches the document is ignored.
+
+**The way back holds the edits and no move of the selection.** The selection is view state, as the filter says, and the entry keeps the selection from before the step. So `RecordUndoOperation` replaces each `ReplaceSelectionOperation` and `SelectNextInsertionOperation` in the way back with `DoNothingOperation()`, and a way back with no edit left does nothing, so it adds no entry. The undo takes the edits back in reverse order, and then puts the selection back, when the place that it names exists again. For example, a step deletes the selected third element of a list and selects the second. A move of the selection in its way back would select the third element before the element comes back, and fail. The pivot makes the same kind of step when it moves a field: it moves the field, and selects it at its new place.
 
 ### What is not recorded
 
@@ -121,9 +125,9 @@ fills them with `get_undo_style`, from an `UndoTheme` scaled or not, or the defa
 
 ## How it fits
 
-The undo slice depends on the kernel, the collection slice for the two lists, the projection slice, and the syntax, text, graphics and style slices for the history panel. It rests on one kernel seam, `source/kernel/operation/Inversion.jl`, which holds `make_inverse_operation` and `evaluate_invertible_operation!`. No other slice depends on it; an application puts a buffer into its document and a `UndoBuffer => UndoBufferToAnyProjection()` row into its dispatch table.
+The undo slice depends on the kernel, the collection slice for the two lists, the projection slice, the natural slice for its row, and the syntax, text, graphics and style slices for the history panel. It rests on one kernel seam, `source/kernel/operation/Inversion.jl`, which holds `make_inverse_operation` and `evaluate_invertible_operation!`. The file system slice and the application depend on it: the open of a file and the application put a buffer into the document.
 
-It registers nothing at load time. The keys are a `get_projection_gesture_bindings` table of the projection, and the tools are added only by a program that calls `register_undo_tools!`.
+At load time it registers one row with the natural renderer, `UndoBuffer => UndoBufferToAnyProjection()`. The keys are a `get_projection_gesture_bindings` table of the projection, and the tools are added only by a program that calls `register_undo_tools!`.
 
 ## Design decisions
 

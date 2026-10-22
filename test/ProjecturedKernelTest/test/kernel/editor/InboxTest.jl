@@ -15,7 +15,10 @@ import ProjecturedKernel.EditorModule
 import ProjecturedKernel.EditorModule: Editor, post_operation!, drain_operations!, run_editor!,
                                        make_editor, RunFunctionOperation
 import ProjecturedKernel.OperationModule: Operation, evaluate_operation, QuitEditorOperation
-import ProjecturedKernel.AgentModule: run_on_editor_task!
+import ProjecturedKernel.AgentModule: run_on_editor_task!, EditorCallTimeoutException,
+                                      is_editor_loop_running
+import ProjecturedKernel.EditorModule: get_session_document!
+import ProjecturedKernel.ToolModule: find_evaluation_editor
 import ProjecturedKernel.BackendModule
 import ProjecturedKernel.BackendModule: Backend
 using ProjecturedKernelExample
@@ -147,6 +150,34 @@ function test_editor_inbox()
         @test !isready(editor.inbox)
     end
 
+    @testset "an editor says whether its loop runs, and only an editor does" begin
+        editor = _inbox_editor()
+        @test !is_editor_loop_running(editor)
+        editor.loop_task = current_task()
+        @test is_editor_loop_running(editor)
+        editor.has_loop_ended = true
+        @test !is_editor_loop_running(editor)
+        @test !is_editor_loop_running((document = nothing,))
+    end
+
+    @testset "each editor keeps its own session documents" begin
+        first_editor = _inbox_editor()
+        second_editor = _inbox_editor()
+        made = get_session_document!(() -> Int[1], first_editor, Vector{Int})
+        @test get_session_document!(() -> Int[2], first_editor, Vector{Int}) === made
+        @test get_session_document!(() -> Int[2], second_editor, Vector{Int}) == [2]
+    end
+
+    @testset "the loop runs with its editor as the editor of the evaluation" begin
+        editor = _inbox_editor()
+        seen = Ref{Any}(nothing)
+        @test find_evaluation_editor() === nothing
+        post_operation!(editor, RunFunctionOperation(() -> (seen[] = find_evaluation_editor()), nothing))
+        post_operation!(editor, QuitEditorOperation())
+        run_editor!(editor)
+        @test seen[] === editor
+    end
+
     @testset "a call from another task runs in the drain, and the caller waits" begin
         editor = _inbox_editor()
         editor.loop_task = current_task()          # a loop runs on this task
@@ -161,7 +192,13 @@ function test_editor_inbox()
         @test isempty(log) && !istaskdone(caller)
         @test drain_operations!(editor) == 2
         @test [tag for (tag, _) in log] == [:posted, :called]
-        @test all(((_, task),) -> task === current_task(), log)
+        # Both calls run in one code unit: on a task of their own when the process
+        # has a thread for it, or else here, on the task of the loop.
+        tasks = unique(task for (_, task) in log)
+        @test length(tasks) == 1 && only(tasks) !== caller
+        has_unit_thread = any(thread -> thread != Threads.threadid(),
+                              Threads.threadpooltids(:default))
+        @test (only(tasks) === current_task()) == !has_unit_thread
         @test fetch(caller) == 42
         # What the call throws is thrown on the task that waits for it.
         failing = @async run_on_editor_task!(() -> error("the call failed"), editor)
@@ -174,17 +211,20 @@ function test_editor_inbox()
     @testset "a call that waits when the loop ends gets its answer" begin
         editor = _inbox_editor()
         answer = Ref{Any}(nothing)
-        # The loop applies this first, on its own task, so the call below is
-        # posted by a task that waits for a running loop.
+        quit_posted = Base.Event()
+        # The loop applies this first. It posts the quit, and gives a task outside
+        # the loop the time to post a call, which then waits in the inbox behind
+        # the quit when the loop ends. A task that this call started could not
+        # wait: the call runs in a code unit (rule b of the plan of units).
         post_operation!(editor, RunFunctionOperation(function ()
-            @async begin
-                answer[] = run_on_editor_task!(() -> current_task(), editor)
-            end
-            # The quit is applied before the call, which waits in the inbox
-            # behind it when the loop ends.
             post_operation!(editor, QuitEditorOperation())
-            yield()
+            notify(quit_posted)
+            sleep(0.2)
         end, nothing))
+        caller = @async begin
+            wait(quit_posted)
+            answer[] = run_on_editor_task!(() -> current_task(), editor)
+        end
         run_editor!(editor)
         @test timedwait(() -> answer[] !== nothing, 5.0) === :ok
         @test answer[] === current_task()
@@ -229,6 +269,65 @@ function test_editor_inbox()
         @test_throws "the windows did not open" make_editor(
             InboxProbe(), InboxProbeProjection(); backend, devices = Device[])
         @test backend.quits == 1
+    end
+
+    @testset "a post of the owner never waits, also beyond the bound of the inbox" begin
+        editor = _inbox_editor()
+        log = Any[]
+        # Before the loop starts, every task is the owner.
+        for index in 1:(EditorModule.INBOX_CAPACITY + 10)
+            post_operation!(editor, ProbeInboxOperation(log, index))
+        end
+        @test !isready(editor.inbox)
+        @test drain_operations!(editor) == EditorModule.INBOX_CAPACITY + 10
+        @test [tag for (tag, _) in log] == collect(1:(EditorModule.INBOX_CAPACITY + 10))
+        # The task of a running loop is the owner too.
+        editor.loop_task = current_task()
+        for index in 1:(EditorModule.INBOX_CAPACITY + 1)
+            post_operation!(editor, ProbeInboxOperation(log, index))
+        end
+        @test !isready(editor.inbox)
+        @test drain_operations!(editor) == EditorModule.INBOX_CAPACITY + 1
+    end
+
+    @testset "a post from another task waits for room in the inbox" begin
+        editor = _inbox_editor()
+        editor.loop_task = current_task()          # a loop runs on this task
+        log = Any[]
+        producer = @async for index in 1:(EditorModule.INBOX_CAPACITY + 1)
+            post_operation!(editor, ProbeInboxOperation(log, index))
+        end
+        @test timedwait(() -> Base.n_avail(editor.inbox) >= EditorModule.INBOX_CAPACITY, 5.0) === :ok
+        @test !istaskdone(producer)                # the last post waits for room
+        @test drain_operations!(editor) == EditorModule.INBOX_CAPACITY
+        wait(producer)
+        @test drain_operations!(editor) == 1
+        @test length(log) == EditorModule.INBOX_CAPACITY + 1
+    end
+
+    @testset "a call that the editor does not start in time is withdrawn" begin
+        editor = _inbox_editor()
+        editor.loop_task = current_task()          # a loop runs, and drains nothing
+        ran = Ref(false)
+        caller = @async try
+            run_on_editor_task!(() -> (ran[] = true), editor; description = "slow", timeout = 0.2)
+        catch exception
+            exception
+        end
+        answer = fetch(caller)
+        @test answer isa EditorCallTimeoutException
+        @test answer.description == "slow"
+        @test drain_operations!(editor) == 1         # the drain takes it, and skips it
+        @test !ran[]
+    end
+
+    @testset "the end of the loop closes the queues, and a later call runs at once" begin
+        editor = _inbox_editor()
+        post_operation!(editor, QuitEditorOperation())
+        run_editor!(editor)
+        @test_throws InvalidStateException post_operation!(editor, ProbeInboxOperation(Any[], :late))
+        @test run_on_editor_task!(() -> current_task(), editor) === current_task()
+        @test_throws ArgumentError run_editor!(editor)
     end
 
     @testset "a frame applies what was posted before it reads" begin

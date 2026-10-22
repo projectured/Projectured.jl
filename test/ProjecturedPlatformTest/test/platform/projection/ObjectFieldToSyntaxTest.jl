@@ -29,6 +29,19 @@ end
 
 end # @testset
 
+@testset "each kind of value in an object takes the role of its kind" begin
+
+    role(name) = resolve_theme_color(ColorRole(name), Appearance())
+    rule(type) = only(rule for rule in ObjectToSyntax().dispatch if first(rule) === type)[2]
+    @test rule(Nothing).style.color == role(:null_literal)
+    @test rule(Bool).style.color == role(:boolean_literal)
+    @test rule(Number).style.color == role(:number_literal)
+    @test rule(Symbol).style.color == role(:symbol_literal)
+    @test rule(AbstractString).value.color == role(:string_literal)
+    @test rule(Char).value.color == role(:character_literal)
+
+end # @testset
+
 @testset "a step that names no field leaves the value alone" begin
 
     srv = _ofs_server()
@@ -70,6 +83,21 @@ end # @testset
     cli = FormServer("laptop", 1, false, Any["x"], nothing)
     rendered = _ofs_render(Any[ObjectField(srv, "name"), ObjectField(cli, "name")])
     @test rendered == "{\n  name \"gateway\"\n  name \"laptop\"\n}"
+
+end # @testset
+
+@testset "a delete at the front keeps the print of each element that stays" begin
+
+    stage = _ofs_stage()
+    servers = [FormServer("s$k", k, true, Any[], nothing) for k in 1:3]
+    items = CellVector(Cell[Cell(server) for server in servers])
+    iomap = print_document(stage, stage, items, PrinterContext())
+    before = collect(iomap.output.children)
+    @test length(before) == 3
+    deleteat!(items, 1)
+    after = collect(iomap.output.children)
+    @test length(after) == 2
+    @test after[1] === before[2] && after[2] === before[3]
 
 end # @testset
 

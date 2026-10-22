@@ -18,6 +18,7 @@ its own definition:
 | [`DocumentDefaults.jl`](DocumentDefaults.jl) | the default behaviours every document inherits — the `is_element_collection` / `is_walk_opaque` trait answers, the defaults of the sync and copy policy hooks, and the depth-limited debug `show` |
 | [`DocumentCopy.jl`](DocumentCopy.jl) | `copy_document` — deep copy, kind-preserving under a `CopyPolicy`, or kind-converting |
 | [`DocumentSync.jl`](DocumentSync.jl) | `sync_document!` — the double-buffer shadow sync |
+| [`DeclaredType.jl`](DeclaredType.jl) | the check of the declared type of a field at each write and at construction, `DeclaredTypeMismatchException`, and the records of an inventory |
 | [`DocumentMacro.jl`](DocumentMacro.jl) | `@document` — the document codegen |
 | [`SelectionDocument.jl`](SelectionDocument.jl) | `SelectionDocument` — the value a `selection` cell holds, and `unwrap_selection` |
 | [`DocumentWalk.jl`](DocumentWalk.jl) | `walk_document` — the one reflection walk, parameterized by how it names a node (`DocumentWalk`) |
@@ -26,6 +27,7 @@ its own definition:
 """
 module DocumentModule
 
+using Base.ScopedValues: ScopedValue, with
 using ..CellModule
 using ..CellStructModule
 using ..FaultModule
@@ -33,7 +35,7 @@ using ..FaultModule
 export Document, copy_document, get_wrapped_document, replace_wrapped_document!, get_edited_field,
        sync_document!, get_document_family,
        get_document_cell_type, get_document_native_type, get_document_schema_name,
-       get_document_title,
+       get_document_title, get_document,
        is_descendable_for_sync, compute_sync_element_limit, make_unsynced_placeholder, HiddenElements,
        CopyPolicy, PlainCopyPolicy, DocumentCopyException, copy_document_fields,
        is_descendable_for_copy, make_copy_placeholder, copy_computed_cell, get_copy_memo,
@@ -43,8 +45,15 @@ export Document, copy_document, get_wrapped_document, replace_wrapped_document!,
        get_cell_layout_field_type, search_documents,
        @document, @document_preset,
        @forward_protocol, @forward_vector_protocol, @adapt_map_protocol
+export DeclaredTypeMismatchException, PendingValue,
+       set_declared_type_check_mode!, get_declared_type_check_mode, DeclaredTypeMismatchRecord,
+       collect_declared_type_mismatches, clear_declared_type_mismatches!,
+       find_declared_field_type, find_declared_element_type,
+       convert_to_declared_type, convert_written_value, is_admitted_by_declared_type,
+       convert_assigned_value
 export SelectionDocument, unwrap_selection
-export DocumentWalk, walk_document, make_string_predicate
+export DocumentWalk, walk_document, make_string_predicate, is_background_work_allowed, complete_walked_cell,
+       DocumentMatches, WalkLimits, is_search_complete
 # how deep `show` descends before it elides
 export DOCUMENT_SHOW_MAX_DEPTH
 
@@ -52,6 +61,7 @@ include("DocumentInterface.jl")
 include("DocumentDefaults.jl")
 include("DocumentCopy.jl")
 include("DocumentSync.jl")
+include("DeclaredType.jl")
 include("DocumentMacro.jl")
 include("SelectionDocument.jl")
 include("DocumentWalk.jl")

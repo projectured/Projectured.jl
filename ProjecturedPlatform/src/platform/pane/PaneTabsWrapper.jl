@@ -59,6 +59,9 @@ function wrap_editor!(::Val{:tabs}, layer::Symbol, argument, parts::EditorParts)
     inner = get_selection(document)
     inner === nothing || set_selection!(tree, @reference(tree, root.tabs[1].content.^(inner)))
     parts.document = tree
+    # The documents of the tabs enter the window: the acquire applies at the first
+    # drain of the loop, so the build of the editor starts no work of them.
+    push!(parts.start_steps, editor -> (post_operation!(editor, AcquireDocumentOperation(tree)); nothing))
     parts.projection = make_tabs_projection(parts.projection;
         appearance = get(options, :appearance, get(parts.arguments, :appearance, Appearance())),
         measure = get(options, :measure, FontFileMeasure()))
@@ -72,14 +75,19 @@ is_wrapper_default(::Val{:tabs}) = true
     show_document!(editor, content::PaneTree, document; title) -> nothing
 
 Show `document` in a tab of the pane tree: the tab that shows it already, with
-the focus, or a new tab named `title`.
+the focus, or a new tab named `title`. A tab shows `document` when its content
+or a layer that the content holds is `document` ([`find_pane_tab_layer`](@ref)),
+whatever its title, so two tabs with the same title are no problem.
 """
 function show_document!(editor::Editor, ::PaneTree, document; title::AbstractString)
-    tab = find_pane(title; editor)
-    if tab !== nothing && get_document(tab).content === document
-        focus_pane!(tab; editor)
-    else
+    found = search_references(_get_root_document(editor),
+                              node -> node isa PaneTab &&
+                                      find_pane_tab_layer(node, layer -> layer === document) !== nothing;
+                              descend = is_pane_search_step)
+    if isempty(found)
         open_pane!(document; title = String(title), editor)
+    else
+        focus_pane!(first(found); editor)
     end
     nothing
 end

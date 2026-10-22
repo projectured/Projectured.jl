@@ -79,7 +79,7 @@ end
 # The keys that type no character. The press of any other key comes with the
 # character that it types.
 const _NON_TYPING_KEYS = Set{Symbol}([:left, :right, :up, :down, :home, :end, :page_up, :page_down,
-                                      :return, :tab, :escape, :insert, :backspace, :delete,
+                                      :escape, :insert, :backspace, :delete,
                                       :f1, :f2, :f3, :f4, :f5, :f6, :f7, :f8, :f9, :f10, :f11, :f12])
 
 # Is `gesture` an act of the person that types no character: a press of a mouse
@@ -88,6 +88,8 @@ const _NON_TYPING_KEYS = Set{Symbol}([:left, :right, :up, :down, :home, :end, :p
 function _ends_typing_run(gesture)
     event = gesture isa WindowInput ? gesture.event : gesture
     event isa Union{MouseClick, MouseDown, MouseScroll} && return true
+    # Return and Tab type a character that shows nothing.
+    event isa KeyPress && return any(iscntrl, event.text)
     event isa KeyDown || return false
     modifiers = event.modifiers
     modifiers.ctrl || modifiers.alt || modifiers.meta || event.key in _NON_TYPING_KEYS
@@ -109,12 +111,13 @@ map_reference_backward(p::GestureLogRecordingProjection,
 # ── The gesture log of a window, as a wrapper of `build_editor` ──────────────
 
 """
-    gesture_log = true | (; overlay, anchor, lines, measure, operation_width)
+    gesture_log = true | (; log, overlay, anchor, lines, measure, operation_width)
 
 The wrapper of `build_editor` that records each operation of a window in the
-gesture log of the session ([`get_session_gesture_log`](@ref)), with the key or
-the click that made it. It records no move of the selection, and a run of typed
-characters is one entry. View → Gesture log and the toolbar of the `shell`
+gesture log of the session of its editor ([`get_session_gesture_log`](@ref)),
+with the key or the click that made it. That log is `log`, by default a new one,
+such as the log of a tab that a file gave before the editor existed. It records
+no move of the selection, and a run of typed characters is one entry. View → Gesture log and the toolbar of the `shell`
 wrapper open the log. It is off by default. It acts outermost in the content of
 the window, so it sees every operation that the window makes.
 
@@ -134,9 +137,10 @@ function wrap_editor!(::Val{:gesture_log}, layer::Symbol, argument, parts::Edito
     inner = get(options, :overlay, false) === true ?
             _make_gesture_log_panel(parts.projection, options,
                                     get(parts.arguments, :appearance, nothing)) : parts.projection
-    parts.projection = GestureLogRecordingProjection(inner = inner,
-                                                     log = get_session_gesture_log(),
-                                                     fold_typing = true)
+    log = get(options, :log, nothing)
+    log === nothing && (log = GestureLog())
+    parts.projection = GestureLogRecordingProjection(inner = inner, log = log, fold_typing = true)
+    push!(parts.start_steps, editor -> (get_session_document!(() -> log, editor, GestureLog); nothing))
     parts
 end
 

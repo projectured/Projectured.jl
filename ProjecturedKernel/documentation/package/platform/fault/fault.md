@@ -8,19 +8,20 @@ A fault in a printer, a reader, an operation, a backend or a tool does not stop 
 
 ### Two halves
 
-The kernel's `FaultModule` holds the record, the store, the policy, the barrier of the editor loop and the report. It names no document and no projection. The kernel's cell layer holds the fault scope of a computation, and its projection layer the seams of a barrier. The platform's `ProjectionAlgebraModule` holds the barrier inside a pipeline and the report that it leaves, and each output domain holds the mark that draws the report. `FaultViewModule` in this package holds the log, the panel, the safe mode and the gestures of a mark, and it answers the seams of the kernel.
+The kernel's `FaultModule` holds the record, the store, the policy, the barrier of the editor loop and the report; the [kernel guide of faults](../../kernel/fault.md) describes it. It names no document and no projection. The kernel's cell layer holds the fault scope of a computation, and its projection layer the seams of a barrier. The platform's `ProjectionAlgebraModule` holds the barrier inside a pipeline and the report that it leaves, and each output domain holds the mark that draws the report. `FaultViewModule` in this package holds the log, the panel, the safe mode and the gestures of a mark, and it answers the seams of the kernel.
 
 | Where | What |
 | --- | --- |
 | `source/kernel/fault/FaultRecord.jl` | `FaultRecord`, `make_fault_record` |
-| `source/kernel/fault/FaultStore.jl` | `FaultStore`, `record_fault!`, `drain_faults!`, `attach_fault_target!` |
+| `source/kernel/fault/FaultStore.jl` | `FaultStore`, `record_fault!`, `drain_faults!`, `attach_fault_target!`, `detach_fault_target!` |
 | `source/kernel/fault/FaultPolicy.jl` | `FaultPolicy`, `make_strict_fault_policy` |
 | `source/kernel/fault/FaultBarrier.jl` | `run_fault_barrier!`, the catch of the editor loop |
 | `source/kernel/fault/FaultCascade.jl` | `report_fault!` and its tiers |
-| `source/kernel/fault/FaultInterface.jl` | the seams: `append_fault!`, `play_fault_sound!`, `get_fault_store`, `make_safe_mode_projection`, `is_passthrough_exception` |
-| `source/kernel/cell/CellFaultScope.jl` | `run_in_fault_scope`, `record_computation_fault!`, `RecordedFaultException`, `find_fault_scope` |
+| `source/kernel/fault/FaultInterface.jl` | the seams: `append_fault!`, `play_fault_sound!`, `get_fault_store`, `is_fault_exception` |
+| `source/kernel/cell/CellFaultScope.jl` | `run_in_cell_fault_scope`, `record_cell_fault!`, `RecordedCellFaultException`, `find_cell_fault_scope` |
 | `source/kernel/projection/ProjectionInterface.jl` | the seams of a barrier: `show_barrier_mark!`, `retry_barrier_print!`, `get_content_iomap` |
 | `source/kernel/editor/FaultBarriers.jl` | the barriers of the editor, the drain that draws the marks, the retry after an operation, and `record_paint_fault!` for a renderer |
+| `source/kernel/editor/SafeMode.jl` | the safe mode, and its seam `make_safe_mode_projection` |
 | `source/platform/projection/higherorder/FaultCatching.jl` | `FaultCatchingProjection`, the barrier inside a pipeline, and `RetryBarrierPrintOperation` |
 | `source/platform/projection/ProjectionDocument.jl` | `FaultReport`, the report that a barrier leaves |
 | `source/platform/syntax/FaultToSyntax.jl`, `text/FaultToText.jl`, `widget/FaultToWidget.jl`, `graphics/FaultToGraphics.jl` | one mark for each output domain |
@@ -71,7 +72,9 @@ The editor reports a fault at the first tier that works. A tier that fails falls
 | 4 | a sound | `report_fault!` calls `play_fault_sound!` |
 | 5 | nothing | `report_fault!` returns |
 
-`report_fault!` must never throw, because it runs when everything else already failed. `PAR-REPORT-NEVER-THROWS` holds the rule. `run_fault_barrier!` and `FaultCatchingProjection` let `InterruptException`, `StackOverflowError`, `OutOfMemoryError` and the request to quit through, by `is_passthrough_exception`.
+The drain of the store does tiers 2 to 5. It hands each new record to the targets of the store, and `report_fault!` writes on the console only a record that no target took. A fault of a device plays the sound also when a target took it, because a screen that draws nothing shows no log.
+
+`report_fault!` must never throw, because it runs when everything else already failed. `PAR-REPORT-NEVER-THROWS` holds the rule. `run_fault_barrier!` and `FaultCatchingProjection` let `InterruptException`, `StackOverflowError`, `OutOfMemoryError` and the request to quit through: `is_fault_exception` answers `false` for each.
 
 ### How a fault in a printer reaches its barrier
 
@@ -79,13 +82,13 @@ A printer does not throw when `print_document` runs. It builds a graph of comput
 
 So the relation is kept from the moment a cell is built:
 
-1. Each call of `print_document` of a barrier makes the IoMap of one part, and prints the part inside `run_in_fault_scope`, with that IoMap as the scope.
+1. Each call of `print_document` of a barrier makes the IoMap of one part, and prints the part inside `run_in_cell_fault_scope`, with that IoMap as the scope.
 2. A `Computation` made in the scope keeps it, and so does a computation that `set_cell_computation!` gives a cell. A computation made inside another computation takes the scope of that computation.
-3. The innermost computation in a scope that throws calls `record_computation_fault!` with its scope. The barrier records the fault in the store and puts itself on the list of the editor. The computation then throws a `RecordedFaultException`, which no barrier above records again. A `MethodError` in an older world passes, so the cell runs the computation again in the newest world.
-4. The SDL renderer reads each element of the output inside a catch, and calls `record_paint_fault!` when the read throws. While an editor with its barriers on paints, the call records a fault that no barrier took, and the renderer skips that element and draws the rest. So the first frame shows the window with a hole where the part failed. A read outside an element, such as the read of the root output, loses the frame: the device barrier skips the paint for a `RecordedFaultException` and counts no device fault, so the screen keeps the frame before it.
+3. The innermost computation in a scope that throws calls `record_cell_fault!` with its scope. The barrier records the fault in the store and puts itself on the list of the editor. The computation then throws a `RecordedCellFaultException`, which no barrier above records again. A `MethodError` in an older world passes, so the cell runs the computation again in the newest world.
+4. The SDL renderer reads each element of the output inside a catch, and calls `record_paint_fault!` when the read throws. While an editor with its barriers on paints, the call records a fault that no barrier took, and the renderer skips that element and draws the rest. So the first frame shows the window with a hole where the part failed. A read outside an element, such as the read of the root output, loses the frame: the device barrier skips the paint for a `RecordedCellFaultException` and counts no device fault, so the screen keeps the frame before it.
 5. Between two frames, `report_frame_faults!` calls `show_barrier_mark!` for each barrier on the list. The barrier writes its output cell with the mark, outside every computation, so the parent reads the mark and nothing reads the cells that failed.
 
-A barrier that can not draw its mark, because its substitute throws, records that fault, and its later faults go to the barrier that held the scope when it printed: `find_fault_scope()` answers that one. So the fault follows the nesting of the barriers, and the mark stands in a larger place.
+A barrier that can not draw its mark, because its substitute throws, records that fault, and its later faults go to the barrier that held the scope when it printed: `find_cell_fault_scope()` answers that one. So the fault follows the nesting of the barriers, and the mark stands in a larger place.
 
 The mark stays until the part is tried again, in three ways. After the operations of a frame, the editor calls `retry_barrier_print!` for each barrier that draws a mark. A plain click on the mark tries its part at once, and so does "Try again" in the menu of the mark. A retry runs the function of the computation that failed again, or prints the part again when the print failed; a retry that fails records nothing and keeps the mark. A parent that prints the part again, from a new object, makes a new barrier, which tries by itself.
 
@@ -95,7 +98,7 @@ The reader and the two reference mappers catch too. A reader that throws returns
 
 **A mark is a thing on the screen like any other, so an Alt+press names it, and a plain click tries its part again.** The report is no child of the node that failed, and no field or index reaches it, so the path is a drawn-object step (`OutputReferenceStep`) from that node to the report. The barrier keeps the report it printed, because a selection names an object by identity: a report made again for each press would name a different object every frame, and the selection would be lost. The barrier maps that path forward to the whole image of the node, so the container that holds the mark rings it.
 
-**A mark says the whole fault when the pointer rests on it, and a right click opens its menu.** A mark draws one line, which a long message does not fit in. The tooltip binding of a `FaultReport`, "Show the fault", answers what failed, where it was caught and the whole message, as a `TextString`. `FaultToWidget` gives its alert the same text as its own `tooltip` as well, so the widget answers whether the press names the alert or the report. The menu binding has one item, "Try again", which evaluates the operation that the barrier put in the field `retry` of its report. The reader of the barrier passes every gesture on a mark other than an Alt+press and a plain click to `read_gesture` on the report. A click reaches the reader of the barrier where a container routes a click by its point, as the containers of the widget and graphics stages do. A mark of a syntax stage is reached through the selection.
+**A mark says the whole fault when the pointer rests on it, and a right click opens its menu.** A mark draws one line, which a long message does not fit in. The tooltip binding of a `FaultReport`, "Show the fault", answers `make_fault_report_note(report)`: a `TooltipNote` with what failed as its title, the tone of an error, the whole message, where it was caught as a fact, and, when a barrier made the report, the hint that a right click tries it again. `FaultToWidget` gives its alert the same note as its own `tooltip` as well, so the widget answers whether the press names the alert or the report. The menu binding has one item, "Try again", which evaluates the operation that the barrier put in the field `retry` of its report. The reader of the barrier passes every gesture on a mark other than an Alt+press and a plain click to `read_gesture` on the report. A click reaches the reader of the barrier where a container routes a click by its point, as the containers of the widget and graphics stages do. A mark of a syntax stage is reached through the selection.
 
 ### Why the store is not made of cells
 
@@ -112,7 +115,9 @@ A substitute prints the report as a document of the right domain: a red `SyntaxL
 
 ### Why the key holds no reference
 
-A chain limits how far a fault spreads downward. Nothing limits how far it spreads sideways: one bug in one projection fails at every leaf of one kind, which in a large document is thousands of nodes. So the key of a record holds the site, the origin and the exception type, and not the reference or the message. Three thousand failures become one record with `count = 3000`, and one place kept as an example. A line of the `FaultLog` keeps the key of its record, so the log has one line for each record of the store. The document still shows one mark for each node, because each mark is a value in the cell of its node. The drain gives a record to the log once for each power of ten of its count. So a fault that repeats on every frame does not write the log on every frame.
+A chain limits how far a fault spreads downward. Nothing limits how far it spreads sideways: one bug in one projection fails at every leaf of one kind, which in a large document is thousands of nodes. So the key of a record holds the site, the origin and the exception type, and not the reference or the message. Three thousand failures become one record with `count = 3000`, and one place kept as an example. A line of the `FaultLog` keeps the key of its record, so the log has one line for each key that the store handed over. The document still shows one mark for each node, because each mark is a value in the cell of its node. The drain gives a record to the log once for each power of ten of its count. So a fault that repeats on every frame does not write the log on every frame.
+
+A store holds at most `capacity` keys, 64 by default. A new key that does not fit takes the place of the oldest key that the drain already handed over, so each fault reaches the log at least once. A key that comes back after that starts a new count, and its line in the log takes the new count. When every key still waits for the drain, the new fault counts into one overflow record, `store in FaultStore`, whose count says how many faults did not fit.
 
 ### Repair
 
@@ -127,7 +132,7 @@ A chain limits how far a fault spreads downward. Nothing limits how far it sprea
 | eight device faults in a row | stops calling that half of the backend |
 | four print faults in a row | enters the safe mode |
 
-The editor layer holds one limit for each counter, and `get_consecutive_fault_limit(counter)` reads it: `:print`, `:device_read` and `:device_write`. `FaultPolicy` holds only the switches that the fault layer reads. In the safe mode the editor puts its projection aside and prints `make_safe_mode_projection(store)`, which this package answers with a `FaultSafeModeProjection`. It ignores its input, draws a new log filled from the store, and returns no operation for any gesture. Escape leaves the safe mode and puts the projection back. A substitute that throws while a print fails goes on up as the fault of that print. A substitute that throws when the editor draws a mark is recorded, and the barrier around it draws the mark in its place.
+The editor layer holds one limit for each counter, and `get_consecutive_fault_limit(counter)` reads it: `:print`, `:device_read` and `:device_write`. `FaultPolicy` holds only the switches that the fault layer reads. In the safe mode the editor puts its projection aside and prints `make_safe_mode_projection(store)`, which this package answers with a `FaultSafeModeProjection`. It ignores its input, draws a new log filled from the store, and returns no operation for any gesture. While the safe mode lasts, the editor attaches the projection to the store as a target, so a new fault reaches its log. Escape leaves the safe mode, detaches the projection and puts the projection of the document back. A substitute that throws while a print fails goes on up as the fault of that print. A substitute that throws when the editor draws a mark is recorded, and the barrier around it draws the mark in its place.
 
 ### The `fault_log` wrapper of `build_editor`
 
@@ -142,11 +147,11 @@ fills them with `get_fault_style`, from a `FaultTheme` scaled or not, or the def
 
 ## How it fits
 
-The kernel layer `fault` is the lowest layer of the kernel and imports nothing. The cell layer uses it for `is_passthrough_exception`. The barrier is in the projection algebra and each mark in its own domain, so every slice that builds a recursion point names its barrier when it builds the pipeline. The fault slice depends on the kernel and on the collection, domain, focus, graphics, natural, projection, serialization, settings, style, syntax, text, tooltip and widget slices.
+The kernel layer `fault` is the lowest layer of the kernel and imports nothing. The cell layer uses it for `is_fault_exception`. The barrier is in the projection algebra and each mark in its own domain, so every slice that builds a recursion point names its barrier when it builds the pipeline. The fault slice depends on the kernel and on the collection, domain, focus, graphics, natural, projection, serialization, settings, style, syntax, text, tooltip and widget slices.
 
 The `fault_log` wrapper attaches the session's fault log when a window starts, and the shell slice's toolbar has a Fault log button that opens it only when the wrapper is on; see [shell.md](../shell/shell.md). The gallery wraps each window with `make_fault_tolerant_projection` unless `fault_tolerant = false`. A built binary takes `--strict-fault-policy`.
 
-The fault slice registers the natural row `:fault` for `FaultLog`, the title `Faults` and the insertion alias `faults`. `make_insertion_document` returns the session log, because a new log would never fill: only the drain of a store fills a log. `pred_arguments` of a `FaultLog` holds only `capacity`, so a loaded log starts empty.
+The fault slice registers the natural row `:fault` for `FaultLog`, the title `Faults` and the insertion alias `faults`. `make_insertion_document` returns the session log, because a new log would never fill: only the drain of a store fills a log. `pred_arguments` of a `FaultLog` writes no field, and a loaded log is the fault log of the session of the editor that loads it (`make_pred_document`). A window file keeps that a tab shows the log, and no fault.
 
 ## Design decisions
 
@@ -158,6 +163,8 @@ The fault slice registers the natural row `:fault` for `FaultLog`, the title `Fa
 - **A barrier is a projection of the algebra, and each domain draws its own mark.** A pipeline is built with its barriers before it prints.
 - **The store is outside the reactive graph.** A computation may write it, and the frame drains it into the log.
 - **The key holds no reference.** One bug is one record, whatever the size of the document.
+- **A full store forgets what the log already has.** Each fault reaches the log at least once, and the capacity still bounds the memory.
+- **The console takes only what no target took.** A report goes to the first tier that works, as the law says, so a fault in the log does not also fill the console.
 - **The strict policy keeps every barrier off under test.** A barrier still wraps the IoMap of its part there, so a test sees the same IO maps as a running editor.
 - **The fault log is not saved.** The faults of one session say nothing about the next one.
 

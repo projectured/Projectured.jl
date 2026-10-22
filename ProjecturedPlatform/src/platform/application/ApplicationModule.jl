@@ -19,41 +19,64 @@ module ApplicationModule
 
 using ..GraphicsModule
 using ..KernelModule
+using ..AppearanceModule
+using ..ArrangementModule
 using ..AssistantModule
+using ..ClipboardModule
 using ..CollectionModule
 using ..ConversationModule
 using ..DomainModule
+using ..ExplorerModule
 using ..FileFormatModule
 using ..FaultViewModule
 using ..FileSystemModule
+using ..FocusModule
+using ..FrameStatisticsModule
+using ..BackgroundWorkModule
+using ..GestureHelpModule
+using ..GestureLogModule
+using ..HelpModule
+using ..InspectorModule
+using ..McpLogModule
+using ..MessageLogModule
 using ..NaturalModule
+using ..NavigatorModule
 using ..PaneModule
+using ..RosterModule
 using ..PrimitiveModule
 using ..ProjectionAlgebraModule
 using ..ScreenModule
 using ..SerializationModule
+using ..SettingsManagingModule
 using ..SettingsModule
 using ..ShellModule
 using ..StyleModule
+using ..SystemProcessModule
+using ..TaskModule
 using ..TextModule
 using ..TooltipModule
+using ..TreeModule
 using ..UndoModule
 using ..WidgetModule
 
 import ..SettingsModule: is_settings_group_read_at_start
+import ..TaskModule: make_task_api
 
 export default_backend
 export APPLICATION_ASSISTANTS, get_application_greeting_text, make_application_assistant,
        make_application_document, make_application_content_projections,
        make_application_projection, make_application_wrappers, make_application_window,
-       make_application_api,
-       APPLICATION_SYSTEM, run_application, parse_application_arguments,
-       run_application_command, evaluate_reachable_cells!, warm_application,
-       start_application!, make_application_settings
+       make_editor_api, EDITOR_SYSTEM, APPLICATION_SYSTEM, make_domain_system,
+       make_application_settings,
+       run_application, parse_application_arguments, restart_with_window_threads!,
+       run_application_command,
+       evaluate_reachable_cells!, warm_application, register_editor_tools!, start_application!
 export StartSettings
+export make_editor_explorer_content
 
 include("DefaultBackend.jl")
 include("Application.jl")
 include("StartSettings.jl")
+include("ApplicationExplorer.jl")
 
 end # module ApplicationModule

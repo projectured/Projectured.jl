@@ -12,8 +12,9 @@ using ..PlatformModule
 using ..ReferenceModule   # `@document` injects the implicit `selection::Union{Nothing, Reference}` field
 
 # Imported to extend: this module adds a method to each of these.
-import ..DocumentModule: has_document_duplicate
+import ..DocumentModule: has_document_duplicate, convert_to_declared_type
 import ..GestureBindingModule: get_document_gesture_bindings_own
+import ..ArrangementModule: get_arrangement_value
 import ..FileFormatModule: make_document_seed
 import ..ProjectionModule: print_document, read_intent, map_reference_forward, map_reference_backward
 import ..SerializationModule: emit_text,
@@ -23,7 +24,7 @@ import ..WidgetModule: compute_code_pieces, make_graphics_projection
 export _julia_operator_string
 export parse_julia, parse_julia_file
 export make_julia_expression, make_julia_file_code_projection
-export compute_julia_signature
+export compute_julia_signature, get_julia_expression_without_comments
 export JuliaTheme, ScaledJuliaTheme
 export JuliaInsertionToSyntaxLeaf, get_julia_completion, make_julia_scaffold
 export JuliaObjectToSyntaxLeaf
@@ -33,6 +34,7 @@ export JuliaIdentifierToSyntaxLeaf, JuliaIntegerToSyntaxLeaf,
        JuliaNothingToSyntaxLeaf, JuliaSymbolToSyntaxLeaf, JuliaCharToSyntaxLeaf,
        JuliaBinaryOperationToSyntaxNode, JuliaUnaryOperationToSyntaxNode, JuliaCallToSyntaxNode,
        JuliaMacroCallToSyntaxNode, JuliaConstToSyntaxNode, JuliaDocstringToSyntaxNode,
+       JuliaCommentToSyntaxLeaf, JuliaMultilineCommentToSyntaxLeaf, JuliaEndOfLineCommentToSyntaxNode,
        JuliaAbstractTypeToSyntaxNode, JuliaStructToSyntaxNode,
        JuliaSubtypeToSyntaxNode, JuliaCurlyToSyntaxNode,
        JuliaAnonymousTypeAnnotationToSyntaxNode, JuliaEmptyToSyntaxLeaf,
@@ -53,7 +55,7 @@ export JuliaIdentifierToSyntaxLeaf, JuliaIntegerToSyntaxLeaf,
        JuliaStringChunkToSyntaxLeaf, JuliaInterpolationToSyntaxNode,
        JuliaFunctionDeclarationToSyntaxNode, JuliaWhereParametersToSyntaxNode,
        JuliaToSyntax
-export JuliaIdentifier, JuliaInteger, JuliaFloat, JuliaString, JuliaBool, JuliaNothing, JuliaSymbol, JuliaChar, JuliaBinaryOperation, JuliaUnaryOperation, JuliaCall, JuliaMacroCall, JuliaConst, JuliaDocstring, JuliaAbstractType, JuliaStruct, JuliaSubtype, JuliaCurly, JuliaAnonymousTypeAnnotation, JuliaEmpty, JuliaTernary, JuliaIndex, JuliaFieldAccess, JuliaTuple, JuliaArray, JuliaRange, JuliaTypeAnnotation, JuliaAssignment, JuliaFor, JuliaForIterator, JuliaWhile, JuliaReturn, JuliaBreak, JuliaContinue, JuliaTry, JuliaBegin, JuliaIf, JuliaFunction, JuliaBlock, JuliaToplevel, JuliaUsing, JuliaLambda, JuliaModuleDefinition, JuliaDocument, JuliaSplat, JuliaBroadcast, JuliaStringInterpolation, JuliaWhere, JuliaComprehension, JuliaDo, JuliaLet, JuliaNamedTuple, JuliaStringChunk, JuliaInterpolation, JuliaFunctionDeclaration, JuliaWhereParameters, JuliaInsertion
+export JuliaIdentifier, JuliaInteger, JuliaFloat, JuliaString, JuliaBool, JuliaObject, JuliaNothing, JuliaSymbol, JuliaChar, JuliaBinaryOperation, JuliaUnaryOperation, JuliaCall, JuliaMacroCall, JuliaConst, JuliaDocstring, JuliaComment, JuliaMultilineComment, JuliaEndOfLineComment, JuliaAbstractType, JuliaStruct, JuliaSubtype, JuliaCurly, JuliaAnonymousTypeAnnotation, JuliaEmpty, JuliaTernary, JuliaIndex, JuliaFieldAccess, JuliaTuple, JuliaArray, JuliaRange, JuliaTypeAnnotation, JuliaAssignment, JuliaFor, JuliaForIterator, JuliaWhile, JuliaReturn, JuliaBreak, JuliaContinue, JuliaTry, JuliaBegin, JuliaIf, JuliaFunction, JuliaBlock, JuliaToplevel, JuliaUsing, JuliaLambda, JuliaModuleDefinition, JuliaDocument, JuliaSplat, JuliaBroadcast, JuliaStringInterpolation, JuliaWhere, JuliaComprehension, JuliaDo, JuliaLet, JuliaNamedTuple, JuliaStringChunk, JuliaInterpolation, JuliaFunctionDeclaration, JuliaWhereParameters, JuliaInsertion
 
 
 include("JuliaDocument.jl")

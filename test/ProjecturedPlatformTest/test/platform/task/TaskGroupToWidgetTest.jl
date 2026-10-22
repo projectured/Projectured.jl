@@ -2,8 +2,9 @@
 # draws the columns that every task has and the columns of its kind, the detail
 # shows the facts and the buttons of the kind, a press of a button of the kind
 # calls it with the task, the tab says how far the group is, and the Tasks pane
-# has a row for each group. The probe task of a kind that adds nothing is the
-# one of `TaskGroupTest.jl`.
+# has a row for each group. The detail draws the document that a kind gives for a
+# result. The probe task of a kind that adds nothing is the one of
+# `TaskGroupTest.jl`.
 
 # A kind of task that adds a column, its facts and a button.
 struct _TaskViewProbeTask <: AbstractTask
@@ -17,6 +18,23 @@ TaskModule.get_task_columns(::_TaskViewProbeTask) = ["name" => 2]
 const _TASK_VIEW_NAME_READS = Ref(0)
 TaskModule.format_task_column(task::_TaskViewProbeTask, column::AbstractString) =
     column == "name" ? (_TASK_VIEW_NAME_READS[] += 1; task.name) : ""
+
+# A work item that is no group of tasks: it runs until it stops, and its
+# decoration says its state and what it found.
+@document struct _TaskViewProbeItem <: Document
+    identifier::String
+    title::String
+    stopped::Bool = false
+end
+TaskModule.get_work_item_identifier(item::_TaskViewProbeItem) = item.identifier
+TaskModule.describe_work_item_kind(::_TaskViewProbeItem, count::Integer) = count == 1 ? "probe" : "probes"
+TaskModule.stop_work_item!(item::_TaskViewProbeItem) = (item.stopped = true; nothing)
+TaskModule.describe_work_item(item::_TaskViewProbeItem; limit::Integer = 20) =
+    Text(join(first(String[item.stopped ? "stopped" : "running", "found 3"], limit), "\n"))
+DocumentModule.get_document_title(item::_TaskViewProbeItem) = item.title
+ProjecturedPlatform.DomainModule.get_document_decoration(item::_TaskViewProbeItem) =
+    DocumentDecoration(; icon = :search, conditions = [DocumentCondition(item.stopped ? :stopped : :running)],
+                       detail = "found 3", work_item = true)
 TaskModule.format_task_details(task::_TaskViewProbeTask, result) =
     String["script: " * task.script; result === nothing ? String[] : ["ended: " * result.result]]
 const _TASK_VIEW_PRESSES = String[]
@@ -24,6 +42,17 @@ TaskModule.get_task_actions(::_TaskViewProbeTask) =
     ["Note" => (editor, task) -> push!(_TASK_VIEW_PRESSES, task.name)]
 TaskModule.start_task(task::_TaskViewProbeTask; on_finish = nothing) =
     TaskModule.start_task(_TaskGroupProbeTask(task.name, task.script); on_finish)
+
+# The document that the kind gives for a result: one line, drawn by the seam that
+# every renderer reads.
+struct _TaskViewResultDocument <: Document
+    line::String
+end
+WidgetModule.make_graphics_projection(::Type{_TaskViewResultDocument}; measure, appearance) =
+    ProjecturedPlatform.NaturalModule.PhraseToGraphics(document -> document.line,
+        StyleText(StyleFont("Ubuntu", 18), color_black), TextToGraphics(; measure))
+TaskModule.get_task_result_document(task::_TaskViewProbeTask, result) =
+    _TaskViewResultDocument("the result of " * task.name * " is " * result.result)
 
 # Each text of a drawn pane with its place on the canvas.
 function _collect_task_view_texts(node, x = 0, y = 0, found = Tuple{Int,Int,String}[])
@@ -100,7 +129,7 @@ function test_task_views()
                       ("state", "progress", "elapsed", "process", "processor", "memory", "result"))
             @test !("directory" in words) && !("configuration" in words)
             @test "4 DONE" in words && "1 ERROR unexpected" in words
-            @test "Press › on a row to see its task here." in words
+            @test "Press a row to see its task here." in words
         end
 
         @testset "a kind adds its columns, its facts and its buttons" begin
@@ -138,6 +167,62 @@ function test_task_views()
             words = _collect_task_view_words(document)
             @test "Earlier executions" in words
             @test any(w -> occursin(r"^1\. started \d\d:\d\d:\d\d — ERROR", w), words)
+        end
+
+        @testset "the detail draws the document that the kind gives for a result" begin
+            document = wrap_task_group_document(
+                TaskGroup([_TaskViewProbeTask("beta", "exit 0")]; name = "result document", jobs = 1))
+            select_task_document!(document, 1)
+            projection, iomap = _print_task_view(document)
+            words() = [t[3] for t in _collect_task_view_texts(iomap.output)]
+            @test !any(startswith("the result of"), words())
+            wait_task_group_document(start_task_group_document!(document))
+            # The drawn pane follows the result, and the line stands between the
+            # buttons and the output.
+            texts = _collect_task_view_texts(iomap.output)
+            line = only(t for t in texts if t[3] == "the result of beta is DONE")
+            @test only(t for t in texts if t[3] == "Run again")[2] < line[2] <
+                  only(t for t in texts if t[3] == "stdout")[2]
+        end
+
+        @testset "a path into the document of a result goes to its card and back" begin
+            document = wrap_task_group_document(
+                TaskGroup([_TaskViewProbeTask("gamma", "exit 0")]; name = "result path", jobs = 1))
+            wait_task_group_document(start_task_group_document!(document))
+            select_task_document!(document, 1)
+            task = only(getfield(document, :tasks)[])
+            shown = getfield(task, :result_document)[]
+            projection, iomap = _print_task_view(document)
+            # The document stays the one the detail draws while its result stays.
+            @test shown isa _TaskViewResultDocument && getfield(task, :result_document)[] === shown
+            pane, pane_iomap = projection.projections[1], iomap.step_iomaps[1][]
+            steps_of(path) = get_reference_steps(strip_reference_types(path))
+            make_path(steps...) = foldr((step, rest) -> ConcreteReference(step, rest), steps; init = EmptyReference())
+            result = (FieldReferenceStep("tasks"), RangeReferenceStep(0, 1), FieldReferenceStep("result_document"))
+            # The card is the seventh part of the detail, the second pane of the
+            # split below the card of the group.
+            card = (FieldReferenceStep("children"), RangeReferenceStep(1, 2), FieldReferenceStep("child"),
+                    FieldReferenceStep("elements"), RangeReferenceStep(1, 2), FieldReferenceStep("child"),
+                    FieldReferenceStep("children"), RangeReferenceStep(6, 7), FieldReferenceStep("child"))
+            inside = make_path(result..., FieldReferenceStep("line"))
+            drawn = map_reference_forward(pane, pane_iomap, inside)
+            @test steps_of(drawn) == [card..., FieldReferenceStep("content"), FieldReferenceStep("line")]
+            @test steps_of(map_reference_backward(pane, pane_iomap, drawn)) == steps_of(inside)
+            # A selection in the document reaches the card: each container on the
+            # way holds the part of the path below it, so a key goes there.
+            replace_selection!(document, inside)
+            around_card = foldl((node, step) -> ProjecturedKernel.CellModule.unwrap_cell(
+                                    ProjecturedKernel.ReferenceModule.evaluate_reference_step(step, node)),
+                                card[1:(end - 1)]; init = pane_iomap.output)
+            @test around_card isa ProjecturedPlatform.LayoutModule.LayoutConstraint
+            @test steps_of(getfield(around_card, :selection)[]) ==
+                  [FieldReferenceStep("child"), FieldReferenceStep("content"), FieldReferenceStep("line")]
+            # The title of the card names the whole document.
+            @test steps_of(map_reference_backward(pane, pane_iomap, make_path(card..., FieldReferenceStep("title")))) ==
+                  collect(result)
+            # The document of a task that the detail does not show has no card.
+            select_task_document!(document, 0)
+            @test map_reference_forward(pane, pane_iomap, inside) === nothing
         end
 
         @testset "the progress of a task that runs is a ring" begin
@@ -182,16 +267,133 @@ function test_task_views()
             @test count(==("Run all"), words) == 1
         end
 
+        @testset "a row, the detail and the Tasks pane open pages" begin
+            tasks = [_TaskViewProbeTask(name, "exit 0") for name in ("alpha", "beta")]
+            document = wrap_task_group_document(TaskGroup(tasks; name = "linked", jobs = 2); title = "linked tasks")
+            wait_task_group_document(start_task_group_document!(document))
+            select_task_document!(document, 2)
+            projection, iomap = _print_task_view(document)
+            texts = _collect_task_view_texts(iomap.output)
+            press(view, map, t; count = 1, ctrl = false) = read_intent(view, map,
+                MouseClick(:left, t[1] + 2, t[2] + 2, count, ModifierKeys(ctrl = ctrl); time = 0.0))
+            task(k) = getfield(document, :tasks)[][k]
+            # The detail opens the page of the task that it shows.
+            opened = press(projection, iomap, only(t for t in texts if t[3] == "Open the task page"))
+            @test opened isa OpenPageOperation && evaluate_reference(document, opened.reference) === task(2)
+            # The table has no column to press, and it selects the row of the task
+            # of the detail. A press anywhere on a row shows its task in the
+            # detail, a double press opens its page, and Ctrl+press opens it in a
+            # new tab.
+            @test !any(t -> t[3] == "›", texts)
+            table = iomap.step_iomaps[1][].output.children[2].child.elements[1].child.content
+            @test get_widget_table_selected_row(table) == 2
+            row = only(t for t in texts if t[3] == "alpha")
+            shown = press(projection, iomap, row)
+            @test shown isa ReplaceViewStateOperation
+            _nav_apply!(_NavHolder(document), shown)
+            @test getfield(document, :selected)[] == 1 && get_widget_table_selected_row(table) == 1
+            opened = press(projection, iomap, row; count = 2)
+            @test opened isa OpenPageOperation && opened.document === document && opened.place === :here
+            @test evaluate_reference(document, opened.reference) === task(1)
+            @test press(projection, iomap, row; ctrl = true).place === :new_tab
+            # The title of a group in the Tasks pane opens the page of the group.
+            list = TaskGroupList()
+            add_task_group!(list, document)
+            projection, iomap = _print_task_view(list)
+            title = only(t for t in _collect_task_view_texts(iomap.output) if t[3] == "linked tasks")
+            opened = press(projection, iomap, title)
+            @test opened isa OpenPageOperation && opened.document === list
+            @test evaluate_reference(list, opened.reference) === document
+        end
+
+        @testset "a row of a list that a scroll moved far is the task at its place" begin
+            tasks = [_TaskViewProbeTask(string("task ", k), "exit 0") for k in 1:400]
+            document = wrap_task_group_document(TaskGroup(tasks; name = "long", jobs = 1))
+            projection, iomap = _print_task_view(document)
+            pane, pane_iomap = projection.projections[1], iomap.step_iomaps[1][]
+            table = pane_iomap.output.children[2].child.elements[1].child.content
+            # A scroll far from the head writes the head of the list of the table;
+            # the pane writes the anchor of the group instead, and the list starts
+            # again from that task.
+            head = find_list_node(table.cells, 301)
+            moved = CompoundOperation(Any[ReplaceViewStateOperation(ReplaceReferencedValueOperation(table, "cells", head))])
+            answer = read_intent(pane, nothing, Intent(MouseScroll(0, -1, 10, 10, ModifierKeys(), 0.0), moved), pane_iomap)
+            _nav_apply!(_NavHolder(document), answer.operation)
+            @test getfield(document, :anchor)[] == 301
+            @test table.cells.value[2].content == "task 301"
+            row = only(t for t in _collect_task_view_texts(iomap.output) if t[3] == "task 302")
+            _nav_apply!(_NavHolder(document), read_intent(projection, iomap,
+                MouseClick(:left, row[1] + 2, row[2] + 2, 1, ModifierKeys(); time = 0.0)))
+            @test getfield(document, :selected)[] == 302 && get_widget_table_selected_row(table) == 2
+        end
+
         @testset "the tab and the Tasks pane follow the group" begin
             document = wrap_task_group_document(
                 TaskGroup(_make_task_group_probe_tasks(0.0); name = "tabbed", jobs = 4))
             title = make_task_group_tab_title(document)
             @test title.icon === :circle && only(title.badges).content == "5"
             wait_task_group_document(start_task_group_document!(document))
-            @test title.icon === :x && title.icon_role === :error
+            @test title.icon isa WidgetIcon && title.icon.name === :x && title.icon_role === :error
             @test [badge.content for badge in title.badges] == ["1 ERROR"]
-            words = _collect_task_view_words(get_session_task_group_list())
+            list = TaskGroupList()
+            add_task_group!(list, document)
+            words = _collect_task_view_words(list)
             @test getfield(document, :identifier)[] in words && "tabbed" in words
+        end
+
+        @testset "the Tasks pane shows the open groups newest first, and a group keeps its place" begin
+            groups = [wrap_task_group_document(TaskGroup([_TaskViewProbeTask(name, "exit 0")]; name = "kept");
+                                               title = name) for name in ("first group", "second group", "third group")]
+            list = TaskGroupList()
+            foreach(group -> add_task_group!(list, group), groups)
+            @test collect(list.groups) == groups
+            texts = _collect_task_view_texts(last(_print_task_view(list)).output)
+            place(word) = only(t[2] for t in texts if t[3] == word)
+            @test place("third group") < place("second group") < place("first group")
+            # A close leaves a closed group in the place, which the pane hides, and a
+            # path to a later group still names that group.
+            remove_task_group!(list, groups[2])
+            closed = list.groups[2]
+            @test closed isa ClosedTaskGroup && getfield(closed, :title)[] == "second group"
+            @test evaluate_reference(list, Reference(FieldReferenceStep("groups"), RangeReferenceStep(2, 3))) === groups[3]
+            @test collect_task_group_documents(list) == [groups[1], groups[3]]
+            words = _collect_task_view_words(list)
+            @test !("second group" in words) && "2 groups · 0 running" in words
+            # The page of the closed group says that it closed.
+            words = _collect_task_view_words(closed)
+            @test "second group" in words && "This group is closed. Its tasks and their output are gone." in words
+            # A group that runs again goes back into its place.
+            add_task_group!(list, groups[2])
+            @test collect(list.groups) == groups
+        end
+
+        @testset "another work item has a row in the Tasks pane, which stops and closes it" begin
+            group = wrap_task_group_document(TaskGroup([_TaskViewProbeTask("kept", "exit 0")]; name = "kept");
+                                             title = "a group")
+            item = _TaskViewProbeItem("S1", "a probe item")
+            list = TaskGroupList()
+            add_task_group!(list, group)
+            add_task_group!(list, item)
+            @test collect_work_items(list) == Any[group, item] && collect_task_group_documents(list) == [group]
+            @test evaluate_reference(list, find_navigator_address(list, item)) === item
+            # The heading counts each kind, the row says what the decoration says, and
+            # the list runs while the item does.
+            words = _collect_task_view_words(list)
+            @test "1 group · 1 probe · 1 running" in words
+            @test all(in(words), ("S1", "a probe item", "probe", "running", "found 3"))
+            @test get_document_decoration(list).counts[1].text == "1 running"
+            # Stop keeps the row, and Close leaves a closed row in its place.
+            stop_work_item!(item)
+            words = _collect_task_view_words(list)
+            @test "a probe item" in words && "stopped" in words && "1 group · 1 probe · 0 running" in words
+            remove_task_group!(list, item)
+            closed = list.groups[2]
+            @test closed isa ClosedTaskGroup && getfield(closed, :identifier)[] == "S1"
+            @test getfield(closed, :summary)[] == "probe · found 3"
+            @test collect_work_items(list) == Any[group]
+            # The item that starts again goes back into its place.
+            add_task_group!(list, item)
+            @test list.groups[2] === item
         end
     end
 end

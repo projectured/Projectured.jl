@@ -16,8 +16,11 @@
 #   4. Simulate the edit's event through the reader (KeyPress for insert;
 #      KeyDown(:backspace)/KeyDown(:delete) for the deletions). Where an edit is
 #      expected it must yield a ReplaceStringRangeOperation (empty replacement for
-#      the deletions); at a declined boundary the reader yields nothing.
-#   5. Where an edit is expected, evaluate that operation against the document. At a
+#      the deletions), alone or first in a compound of more writes; at a declined
+#      boundary the reader yields nothing, except beside an inline image, which the
+#      deletion removes, and at a line boundary of a block of lines, where it joins
+#      the two lines.
+#   5. Where an edit is expected, evaluate that edit against the document. At a
 #      declined boundary nothing is evaluated — a stray boundary op is a failure, and
 #      evaluating it would mutate the neighbouring chrome and drift the document.
 #   6. Check that the string in the original input document changed exactly as the
@@ -48,8 +51,12 @@
 using ProjecturedKernel.CellModule: Cell, Computation
 using ProjecturedPlatform.CollectionModule: CellVector
 using ProjecturedPlatform.StyleModule: StyleFont
-using ProjecturedPlatform.TextModule: TextString, TextBlock, TextDocument, TextGraphics, get_flat_string
-using ProjecturedKernel.OperationModule: CompoundOperation, ReplaceReferencedValueOperation
+using ProjecturedPlatform.TextModule: TextString, TextLine, TextBlock, TextDocument, TextGraphics,
+                                      TextRangeReferenceStep, ReplaceTextRangeOperation,
+                                      get_flat_string
+using ProjecturedKernel.OperationModule: CompoundOperation, ReplaceReferencedValueOperation,
+                                        is_self_contained_operation, evaluate_invertible_operation!,
+                                        reroot_reference
 using ProjecturedPlatform.SyntaxModule: SyntaxNode, SyntaxLeaf
 
 # ── Document-graph walk ──────────────────────────────────────────────────────
@@ -139,7 +146,7 @@ function _walk_strings!(node, path, visited, refs)
         # be endless, and the walk visits the links that exist, as
         # `count_computed_nodes` counts them.
         (node isa ListNode && fval isa Cell && is_computed_cell(fval) &&
-         !is_cell_up_to_date(fval)) && continue
+         !is_cell_valid(fval)) && continue
         val  = fval isa Cell ? fval[] : fval
         field_path = extend_reference(path, FieldReferenceStep(string(fname)))
         if node isa Union{TextBlock, TextLine} && fname === :elements && val isa CellVector
@@ -354,6 +361,36 @@ function _is_image_deletion_beside(document, target, op, kind::Symbol)
     1 <= image <= length(elements) && elements[image] isa TextGraphics
 end
 
+# Backspace at the start of a line of a block of lines, and Delete at the end of a
+# line that another line follows, join the two lines: one flat edit of the block with
+# an empty replacement, whose range covers the break and the indentation of the lower
+# line. The walk asserts that join without evaluating it, as it asserts a declined
+# edit, so the document stays as the remaining positions expect it.
+function _is_line_join_beside(document, target, op, kind::Symbol)
+    (op isa ReplaceTextRangeOperation && isempty(op.replacement)) || return false
+    steps = get_reference_steps(strip_reference_types(target.cursor))
+    (length(steps) >= 5 && steps[end] isa FieldReferenceStep &&
+     steps[end - 1] isa RangeReferenceStep && steps[end - 3] isa RangeReferenceStep) || return false
+    block_reference = Reference(steps[1:end - 5]...)
+    block = evaluate_reference(document, block_reference)
+    block isa TextBlock || return false
+    lines = block.elements
+    all(line -> line isa TextLine, lines) || return false
+    line_index = steps[end - 3].start + 1
+    span_index = steps[end - 1].start + 1
+    1 <= line_index <= length(lines) || return false
+    lower = kind === :backspace ?
+            (span_index == 1 && line_index > 1 ? line_index : nothing) :
+            (span_index == length(lines[line_index].elements) && line_index < length(lines) ?
+             line_index + 1 : nothing)
+    lower === nothing && return false
+    # The flat offset where the lower line starts: each line above it and its break.
+    start = sum(q -> length(get_flat_string(lines[q])) + 1, 1:(lower - 1))
+    expected = extend_reference(block_reference,
+                                TextRangeReferenceStep(start - 1, start + lines[lower].indentation))
+    is_reference_equal(strip_reference_types(op.reference), expected)
+end
+
 # Run one edit round-trip (`kind` at character boundary `k`) for the cursor target
 # `target`. See the file header for the seven steps.
 function _edit_at(document, projection, target, k::Int, ch, kind::Symbol)
@@ -403,22 +440,36 @@ function _edit_at(document, projection, target, k::Int, ch, kind::Symbol)
         # would mutate the neighbouring chrome and drift the document out from under
         # the remaining positions. The string is untouched, so we only confirm the
         # decline and that the caret is still where we set it (`expected_pos == k`).
-        (op === nothing || _is_image_deletion_beside(document, target, op, kind)) ||
+        (op === nothing || _is_image_deletion_beside(document, target, op, kind) ||
+         _is_line_join_beside(document, target, op, kind)) ||
             return _typein_failed("$kind at the boundary produced $(_op_desc(op)), expected no edit")
         selok, selmsg = _selection_caret_ok(document, target, expected_pos)
         return selok ? _typein_ok() : _typein_failed("$kind at the boundary: $selmsg")
     end
 
+    # 4a. A domain can stage the edit: a formula in value mode answers a key in its
+    # code with the start of its edit mode and the same edit of a copy of the code, its
+    # draft. The members before the edit name no place. The walk evaluates the whole
+    # answer, reads the string where the edit wrote, and takes the answer back with
+    # its inverse, so the remaining positions find the document as it was.
+    staged = _find_staged_typein_edit(op)
+    staged === nothing || return _check_staged_typein_edit(document, op, staged, kind, target, expected_str)
+
     # 4. The edit is expected: a ReplaceStringRangeOperation (empty replacement for the
-    # deletions).
-    op isa ReplaceStringRangeOperation ||
+    # deletions), alone, or first in a compound whose other members are writes that the
+    # domain adds to the edit, as a rename of a formula writes its uses. The walk
+    # evaluates the edit alone, so the restore takes it back and the rest of the
+    # document stays as the remaining positions expect it.
+    edit = op isa CompoundOperation && !isempty(op.operations) &&
+           first(op.operations) isa ReplaceStringRangeOperation ? first(op.operations) : op
+    edit isa ReplaceStringRangeOperation ||
         return _typein_failed("$kind produced $(op === nothing ? "nothing" : string(typeof(op))), not ReplaceStringRangeOperation")
-    (kind !== :insert && !isempty(op.replacement)) &&
-        return _typein_failed("$kind produced a non-empty replacement $(repr(op.replacement))")
+    (kind !== :insert && !isempty(edit.replacement)) &&
+        return _typein_failed("$kind produced a non-empty replacement $(repr(edit.replacement))")
 
     # 5. Evaluate the operation and 6. verify both the string and the post-edit caret.
     try
-        evaluate_operation((document=document,), op)
+        evaluate_operation((document=document,), edit)
     catch e
         return _typein_failed("evaluate_operation threw: $e")
     end
@@ -431,6 +482,46 @@ function _edit_at(document, projection, target, k::Int, ch, kind::Symbol)
         return _typein_failed("$kind: expected $(repr(expected_str)) got $(repr(after))")
     selok, selmsg = _selection_caret_ok(document, target, expected_pos)
     selok || return _typein_failed("$kind: $selmsg")
+    _typein_ok()
+end
+
+# The string edit of a compound whose members before it name no place, as the
+# start of the edit mode of a formula; `nothing` for any other answer.
+function _find_staged_typein_edit(op)
+    op isa CompoundOperation || return nothing
+    index = findfirst(member -> member isa ReplaceStringRangeOperation, op.operations)
+    (index === nothing || index == 1) && return nothing
+    all(is_self_contained_operation, op.operations[1:(index - 1)]) || return nothing
+    op.operations[index]
+end
+
+# Evaluate a staged answer, check the string where its edit wrote, and take the
+# answer back with its inverse.
+function _check_staged_typein_edit(document, op, edit, kind, target, expected_str)
+    (kind !== :insert && !isempty(edit.replacement)) &&
+        return _typein_failed("$kind produced a non-empty replacement $(repr(edit.replacement))")
+    steps = get_reference_steps(edit.reference)
+    written = (cursor = reroot_reference(EmptyReference(), Tuple(steps[1:(end - 1)])), kind = target.kind,
+               first_position = target.first_position)
+    # Each member is inverted against the state it sees: the edit of the draft
+    # after the start of the edit mode made the draft.
+    inverse = try
+        evaluate_invertible_operation!((document=document,), op)
+    catch e
+        return _typein_failed("evaluate_operation of the staged edit threw: $e")
+    end
+    inverse === nothing && return _typein_failed("the staged edit $(kind) has no way back")
+    after = try
+        _read_target_string(document, written)
+    catch e
+        return _typein_failed("re-read of the staged edit threw: $e")
+    end
+    try
+        evaluate_operation((document=document,), inverse)
+    catch e
+        return _typein_failed("the inverse of the staged edit threw: $e")
+    end
+    after == expected_str || return _typein_failed("$kind (staged): expected $(repr(expected_str)) got $(repr(after))")
     _typein_ok()
 end
 
@@ -513,8 +604,9 @@ edit's event (`KeyPress` for insert; `KeyDown(:backspace)` / `KeyDown(:delete)` 
 the deletions) through the reader, and verifies **both** the string and the post-edit
 caret: insert → `k+1`, backspace → `k-1`, delete → `k`. At a declined boundary
 (backspace at the start, delete at the end) the reader must produce no edit, or,
-beside an inline image, the deletion of that image; the walk asserts either without
-evaluating anything. The insert character is
+beside an inline image, the deletion of that image, or, at a line boundary of a block
+of lines, the join of the two lines; the walk asserts each without evaluating
+anything. The insert character is
 `replacement`'s first character.
 
 `positions` is `:all` (every boundary `0…n` of a string of length `n`), `:ends`
@@ -618,6 +710,14 @@ function _typein_broken_reason(label, r)
     if label in ("text/bare_string/graphics", "text/bare_line/graphics") &&
        occursin("print_document threw: MethodError", r.message)
         return "WordWrapping has no method for a lone bare span/line"
+    end
+
+    # @broken: a highlight and a filter of a text hold the text, and their
+    # single-step projection in the catalog has no recursion to print it, the cause
+    # that marks the layouts broken in the catalog test.
+    if label in ("text/highlighted/graphics", "text/filtered/graphics") &&
+       occursin("MethodError", r.message) && occursin("print_document", r.message)
+        return "a view of a text has no recursion for the text it holds, standalone"
     end
 
     nothing

@@ -70,6 +70,21 @@ function test_web_backend()
         @test take_from_devices!(backend, Device[]).event.key === :z
     end
 
+    @testset "Return and Tab give their KeyPress after their KeyDown" begin
+        backend = WebBackend(port = 0)
+        _WEB._decode_and_enqueue!(backend,
+            """{"type":"keydown","window":"main","key":"Enter","code":"Enter","repeat":true}""")
+        _WEB._decode_and_enqueue!(backend,
+            """{"type":"keydown","window":"main","key":"Tab","code":"Tab",
+                "mods":{"shift":true}}""")
+        events = [take_from_devices!(backend, Device[]).event for _ in 1:4]
+        @test events[1] isa KeyDown && events[1].key === :return && events[1].repeat
+        @test events[2] isa KeyPress && events[2].char == '\n'
+        @test events[3] isa KeyDown && events[3].key === :tab
+        @test events[4] isa KeyPress && events[4].char == '\t' && events[4].modifiers.shift
+        @test take_from_devices!(backend, Device[]) === nothing
+    end
+
     @testset "the backslash key has the name that the SDL backend gives it" begin
         # The JSON of the page holds the key `\` as "\\".
         backend = WebBackend(port = 0)
@@ -176,8 +191,9 @@ function test_web_backend()
         @test take_message()[:cursor] == "col-resize"
         move_to!(80)
         @test take_message()[:cursor] == "default"
-        # A new client gets every window in full, and the cursor again.
-        _WEB._reset_for_full!(backend)
+        # A new client gets every window in full, and the cursor again: the receive
+        # task asks, and the next frame resets and sends.
+        _WEB._ask_for_full_send!(backend)
         write_to_devices!(backend, Device[], screen)
         @test take_message()[:type] == "update"
         @test take_message()[:cursor] == "default"
@@ -246,7 +262,7 @@ function test_web_backend()
         elapsed = @elapsed wait_for_input(backend, Device[], 30.0)
         wait(receiver)
         @test elapsed < 5.0
-        @test backend.force_full
+        @test backend.is_full_send_asked[]
         @test take_from_devices!(backend, Device[]) === nothing
 
         # A wake from another task ends a long wait.
@@ -284,7 +300,7 @@ function test_web_backend()
             # that only the timeout ends still fails.
             @test (@elapsed wait_for_input(backend, Device[], 60.0)) < 30.0
             @test backend.conn !== nothing
-            @test backend.force_full
+            @test backend.is_full_send_asked[]
             notify(send)
             @test (@elapsed wait_for_input(backend, Device[], 60.0)) < 30.0
             window_input = take_from_devices!(backend, Device[])
@@ -299,6 +315,46 @@ function test_web_backend()
             quit_backend!(backend)
         end
         @test backend.server === nothing
+    end
+
+    # While a code unit runs, a held frame keeps the keys and the window events,
+    # drops the pointer input that starts in the hold (a release of an earlier
+    # press stays), and answers the stop, the close and the confirm to quit.
+    @testset "held frames keep the keys, drop the pointer of the hold, and take the stop" begin
+        backend = WebBackend(port = 0)
+        run(seconds; is_quit_asked = false) =
+            run_held_frame!(backend, Device[], HeldFrameState(seconds, 1, false, is_quit_asked))
+        send(message) = _WEB._decode_and_enqueue!(backend, message)
+        prepare_held_frames!(backend, Device[], ["Run the code: sleep(10)"])
+        now = round(Int, time() * 1000)
+        early = now - 10_000
+        send("""{"type":"mousedown","window":"main","button":"left","x":5,"y":6,"t":$early}""")
+        send("""{"type":"keydown","window":"main","key":"a","code":"KeyA","t":$(now + 1)}""")
+        send("""{"type":"mousedown","window":"main","button":"right","x":5,"y":6,"t":$(now + 2)}""")
+        send("""{"type":"mouseup","window":"main","button":"right","x":5,"y":6,"t":$(now + 3)}""")
+        send("""{"type":"mouseup","window":"main","button":"left","x":5,"y":6,"t":$(now + 4)}""")
+        send("""{"type":"keydown","window":"main","key":"Escape","code":"Escape","t":$(now + 5)}""")
+        @test run(0.2) === :none                    # an Escape before the bar is a key
+        @test run(0.6) === :none                    # the bar shows from this frame on
+        later = round(Int, time() * 1000) + 1
+        send("""{"type":"keydown","window":"main","key":"Escape","code":"Escape","t":$later}""")
+        @test run(0.7) === :stop
+        send("""{"type":"close","window":"main","t":$later}""")
+        @test run(0.8) === :close
+        send("""{"type":"stop"}""")
+        @test run(0.9) === :stop
+        send("""{"type":"quitconfirm"}""")
+        @test run(1.0) === :none                    # no question, no quit
+        send("""{"type":"quitconfirm"}""")
+        @test run(3.5; is_quit_asked = true) === :quit
+        end_held_frames!(backend, Device[])
+        events = Any[]
+        while (input = take_from_devices!(backend, Device[])) !== nothing
+            push!(events, input.event)
+        end
+        @test [typeof(event) for event in events if !(event isa KeyPress)] ==
+              [MouseDown, KeyDown, MouseUp, KeyDown]
+        @test [event.key for event in events if event isa KeyDown] == [:a, :escape]
     end
 
 end

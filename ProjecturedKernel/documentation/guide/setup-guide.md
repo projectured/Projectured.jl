@@ -15,13 +15,24 @@ To use the packages in a project of your own, without the source, add them from 
 ## Start the application
 
 ```sh
-git clone https://github.com/projectured/AutoIntegration.jl auto-integration
+git clone https://github.com/projectured/AutoIntegration.jl
+git clone https://github.com/projectured/AgentClientProtocol.jl
+git clone https://github.com/projectured/ClaudeCodeACP.jl
+git clone https://github.com/projectured/ModelContextProtocol.jl
 git clone https://github.com/projectured/projectured-julia
 cd projectured-julia
 bin/projectured
 ```
 
-The folder `auto-integration` goes beside `projectured-julia`, because the umbrella and `environment/all` name it by that folder.
+The four folders go beside `projectured-julia`, because the packages and `environment/all` name them by those folders: `AutoIntegration.jl` the umbrella, `AgentClientProtocol.jl` and `ClaudeCodeACP.jl` the package `ProjecturedACP`, and `ModelContextProtocol.jl`, the fork of the MCP package, the package `ProjecturedMCP`. Each folder has the name that `git clone` gives it.
+
+A worktree of this repository beside it, such as `../projectured-julia-<name>`, reaches the same folders. A worktree in `.claude/worktrees/<name>/` does not: its relative paths end in `.claude/worktrees/`, so it needs a link of the same name there for each folder, which git ignores:
+
+```sh
+for folder in AutoIntegration.jl AgentClientProtocol.jl ClaudeCodeACP.jl ModelContextProtocol.jl; do
+    ln -s "$(realpath ..)/$folder" .claude/worktrees/$folder
+done
+```
 
 The window has the Files pane on the left, the open files in the middle, and the assistant on the right. A double click in the Files pane opens a file. Files named on the command line open at once:
 
@@ -37,8 +48,10 @@ bin/projectured --help            # every option
 A session is what you want while you work on ProjecturEd itself, or to open a value of your own program.
 
 ```sh
-julia --project=environment/all
+julia --threads=auto,2 --project=environment/all
 ```
+
+`--threads=auto,2` gives a window a second interactive thread for the code that a tool call runs, so the call never waits behind a long computation such as a formula. `bin/projectured` passes it, and a built binary that starts with one interactive thread starts itself again with it. Without it, the status bar of the window says how to start Julia.
 
 ```julia
 using Projectured, ProjecturedExample, ProjecturedSDL

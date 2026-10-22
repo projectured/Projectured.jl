@@ -25,9 +25,9 @@ function test_json()
         test_json_layering()
         test_json_parser()
         test_json_document()
-        test_json_assistant_api()
         test_json_placeholder_navigation()
         test_json_mouse_target()
+        test_json_file_note()
         test_json_to_syntax()
         test_json_theme()
         test_json_to_syntax_reader()
@@ -36,6 +36,6 @@ function test_json()
 end
 
 export test_json, test_json_layering, test_json_document
-export test_json_parser, test_json_assistant_api
+export test_json_parser, test_json_file_note
 export test_json_placeholder_navigation, test_json_to_syntax, test_json_theme, test_json_mouse_target
 export test_json_to_syntax_reader, test_json_gesture_collection

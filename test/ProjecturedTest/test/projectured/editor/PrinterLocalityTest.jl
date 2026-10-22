@@ -16,9 +16,10 @@
 #     slot cells and re-projects siblings, so the old objects become garbage
 #     rather than being marked invalid).
 #
-# The reactive engine is write-driven with no equality check (see
-# package/kernel/doc/cell.md), so locality is purely a property of the
-# dependency graph the printer builds. We measure that graph directly.
+# The reactive engine marks what a write reaches, and stops only at plain data
+# that stays the same (see documentation/package/kernel/cell.md), so locality is
+# a property of the dependency graph that the printer builds. We measure that
+# graph directly.
 #
 # Dimension A — selection isolation — is the headline case the plan calls out:
 # a pure `set_selection!` must invalidate ONLY `:selection` cells and rebuild
@@ -140,7 +141,7 @@ end
 
 # The result of one locality measurement.
 struct LocalityReport
-    invalidated::Vector{LocalityCell}   # snapshot output cells now !is_cell_up_to_date
+    invalidated::Vector{LocalityCell}   # snapshot output cells now !is_cell_valid
     cell_count::Int                     # total output cells snapshotted
     preserved_objects::Int              # objectids reachable before AND after
     lost_objects::Int                   # objectids reachable before but NOT after
@@ -198,9 +199,9 @@ function measure_printer_locality(document, projection, mutate!)
             push!(errors, "mutate! threw: $e")
         end
 
-        # Eager invalidation has run; read `.valid` only (is_cell_up_to_date is pure) so we
+        # Eager invalidation has run; ask only whether each cell is valid (it is pure) so we
         # do not recompute anything before observing the footprint.
-        inv = LocalityCell[lc for lc in cells if !is_cell_up_to_date(lc.cell)]
+        inv = LocalityCell[lc for lc in cells if !is_cell_valid(lc.cell)]
 
         # Re-force to recompute and re-collect object identities + perf delta.
         objs = Set{UInt64}()

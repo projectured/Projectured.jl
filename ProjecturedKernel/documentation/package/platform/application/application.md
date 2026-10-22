@@ -2,17 +2,19 @@
 
 > **Kind:** design · **Status:** current · **Stands on:** [shell.md](../shell/shell.md), [assistant.md](../assistant/assistant.md), [fileformat.md](../fileformat/fileformat.md)
 
-The application slice of `ProjecturedPlatform` is the window of ProjecturEd: a Files pane, a tab for each open file, and an assistant beside them, built with the wrappers of `build_editor` and the chrome of the shell slice. This document says how the window and its tool set are built, how the command line of the `projectured` binary reads into it, how a build warms it up, and how it finds a backend with no dependency on one.
+The application slice of `ProjecturedPlatform` is the window of ProjecturEd: an Explorer, a tab for each open file, and an assistant beside them, built with the wrappers of `build_editor` and the chrome of the shell slice. This document says how the window and its tool set are built, how the command line of the `projectured` binary reads into it, how a build warms it up, and how it finds a backend with no dependency on one.
 
 ## How it works
 
 ### The window
 
-`make_application_document(paths; root, assistant)` makes the document of the window: one file tab for each path in `paths`, each wrapped in its own `UndoBuffer` so `Ctrl+Z` takes back an edit in the file a person is looking at; a `Workspace` as the Files pane over `root`; and the `assistant`, when it is not `nothing`. `_make_application_pane_tree` puts them side by side in a `PaneTree`: the Files pane in a "Files" group, the open files in a second group, and, when there is an assistant, a third group for it. The Files pane and the files split 0.2/0.8 with no assistant, and 0.18/0.5/0.32 with one. The whole tree then sits inside one more `UndoBuffer`, so a change that belongs to no file — a splitter that moves, a tab that opens — can be taken back too, and the focus is seated on the first open file, or on the root row of the Files pane when no file is open.
+`make_application_document(paths; root, assistant)` makes the document of the window: one file tab for each path in `paths`, each wrapped in its own `UndoBuffer` so `Ctrl+Z` takes back an edit in the file a person is looking at; an `Explorer` over a section that holds the folder of `root`; and the `assistant`, when it is not `nothing`. `_make_application_pane_tree` puts them in a `PaneTree`: a main group whose first tab is the `Explorer`, followed by a tab for each file, and, when there is an assistant, a second group for it. The two groups split 0.68/0.32; with no assistant the main group fills the window. The whole tree then sits inside one more `UndoBuffer`, so a change that belongs to no file — a splitter that moves, a tab that opens — can be taken back too, and the focus is seated on the root row of the tree of the Explorer, also when files are open. So the window opens on the Explorer and the assistant, and the files are tabs behind the Explorer.
 
-`make_application_window(paths; root, assistant, status_bar, measure)` builds the document and the projection of `make_application_projection` with the wrappers that `make_application_wrappers(; root, assistant, status_bar, measure, appearance)` names once, for `run_application` and for this function alike: `undo` wraps the whole pane tree in a history, `shell` builds the chrome, `clipboard` gives the window the clipboard and the Alt+arrow walk, `gesture_help` and `command_palette` give F1 and Ctrl+Shift+P, and `gesture_log`, `message_log`, `frame_statistics` and `fault_log` fill the tools that show what the window records. `make_editor_parts` applies them with no backend and makes no editor, which is what a caller that draws its own window scene, such as a test or the warm-up, needs. [shell.md](../shell/shell.md) describes each wrapper and why the order is fixed. `status_bar = false` leaves out the status bar, for a video that shows what the window paints again, because the status bar changes with every move of the caret. The clipboard offers all seven of its gestures, cut and the view toggle included, because a person who edits a file expects Ctrl+X to cut.
+`start_application!` makes the first content of the explorer: `_fill_explorer_content!` calls `make_editor_explorer_content` (`ApplicationExplorer.jl`), which puts the entries that the window brought, such as its folder, before the open files, the task list and the assistant list of the editor, and the sections of the tools. `run_application` then reads the content that the state folder keeps for `root` (`get_explorer_content_file`, `load_explorer_content`) and replaces the first content with it when the file reads. It writes the content again after `run_editor!` returns (`save_explorer_content!`).
 
-The chrome is `make_window_menu_bar()`, `make_window_toolbar(; assistant, explorer)` and, unless `status_bar` is `false`, `make_window_status_bar(document)`. The toolbar's assistant button makes a fresh `Assistant` with the backend, the model and the greeting of the one the window opened with; a window with no assistant has no assistant button. Its explorer button lists `root`, the same folder the Files pane opens with.
+`make_application_window(paths; root, assistant, status_bar, measure)` builds the document and the projection of `make_application_projection` with the wrappers that `make_application_wrappers(; root, assistant, status_bar, measure, appearance)` names once, for `run_application` and for this function alike: `undo` wraps the whole pane tree in a history, `shell` builds the chrome, `clipboard` gives the window the clipboard and the Alt+arrow walk, `gesture_help` and `command_palette` give F1 and Ctrl+Shift+P, `gesture_log`, `message_log`, `frame_statistics`, `background_work` and `fault_log` fill the tools that show what the window records, and `assistant_list` links the Assistants pane to the tabs of the window. `make_editor_parts` applies them with no backend and makes no editor, which is what a caller that draws its own window scene, such as a test or the warm-up, needs. [shell.md](../shell/shell.md) describes each wrapper and why the order is fixed. `status_bar = false` leaves out the status bar, for a video that shows what the window paints again, because the status bar changes with every move of the caret. The clipboard offers all seven of its gestures, cut and the view toggle included, because a person who edits a file expects Ctrl+X to cut.
+
+The chrome is `make_window_menu_bar()`, `make_window_toolbar(; assistant, explorer, files)` and, unless `status_bar` is `false`, `make_window_status_bar(document)`. The toolbar's assistant button makes a fresh `Assistant` with the backend, the model and the greeting of the one the window opened with; a window with no assistant has no assistant button. Its Explorer button reaches the `Explorer` tab. The shell option `files` makes the Files tool, a `WorkspaceExplorer` over `root`.
 
 ### The content rows
 
@@ -20,21 +22,24 @@ The chrome is `make_window_menu_bar()`, `make_window_toolbar(; assistant, explor
 
 ### The assistant's API
 
-`make_application_assistant(backend; model, context, llm)` makes the `Assistant` of the window: `backend` is one of `APPLICATION_ASSISTANTS` (`:ollama`, `:anthropic`, `:none`), and `:none` answers `nothing`. Its greeting, from `get_application_greeting_text(backend)`, says what the window shows and what the assistant needs to answer.
+`make_application_assistant(backend; model, context, llm)` makes the `Assistant` of the window: `backend` is one of `APPLICATION_ASSISTANTS` (`:ollama`, `:anthropic`, `:acp`, `:none`). With `:none` the pane opens too: its greeting says that no model backend is chosen and where to choose one. A caller that wants no assistant pane, such as the recorder of a video, passes `assistant = nothing` to `make_application_document`. Its greeting, from `get_application_greeting_text(backend)`, says what the window shows and what the assistant needs to answer.
 
-`make_application_api()` is what that assistant may write, and the whole of it: five vocabularies, concatenated and passed to `declare_api!`.
+`make_editor_api()` is what the assistant of a window of the editor may write: the vocabularies that every window declares, concatenated and passed to `declare_api!`. The application declares the list as it is, and an application that builds on the editor adds the verbs of its own domain to it, so every window offers one vocabulary.
 
 | Vocabulary | Where it comes from |
 | --- | --- |
 | the pane verbs that arrange the window | `make_pane_api()` |
 | the widget names that build what a pane shows | `make_interface_api()` |
 | the file verbs that open and save one | `make_file_api()` |
-| the workspace this application lists, and how to read what a tab holds | named in `make_application_api` itself: `OpenFileOperation`, `Workspace`, `WorkspaceFolder`, `search_documents`, `get_wrapped_document`, `get_file_content`, `print_natural_text`, `parse_natural_text`, `insert_elements!`, `delete_elements!` |
-| what each loaded domain registered for its own documents | `get_registered_assistant_api()` |
+| the workspace of the folder of the window, and how to read what a tab holds | named in `make_editor_api` itself: `OpenFileOperation`, `Workspace`, `WorkspaceFolder`, `search_documents`, `get_wrapped_document`, `get_file_content`, `print_natural_text`, `parse_natural_text`, `insert_elements!`, `delete_elements!` |
+| the arrangement and the roster of a collection | named in `make_editor_api` itself |
+| the groups of tasks of the session | `make_task_api()` |
+| a tree of documents, the processes of the system, the work of an agent | named in `make_editor_api` itself |
+| what each loaded domain registered | `get_registered_assistant_api()` |
 
-Each vocabulary is declared where its verbs are, so a second host that offers the same verbs states it once and this function only names which it wants. The last row is the open end: a domain's `__init__` registers names with `register_assistant_api!`, and `get_registered_assistant_api()` answers every one that is loaded, in the order of the registrations; [assistant.md](../assistant/assistant.md#the-api-a-loaded-package-offers) describes the registry, and the JSON domain's seven document types are the first user of it (see [json.md](../../domain/json/json.md)).
+Each vocabulary is declared where its verbs are, so a host that offers the same verbs states it once and this function only names which it wants. The last row is the open end: a domain's `__init__` registers names with `register_assistant_api!`, and `get_registered_assistant_api()` answers every one that is loaded, in the order of the registrations; [assistant.md](../assistant/assistant.md#the-api-a-loaded-package-offers) describes the registry. A domain with a parser registers no constructors: a model reads and writes such a document as its text, with `print_natural_text` and `parse_natural_text`.
 
-`APPLICATION_SYSTEM` is the editor's own instructions with one paragraph that names these verbs, and `make_application_system()` appends the section "Reach what a tab holds" of the orientation guide. `start_application!(editor; mcp, assistant, model)` declares `make_application_api()` and the undo and redo tools on `editor.tools` once the editor exists, and, with `mcp` on and an assistant, also binds the meaning model of the backend to the tools, so a search by description ranks by meaning for an MCP client too.
+`EDITOR_SYSTEM` is the paragraph of the system text that names these verbs, and the system text of every window holds it. `APPLICATION_SYSTEM` is the editor's own instructions with one sentence about the window and `EDITOR_SYSTEM`, and `make_application_system()` appends the section "Reach what a tab holds" of the orientation guide. `register_editor_tools!(set)` adds the tools `undo`, `redo` and `take_picture`. `start_application!(editor; mcp, assistant, model)` declares `make_editor_api()` and these tools on `editor.tools` once the editor exists, and, with `mcp` on and an assistant, also binds the meaning model of the backend to the tools, so a search by description ranks by meaning for an MCP client too.
 
 ### The command line
 
@@ -44,9 +49,9 @@ Each vocabulary is declared where its verbs are, so a second host that offers th
 | --- | --- |
 | `[files...]` | the paths `run_application` opens, one tab each |
 | `--backend=NAME` | which backend draws the window, when the binary holds more than one |
-| `--assistant=ollama\|anthropic\|acp\|none` | the model backend of the assistant, an external agent (`acp`), or no assistant (default: the start settings, `ollama` at first) |
+| `--assistant=ollama\|anthropic\|acp\|none` | the model backend of the assistant, an external agent (`acp`), or no backend yet (default: the start settings, `ollama` at first) |
 | `--model=NAME` | the model of that backend (default: the start settings, else the backend's own default) |
-| `--root=DIRECTORY` | the directory the Files pane lists (default: the current directory) |
+| `--root=DIRECTORY` | the directory of the folder of the window (default: the current directory) |
 | `--mcp` | start an MCP server at `http://127.0.0.1:9876/mcp` |
 | `--mcp=[HOST:]PORT` | start an MCP server there instead |
 | `--context=TOKENS` | how many tokens of the conversation the model may see (default: the start settings, else the backend's own default) |
@@ -57,7 +62,7 @@ A path with no leading `-` is a file; an unknown option, or a value a keyword re
 
 `--assistant`, `--model`, `--context`, `--mcp` and `--agent-command` are `nothing` when the command line does not give them, and then the `StartSettings` of the settings file decide them: the assistant, the model, the context, whether the MCP server starts, and the command of the external agent. A person sets these in the settings tab, and they take effect at the next start. `make_application_settings(file; fault_policy, assistant, model, context, mcp, agent_command)` fills the settings from the defaults, the file, the environment and these values, in that order, and `run_application` reads the start settings from it. See [settings.md](../settings/settings.md).
 
-`run_application(paths...; backend, assistant, model, mcp, mcp_host, mcp_port, root, context, agent_command, width, height, fault_policy, measure)` is the function the command line calls, and a host can call it directly: it makes the assistant, builds the editor with `build_editor` and the wrappers of `make_application_wrappers`, so the message log, the frame statistics and the fault log fill themselves with no feed of the caller's own; calls `start_application!`; and runs `run_editor!`. The editor keeps the tooltip window and the context menu window at the screen: its `window` argument gives `inner_wrappers = [wrap_tooltip_window, wrap_context_menu_window]`. `backend = nothing` takes `default_backend()`.
+`run_application(paths...; backend, assistant, model, mcp, mcp_host, mcp_port, root, context, agent_command, width, height, fault_policy, measure)` is the function the command line calls, and a host can call it directly: it makes the assistant, builds the editor with `build_editor` and the wrappers of `make_application_wrappers`, so the message log, the frame statistics, the background work log and the fault log fill themselves with no feed of the caller's own; calls `start_application!`; and runs `run_editor!`. The editor keeps the tooltip window and the context menu window at the screen: its `window` argument gives `inner_wrappers = [wrap_tooltip_window, wrap_context_menu_window]`. `backend = nothing` takes `default_backend()`.
 
 ### The warm-up of a build
 
@@ -69,7 +74,7 @@ A path with no leading `-` is a file; an unknown option, or a value a keyword re
 
 ## How it fits
 
-The application slice depends on the kernel and on the assistant, collection, conversation, domain, fileformat, filesystem, natural, pane, primitive, projection, screen, serialization, shell, style, text, tooltip, undo and widget slices of `ProjecturedPlatform`; `PLATFORM_SLICE_EDGES` in [PlatformSuite.jl](../../../../test/platform/PlatformSuite.jl) has the row.
+The application slice depends on the kernel and on the assistant, collection, conversation, domain, fileformat, filesystem, gesturelog, natural, pane, primitive, projection, screen, serialization, shell, style, text, tooltip, undo and widget slices of `ProjecturedPlatform`; `PLATFORM_SLICE_EDGES` in [PlatformSuite.jl](../../../../test/platform/PlatformSuite.jl) has the row.
 
 **It names no domain, no backend and no adapter.** A document of a domain draws through the natural renderer, which each loaded domain registers itself with; the model of the assistant is asked for by the name of its backend, through `make_llm`; and the window's backend is the one a caller passes, or the one `default_backend` finds among the loaded packages. So the window shows every domain that a session loads, and a session decides what it holds by what it loads:
 
@@ -103,10 +108,10 @@ run_editor!(editor)
 ```
 
 - Examples: no example of its own; the application is the example, as the shell slice's own chrome is.
-- Tests: `test/projectured/editor/ApplicationTest.jl`, `test_application()`. It covers the assistant pane and its declared API, the command line (`parse_application_arguments`, `run_application_command`), the warm-up, and the whole window: the first focus, a verb through the readers, every file format drawn, `Ctrl+S`, the menu bar and the toolbar, the evaluator opened from the toolbar, a noted object pasted into a form, and the Files pane.
+- Tests: `test/projectured/editor/ApplicationTest.jl`, `test_application()`. It covers the assistant pane and its declared API, the command line (`parse_application_arguments`, `run_application_command`), the warm-up, and the whole window: the first focus, a verb through the readers, every file format drawn, `Ctrl+S`, the menu bar and the toolbar, the evaluator opened from the toolbar, a noted object pasted into a form, and the tree of the folder.
 
 ## Limits
 
 - A press on the Assistant button, once its tab has closed, opens a fresh `Assistant` through `make_application_assistant` with the backend, the model and the context of the window's own assistant: the conversation starts over at the greeting, because the window keeps no assistant of its own once its tab is gone.
 - The menu bar has no Save, Reload, Command palette, Gesture help or clipboard items yet; see the Limits of [shell.md](../shell/shell.md).
-- The Files pane's tree opens collapsed by default, so a scenario that scrolls to a file three folders deep finds nothing drawn yet to scroll to. Two assertions of `test_application()` are marked `@test_broken` for this reason, in "the Files pane scrolls a tree taller than its pane".
+- The tree of the Files tool opens collapsed by default, so a scenario that scrolls to a file three folders deep finds nothing drawn yet to scroll to. Two assertions of `test_application()` are marked `@test_broken` for this reason, in "the Files pane scrolls a tree taller than its pane".

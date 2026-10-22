@@ -21,28 +21,29 @@ of `play_fault_sound!` writes the BEL character, so this layer names no backend.
 
 The module lives in seven fragments that share this namespace:
 
-- [`FaultInterface.jl`](FaultInterface.jl) — the open seams and the passthrough
-  predicate.
+- [`FaultInterface.jl`](FaultInterface.jl) — the open seams and the predicate
+  of a fault.
 - [`FaultDefaults.jl`](FaultDefaults.jl) — the answer each seam supplies itself.
 - [`FaultRecord.jl`](FaultRecord.jl) — one fault as a value.
 - [`FaultStore.jl`](FaultStore.jl) — the per-editor collection, outside the
   reactive graph.
 - [`FaultPolicy.jl`](FaultPolicy.jl) — whether the barriers catch, and which
   tiers are open.
-- [`FaultCascade.jl`](FaultCascade.jl) — `report_fault!` and its five tiers.
+- [`FaultCascade.jl`](FaultCascade.jl) — `report_fault!`, the tiers after the
+  targets of the store.
 - [`FaultBarrier.jl`](FaultBarrier.jl) — `run_fault_barrier!`, the barrier around one
   stage of work.
 """
 module FaultModule
 
-export append_fault!, play_fault_sound!, get_fault_store, make_safe_mode_projection,
-       is_passthrough_exception
+export append_fault!, play_fault_sound!, get_fault_store, is_fault_exception
 export FaultRecord, make_fault_record
-export FaultStore, record_fault!, drain_faults!, get_fault_records,
-       attach_fault_target!, attach_fault_wake!,
-       get_consecutive_fault_count, reset_consecutive_fault_count!
+export FaultStore, get_fault_records, attach_fault_target!, detach_fault_target!,
+       attach_fault_wake!, record_fault!, drain_faults!, get_consecutive_fault_count,
+       reset_consecutive_fault_count!
 export FaultPolicy, make_strict_fault_policy
-export report_fault!, run_fault_barrier!
+export report_fault!
+export run_fault_barrier!
 
 include("FaultInterface.jl")
 include("FaultDefaults.jl")

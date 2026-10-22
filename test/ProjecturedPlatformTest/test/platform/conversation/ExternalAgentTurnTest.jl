@@ -45,6 +45,31 @@ function test_external_agent_turn()
                   findfirst(part -> part.content isa EvaluatorForm, parts)
         end
 
+        @testset "the turn says that the agent starts until its session is open" begin
+            gate = Channel{Nothing}(1)
+            connection = ScriptedAgentConnection([Any[LlmTextStart(), LlmTextDelta("Hi."), LlmTextStop()]];
+                                                 on_start = connection -> take!(gate))
+            a = _make_agent_assistant(connection)
+            is_starting() = any(part -> part.content isa TextBlock &&
+                                        get_flat_string(part.content) == "Starting Claude Code…",
+                                [part for turn in collect(a.conversation.turns) for part in collect(turn.parts)])
+            _submit_to_agent!(a, "Hello"; wait = false)
+            @test timedwait(is_starting, 10.0; pollint = 0.01) === :ok
+            @test [turn.role for turn in collect(a.conversation.turns)] == [:user, :assistant]
+            put!(gate, nothing)
+            _wait_for_idle(a)
+            @test !is_starting()
+            turns = collect(a.conversation.turns)
+            @test [turn.role for turn in turns] == [:user, :assistant]
+            @test occursin("Hi.", AssistantModule._part_text(only(collect(turns[2].parts))))
+            # A start that fails leaves no turn of its own.
+            failing = ScriptedAgentConnection([Any[]]; failing_opens = 1)
+            b = _make_agent_assistant(failing)
+            _submit_to_agent!(b, "Hello")
+            @test b.status === :error
+            @test !any(turn -> turn.role === :assistant && isempty(collect(turn.parts)), collect(b.conversation.turns))
+        end
+
         @testset "a second turn sends only what came since the last answer" begin
             connection = ScriptedAgentConnection([Any[LlmTextStart(), LlmTextDelta("One."), LlmTextStop()],
                                                   Any[LlmTextStart(), LlmTextDelta("Two."), LlmTextStop()]])
@@ -65,6 +90,214 @@ function test_external_agent_turn()
             _submit_to_agent!(a, "Try again")
             @test a.status === :idle
             @test only(connection.prompts) == Any[LlmText("Explain X"), LlmText("Try again")]
+        end
+
+        @testset "a picture of a user turn goes as an image between its texts" begin
+            file = joinpath(mktempdir(), "picture.png")
+            write(file, UInt8[1, 2, 3])
+            conversation = ConversationConversation([ConversationTurn(:user, [
+                ConversationPart("See"), ConversationPart(ImageFile(file)), ConversationPart("and this")])])
+            prompt, count = AssistantModule._make_external_agent_prompt(conversation, 0)
+            @test count == 1
+            @test length(prompt) == 3
+            @test prompt[1] == LlmText("See") && prompt[3] == LlmText("and this")
+            @test prompt[2] isa LlmImage
+            @test (prompt[2].media_type, prompt[2].data) == ("image/png", UInt8[1, 2, 3])
+            # A model gets the same content in its user message.
+            message = only(build_messages(conversation))
+            @test message.role === :user && length(message.content) == 3 && message.content[2] isa LlmImage
+            # A picture whose file is gone is a line of the text.
+            rm(file)
+            prompt, _ = AssistantModule._make_external_agent_prompt(conversation, 0)
+            @test length(prompt) == 1
+            @test occursin("See\n\n(A picture is left out", only(prompt).text)
+        end
+
+        @testset "a draft takes a pasted document with no text form as a part before the text" begin
+            draft = make_conversation_draft()
+            result = AgentTurnLiveResult(() -> 1)
+            @test !has_text_form(result)
+            @test has_text_form(PrimitiveString("x")) && has_text_form(TextBlock(TextLine(TextString("t"))))
+            @test make_pasted_document_operation(draft, EmptyReference(), PrimitiveString("x")) === nothing
+            operation = make_pasted_document_operation(draft, EmptyReference(), result)
+            @test operation isa InsertDraftDocumentOperation
+            evaluate_operation((document = draft,), operation)
+            parts = collect(draft.parts)
+            @test length(parts) == 2
+            @test parts[1].content === result && parts[2].content isa PrimitiveString
+        end
+
+        @testset "a picture is a card with its image, at most as high as the theme says" begin
+            part = ConversationPart(ImageFile(joinpath(mktempdir(), "gone.png")))
+            card = print_document(ConversationPartToWidget(), nothing, part, nothing).output
+            @test card isa WidgetCard
+            @test card.title.content == "picture"
+            constraint = only(card.content.children)
+            label = constraint.child
+            @test label isa WidgetLabel && label.content isa ImageFile
+            height = ConversationPartToWidget().picture_height
+            @test constraint.max_height == height
+            # A file that can not be decoded keeps the box of a picture of 4:3.
+            @test constraint.max_width == 4 * height ÷ 3
+        end
+
+        @testset "an agent that needs a sign-in gives a request, and a retry starts it" begin
+            method = AgentSignInMethod("login", "Sign in", "Run the sign-in.", `true`)
+            connection = ScriptedAgentConnection([Any[LlmTextStart(), LlmTextDelta("Hi."), LlmTextStop()]];
+                                                 is_signed_in = false, sign_in_methods = [method],
+                                                 can_sign_out = true)
+            a = _make_agent_assistant(connection)
+            _submit_to_agent!(a, "Hello")
+            # A sign-in is no fault: the turn ends, and a request says how to sign in.
+            @test a.status === :idle
+            request = only(part.content for turn in collect(a.conversation.turns) for part in collect(turn.parts)
+                           if part.content isa ConversationSignInRequest)
+            @test request.message == "The scripted agent needs a sign-in."
+            @test [m.id for m in request.methods] == ["login"]
+            @test request.start !== nothing && request.retry !== nothing
+            @test !any(part -> part.content isa AbstractString && startswith(part.content, "Error"),
+                       part for turn in collect(a.conversation.turns) for part in collect(turn.parts))
+            # A sign-in that ends with 0 starts the agent again. Its program reads
+            # a code and ends with 0 for the right one.
+            signer = AgentSignInMethod("code", "Sign in with a code", "",
+                                       `sh -c "printf 'Code > '; read code; test \"\$code\" = right"`)
+            push!(request.methods, signer)
+            request.start((document = a,), "code")
+            terminal = request.terminal
+            @test terminal isa TerminalDocument && request.is_signing_in
+            @test timedwait(() -> "Code > " in [line.text for line in terminal.lines], 10.0; pollint = 0.01) === :ok
+            connection.is_signed_in = true
+            @test send_terminal_input!(terminal, "right")
+            @test timedwait(() -> length(connection.sessions) == 1, 10.0; pollint = 0.01) === :ok
+            @test request.state == "Signed in." && !request.is_signing_in
+            # A sign-in that a person stopped is no sign-in, even with the status 0.
+            trap = AgentSignInMethod("trap", "Sign in and stop", "",
+                                     `sh -c "trap 'exit 0' INT; printf 'Code > '; read code"`)
+            push!(request.methods, trap)
+            request.start((document = a,), "trap")
+            stopped = request.terminal
+            @test timedwait(() -> "Code > " in [line.text for line in stopped.lines], 10.0; pollint = 0.01) === :ok
+            stop_terminal!(stopped)
+            @test timedwait(() -> !request.is_signing_in, 10.0; pollint = 0.01) === :ok
+            @test stopped.status == 0 && request.state == "The sign-in was stopped."
+            @test length(connection.sessions) == 1
+            # A retry when the session is open does nothing more.
+            request.retry((document = a,))
+            @test length(connection.sessions) == 1
+            # A copy of the request has no live function.
+            copied = copy_document(DuplicatePolicy(), request)
+            @test copied.start === nothing && copied.retry === nothing && copied.terminal === nothing
+            # The agent signs out on request, and a note says so.
+            @test AssistantModule._has_agent_sign_out(a)
+            evaluate_operation((document = a,), SignOutAgentOperation(a))
+            @test timedwait(() -> !connection.is_signed_in, 10.0; pollint = 0.01) === :ok
+            @test timedwait(() -> any(part -> AssistantModule._part_text(part) == "Signed out. The next message needs a sign-in.",
+                                      collect(last(collect(a.conversation.turns)).parts)), 10.0; pollint = 0.01) === :ok
+        end
+
+        @testset "a question of the agent is a form, and its values go back" begin
+            fields = [AgentQuestionField("question_1", "Colour", "Which colour?", :choice,
+                                         [AgentOptionValue("Red", "Red", "warm"), AgentOptionValue("Blue", "Blue", "")], true),
+                      AgentQuestionField("question_1_other", "Other", "", :text, AgentOptionValue[], false),
+                      AgentQuestionField("parts", "Parts", "", :choices,
+                                         [AgentOptionValue("a", "A", ""), AgentOptionValue("b", "B", "")], false),
+                      AgentQuestionField("size", "Size", "", :integer, AgentOptionValue[], false)]
+            connection = ScriptedAgentConnection([
+                Any[make_scripted_question_step("Answer, please.", fields), LlmTextStart(), LlmTextDelta("Thanks."), LlmTextStop()],
+                Any[make_scripted_question_step("Once more?", fields[1:1])]])
+            a = _make_agent_assistant(connection)
+            requests() = [part.content for turn in collect(a.conversation.turns) for part in collect(turn.parts)
+                          if part.content isa ConversationQuestionRequest]
+            _submit_to_agent!(a, "Ask me"; wait = false)
+            @test timedwait(() -> length(requests()) == 1, 10.0; pollint = 0.01) === :ok
+            request = only(requests())
+            @test request.message == "Answer, please." && is_question_request_open(request)
+            # The form says what it still needs.
+            @test find_question_values(request) == "Fill in: Colour"
+            values = collect(request.form.values)
+            values[1].value = "Red"
+            values[3].value = "a\nb"
+            values[4].value = "many"
+            @test find_question_values(request) == "Size needs a whole number"
+            values[4].value = "3"
+            answer_question_request!(request, find_question_values(request))
+            _wait_for_idle(a)
+            @test only(connection.answers) == Dict{String,Any}("question_1" => "Red", "parts" => ["a", "b"], "size" => 3)
+            @test request.answer == "Answered: Colour: Red; Parts: A, B; Size: 3"
+            @test !is_question_request_open(request)
+            # A second answer does nothing.
+            answer_question_request!(request, nothing)
+            @test length(connection.answers) == 1
+            # A decline.
+            _submit_to_agent!(a, "Again"; wait = false)
+            @test timedwait(() -> length(requests()) == 2, 10.0; pollint = 0.01) === :ok
+            answer_question_request!(requests()[2], nothing)
+            _wait_for_idle(a)
+            @test connection.answers[2] === nothing && requests()[2].answer == "Declined"
+            # A file keeps the message, the fields and the answer, and no reply.
+            _, keywords = pred_arguments(request)
+            read_back = make_pred_document(ConversationQuestionRequest, (), keywords)
+            @test read_back.message == request.message && read_back.answer == request.answer
+            @test [(field.name, field.kind, length(field.options)) for field in read_back.fields] ==
+                  [(field.name, field.kind, length(field.options)) for field in fields]
+            @test read_back.reply === nothing
+            @test copy_document(DuplicatePolicy(), request).reply === nothing
+        end
+
+        @testset "a message while the agent works goes into its turn, and the answer goes on below it" begin
+            # The agent answers, waits until it took the second message, and answers on.
+            wait_for_steer = (connection, on_event) -> timedwait(() -> !isempty(connection.steered), 10.0; pollint = 0.01)
+            connection = ScriptedAgentConnection([
+                Any[LlmTextStart(), LlmTextDelta("Working."), LlmTextStop(), wait_for_steer,
+                    LlmTextStart(), LlmTextDelta("Also done."), LlmTextStop()],
+                Any[LlmTextStart(), LlmTextDelta("Third answer."), LlmTextStop()]]; can_steer = true)
+            a = _make_agent_assistant(connection)
+            _submit_to_agent!(a, "First"; wait = false)
+            @test timedwait(() -> any(turn -> turn.role === :assistant && !isempty(turn.parts),
+                                      collect(a.conversation.turns)), 10.0; pollint = 0.01) === :ok
+            _submit_to_agent!(a, "Second")
+            @test connection.steered == [Any[LlmText("Second")]]
+            @test length(connection.prompts) == 1
+            turns = collect(a.conversation.turns)
+            @test [turn.role for turn in turns] == [:user, :assistant, :user, :assistant]
+            @test occursin("Working.", AssistantModule._part_text(only(turns[2].parts)))
+            @test occursin("Also done.", AssistantModule._part_text(only(turns[4].parts)))
+            # The agent saw the second message, so the next prompt holds only the third.
+            _submit_to_agent!(a, "Third")
+            @test connection.prompts[2] == Any[LlmText("Third")]
+        end
+
+        @testset "a message while an agent without steering works waits, and a turn of its own follows" begin
+            release = Ref(false)
+            wait_for_release = (connection, on_event) -> timedwait(() -> release[], 10.0; pollint = 0.01)
+            connection = ScriptedAgentConnection([
+                Any[wait_for_release, LlmTextStart(), LlmTextDelta("One."), LlmTextStop()],
+                Any[LlmTextStart(), LlmTextDelta("Two."), LlmTextStop()]])
+            a = _make_agent_assistant(connection)
+            _submit_to_agent!(a, "First"; wait = false)
+            @test timedwait(() -> length(connection.prompts) == 1, 10.0; pollint = 0.01) === :ok
+            _submit_to_agent!(a, "Second"; wait = false)
+            # The message shows at once below the turn that runs.
+            @test [turn.role for turn in collect(a.conversation.turns)] == [:user, :assistant, :user]
+            release[] = true
+            @test timedwait(() -> length(connection.prompts) == 2 && a.status !== :streaming, 10.0;
+                            pollint = 0.01) === :ok
+            @test connection.prompts[2] == Any[LlmText("Second")]
+            @test [turn.role for turn in collect(a.conversation.turns)] == [:user, :assistant, :user, :assistant]
+            # A stop does not start the next turn: the waiting message goes with the next Return.
+            release[] = false
+            connection = ScriptedAgentConnection([Any[wait_for_release, LlmTextStart(), LlmTextDelta("x"), LlmTextStop()],
+                                                  Any[LlmTextStart(), LlmTextDelta("y"), LlmTextStop()]])
+            a = _make_agent_assistant(connection)
+            _submit_to_agent!(a, "First"; wait = false)
+            @test timedwait(() -> length(connection.prompts) == 1, 10.0; pollint = 0.01) === :ok
+            _submit_to_agent!(a, "Second"; wait = false)
+            evaluate_operation((document = a,), CancelAssistantTurnOperation(a))
+            release[] = true
+            _wait_for_idle(a)
+            sleep(0.2)
+            @test length(connection.prompts) == 1
+            @test last(collect(a.conversation.turns)).role === :user
         end
 
         @testset "a turn that the person cancelled is not sent again" begin
@@ -109,6 +342,36 @@ function test_external_agent_turn()
                         if part.content isa EvaluatorForm)
             @test form.tool_name == "execute_julia_code"
             @test form.source == "2 + 2"
+        end
+
+        @testset "a list or a dictionary in the input of a tool is JSON text" begin
+            todo(content, status) =
+                Dict{String,Any}("content" => content, "status" => status)
+            todos = Any[todo("Read the code", "completed"),
+                        todo("Write the code", "pending")]
+            input = Dict{String,Any}("todos" => todos, "files" => Any["a.jl", 2, nothing],
+                                     "note" => "say \"hi\"")
+            connection = ScriptedAgentConnection([Any[
+                AgentToolCallUpdate("t1"; name = "TodoWrite", status = :completed,
+                                    input = input)]])
+            a = _make_agent_assistant(connection)
+            _submit_to_agent!(a, "Plan")
+            parts = collect(collect(a.conversation.turns)[end].parts)
+            form = only(part.content for part in parts if part.content isa EvaluatorForm)
+            # A short value is one line; a long one is indented over several lines.
+            @test get_flat_string(form.form) == """
+                files: ["a.jl", 2, null]
+                note: say "hi"
+                todos: [
+                  {
+                    "content": "Read the code",
+                    "status": "completed"
+                  },
+                  {
+                    "content": "Write the code",
+                    "status": "pending"
+                  }
+                ]"""
         end
 
         @testset "a reset of the conversation stops the agent" begin
@@ -199,8 +462,11 @@ function test_external_agent_turn()
                 options = make_scripted_agent_options())
             a = _make_agent_assistant(connection)
             bar = make_agent_option_bar(a)
-            commands = collect(bar.elements)[end]
+            # The menu of the commands, before the sign-out, which an agent that
+            # can not sign out does not show.
+            commands, sign_out = collect(bar.elements)[(end - 1):end]
             @test string(commands.action.label) == "Commands"
+            @test string(sign_out.action.label) == "Sign out" && !sign_out.visible
             @test !commands.visible && commands.submenu === nothing
             _submit_to_agent!(a, "Hello")
             @test [command.name for command in a.agent_commands] == ["review", "compact"]
@@ -218,7 +484,8 @@ function test_external_agent_turn()
             connection = ScriptedAgentConnection(Any[]; options = make_scripted_agent_options())
             a = _make_agent_assistant(connection)
             bar = make_agent_option_bar(a)
-            # The three option menus; the menu of the commands is the last item.
+            # The three option menus; the menu of the commands and the sign-out
+            # are the last items.
             items = collect(bar.elements)[1:3]
             label(item) = string(item.action.label)
             @test label(items[1]) == "Start the agent"
@@ -415,6 +682,37 @@ function test_external_agent_turn()
             @test connection.sessions[3].directory == pwd()
         end
 
+        @testset "the document of an evaluation through the MCP server of the editor is the live result" begin
+            tools = ToolSet()
+            made = TextBlock(TextLine(TextString("made")))
+            connection = ScriptedAgentConnection([Any[
+                AgentToolCallUpdate("t1"; name = "mcp__projectured__execute_julia_code", status = :pending,
+                                    input = Dict{String,Any}("code" => "make()")),
+                # The MCP server of the editor keeps the document under the id of the call.
+                (connection, on_event) -> keep_tool_call_value!(tools, "t1", made),
+                AgentToolCallUpdate("t1"; status = :completed, output = "made"),
+                AgentToolCallUpdate("t1"; status = :completed, output = "made"),
+                AgentToolCallUpdate("t2"; name = "mcp__projectured__execute_julia_code", status = :pending,
+                                    input = Dict{String,Any}("code" => "1")),
+                AgentToolCallUpdate("t2"; status = :completed, output = "1")]])
+            a = _make_agent_assistant(connection)
+            a.input.value = "Go"
+            evaluate_operation((document = a, tools = tools), SubmitProseOperation(a))
+            _wait_for_idle(a)
+            live, plain = [part.content for turn in collect(a.conversation.turns) for part in collect(turn.parts)
+                           if part.content isa EvaluatorForm]
+            # The repeated output keeps the live result, and the text stays beside it.
+            @test live.result === made && live.output == "made"
+            @test plain.result isa TextBlock && plain.result !== made
+            @test isempty(tools.call_values)
+            # A save writes a result that its notation can not write as the text of the tool.
+            form = EvaluatorForm(TextBlock(TextLine(TextString("make()"))); result = AgentTurnLiveResult(() -> 1),
+                                 output = "made by the code", tool_name = "execute_julia_code")
+            written = print_pred_text(form)
+            @test occursin("made by the code", written)
+            @test parse_pred_text(written).result isa TextBlock
+        end
+
         @testset "the backend :acp without its package says so" begin
             a = Assistant(; backend = :acp)
             _submit_to_agent!(a, "Hello")
@@ -473,6 +771,12 @@ function test_external_agent_turn()
             @test connection.prompts[end] == [LlmText("Again")]
         end
     end
+end
+
+# A result that the notation of a file can not write, as a live document of a
+# session can be: a document that holds a function.
+@document struct AgentTurnLiveResult
+    run::Any
 end
 
 _make_agent_assistant(connection) =

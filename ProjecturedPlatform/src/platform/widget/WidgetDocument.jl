@@ -54,11 +54,11 @@ and `WidgetAlert` for a message with a title.
     #
     # The bare colour keeps the font of the theme, so a line coloured by
     # severity still follows the window's theme. It wins over `style`.
-    text_style::ImmutableCell{StyleText}
+    text_style::ImmutableCell{Union{StyleText, StyleFont, StyleColor, Nothing}}
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -137,9 +137,9 @@ only read, and `WidgetSpinBox` for a number.
     placeholder::Any
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -225,9 +225,9 @@ a value typed as text.
     validator::Any
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -281,9 +281,9 @@ opens on a click, and `WidgetRadioGroup` for a few choices that stay visible.
     width::Int
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     scroll_position::Point2D     # view state: the offset of the rows of a list that scrolls itself
     vertical_scroll_bar::Any     # :auto, nothing, or the WidgetScrollBar of an owner
@@ -365,9 +365,9 @@ See also `WidgetSwitch`, which is the same choice drawn as a slide, and
     label::Any                  # what the box means, drawn after it, or nothing
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     gestures::Any               # per-instance gesture bindings (see get_instance_gesture_bindings)
     tooltip::Any
@@ -403,8 +403,8 @@ pixels.
 # Example
 
     open_pane!(WidgetButton("Run again";
-                                    action = editor -> run_simulations!(select_simulations!(; config = "TandemQueue")));
-               title = "Runner")
+                            action = editor -> rerun_tasks!(find_task_group("T1"; editor); editor));
+               title = "Run again")
 
 `action` is that command. Pass an `Action` to bind a shared one: the button
 shows its `label`/`icon`, follows its `enabled`, and fires its callback (the
@@ -452,9 +452,9 @@ for one choice among several.
     dialog::Any
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     pressed::Bool
     labels::Any
@@ -518,9 +518,9 @@ A floating tooltip overlay..
     size::Point2D
     content::Any
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -555,9 +555,9 @@ still works.
     menu::Any
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -594,9 +594,9 @@ open it from a `WidgetButton`'s `dialog` field.
     buttons::CellVector
     popup_id::Symbol
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -656,9 +656,9 @@ A menu containing a sequence of `WidgetMenuItem`s..
     elements::CellVector = CellVector()
     orientation::Symbol = :vertical
     visible::Bool = true
-    margin::Inset = nothing
-    border::Inset = nothing
-    padding::Inset = nothing
+    margin::Union{Inset, Nothing} = nothing
+    border::Union{Inset, Nothing} = nothing
+    padding::Union{Inset, Nothing} = nothing
     style::Any = nothing
     tooltip::Any
 end
@@ -707,9 +707,9 @@ records it as an edit of the person.
     operation::Any
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -765,9 +765,9 @@ item writes it.
     gestures::Any
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     pressed::Bool
     tooltip::Any
@@ -819,9 +819,9 @@ See also `WidgetCard`, which frames one thing with a title, and `VerticalLayout`
     child_width::Any
     child_height::Any
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -850,9 +850,9 @@ below the menu bar in a `WidgetShell`.
 @document struct WidgetToolbar <: WidgetDocument
     elements::CellVector = CellVector()
     visible::Bool = true
-    margin::Inset = nothing
-    border::Inset = nothing
-    padding::Inset = nothing
+    margin::Union{Inset, Nothing} = nothing
+    border::Union{Inset, Nothing} = nothing
+    padding::Union{Inset, Nothing} = nothing
     style::Any = nothing
     tooltip::Any
 end
@@ -967,7 +967,7 @@ function make_filter_bar_widget(; text, place, regex, apply, theme = nothing)
     # and the reader owns them after that.
     text_box = WidgetText(text())
     place_box = WidgetText(place())
-    regex_switch = WidgetToggle(".*"; pressed = regex())
+    regex_switch = WidgetToggle(".*"; pressed = regex(), tooltip = "Match the text as a regular expression.")
     # And the press is what says "now". Applying per keystroke would run a
     # filter over the whole history for every letter of a word — the reader
     # would pay for `pack`, `packe` and `packet` to learn about `packet`.
@@ -1019,8 +1019,8 @@ function make_column_chooser_widget(; columns, is_shown, choose, theme = nothing
                                        domain = "widget")
         WidgetCheckbox(is_shown(name); label,
                        gestures = GestureBinding[bind(MouseClickPattern(:left; modifiers = Symbol[])),
-                                                 bind(KeyDownPattern(:space; modifiers = Symbol[])),
-                                                 bind(KeyDownPattern(:return; modifiers = Symbol[]))])
+                                                 bind(KeyPressPattern(' '; modifiers = Symbol[])),
+                                                 bind(KeyPressPattern('\n'; modifiers = Symbol[]))])
     end
     bar = HorizontalLayout(Any[]; gap = _get_bar_item_gap(theme))
     set_cell_computation!(getfield(bar, :children), () -> Any[
@@ -1042,9 +1042,9 @@ A thin bottom band of status text `segments` (each stringified) — Qt's
 @document struct WidgetStatusBar <: WidgetDocument
     elements::CellVector = CellVector()
     visible::Bool = true
-    margin::Inset = nothing
-    border::Inset = nothing
-    padding::Inset = nothing
+    margin::Union{Inset, Nothing} = nothing
+    border::Union{Inset, Nothing} = nothing
+    padding::Union{Inset, Nothing} = nothing
     style::Any = nothing
     tooltip::Any
 end
@@ -1074,16 +1074,16 @@ Top-level window shell..
 """
 @document struct WidgetShell <: WidgetDocument
     content::Any
-    size::Point2D
-    overlay::WidgetTooltip
-    menu_bar::WidgetMenu
-    toolbar::WidgetToolbar
-    context_menu::WidgetMenu
-    status_bar::WidgetStatusBar
+    size::Union{Point2D, Nothing}
+    overlay::Union{WidgetTooltip, Nothing}
+    menu_bar::Union{WidgetMenu, Nothing}
+    toolbar::Union{WidgetToolbar, Nothing}
+    context_menu::Union{WidgetMenu, Nothing}
+    status_bar::Union{WidgetStatusBar, Nothing}
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -1120,8 +1120,7 @@ documents.
 
 # Example
 
-    table = make_result_table(get_simulation_scalar_results(get_project_result_directory()))
-    open_pane!(WidgetTitlePane("Delay", table); title = "Delay")
+    open_pane!(WidgetTitlePane("Delay", WidgetLabel("1.5 s")); title = "Delay")
 
 See also `WidgetCard`, which adds a description and a footer, and `open_pane!`,
 whose `title` names a tab.
@@ -1130,9 +1129,9 @@ whose `title` names a tab.
     title::Any
     content::Any
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -1164,10 +1163,9 @@ two documents in tabs of their own, use `show_layout` and the panes.
 
 # Example
 
-    root = get_project_result_directory()
-    table = make_result_table(get_simulation_scalar_results(root))
-    plot = make_result_plot(get_simulation_vector_results(root))
-    open_pane!(WidgetSplitPane(:horizontal, Any[table, plot]; sizes = [400, 400]); title = "Split")
+    table = WidgetTable(["run", "delay"], [[1, "1.5 s"], [2, "1.7 s"]])
+    note = WidgetLabel("The delay grows with the load.")
+    open_pane!(WidgetSplitPane(:horizontal, Any[table, note]; sizes = [400, 400]); title = "Split")
 
 `active_splitter` and `drag_anchor` are **transient UI state** holding an
 in-progress splitter drag (see `StartSplitterDragOperation`): `active_splitter`
@@ -1187,9 +1185,9 @@ See also `HorizontalLayout`, `VerticalLayout` and `WidgetTabbedPane`.
     elements::CellVector
     sizes::CellVector
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     active_splitter::Int
     drag_anchor::Any
@@ -1298,10 +1296,9 @@ this is for tabs inside a widget.
 
 # Example
 
-    root = get_project_result_directory()
-    table = make_result_table(get_simulation_scalar_results(root))
-    plot = make_result_plot(get_simulation_vector_results(root))
-    open_pane!(WidgetTabbedPane(Any[("Scalars", table), ("Vectors", plot)]); title = "Results")
+    table = WidgetTable(["run", "delay"], [[1, "1.5 s"], [2, "1.7 s"]])
+    note = WidgetLabel("The delay grows with the load.")
+    open_pane!(WidgetTabbedPane(Any[("Table", table), ("Note", note)]); title = "Results")
 
 Each pair is wrapped in a [`WidgetTabPage`](@ref). `closable` draws a close
 button on every tab, `new_tab` draws a new-tab button after the last one, and
@@ -1318,9 +1315,9 @@ children shown at once.
 @document struct WidgetTabbedPane <: WidgetDocument
     selector_element_pairs::CellVector = CellVector()
     visible::Bool = true
-    margin::Inset = nothing
-    border::Inset = nothing
-    padding::Inset = nothing
+    margin::Union{Inset, Nothing} = nothing
+    border::Union{Inset, Nothing} = nothing
+    padding::Union{Inset, Nothing} = nothing
     style::Any = nothing
     tab_scroll::Int = 0
     closable::Bool = false
@@ -1368,7 +1365,9 @@ A viewport a person scrolls over content that is taller or wider than its
 space.
 
 The pane draws a scroll bar on each axis over the content, at the inner edge of
-its border, and the bar takes no space. Each of `vertical_scroll_bar` and
+its border, and the bar takes no space. A bar shows nothing at rest. It shows
+while the pointer is on it or its thumb is dragged, and its thumb shows for a
+second after a scroll. Then the thumb fades out. Each of `vertical_scroll_bar` and
 `horizontal_scroll_bar` is `:auto`, `nothing` or a `WidgetScrollBar`:
 
 - `:auto`: the pane makes the bar from the extents of its content and its view,
@@ -1379,14 +1378,18 @@ its border, and the bar takes no space. Each of `vertical_scroll_bar` and
   shorter than its track, and computes nothing. The maker of the bar sets its
   `value` and `thumb_size`, and turns a write of its `value` into a scroll.
 
+`wheel_run` is view state: the last notch of a run of the wheel, as
+`(time, direction, distance)`, or `nothing`. A fast run of notches scrolls more
+at each notch, and the pane reads the run to know how much.
+
 Use it to show a long table or a long text inside a bounded `size`. With
 `follow_end = true` the pane keeps the end of its content in view as content is
 added, which is what a log or a transcript wants.
 
 # Example
 
-    table = make_result_table(get_simulation_scalar_results(get_project_result_directory()))
-    open_pane!(WidgetScrollPane(table; size = Point2D(600, 300)); title = "Scalars")
+    table = WidgetTable(["run", "delay"], [[n, "1.5 s"] for n in 1:100])
+    open_pane!(WidgetScrollPane(table; size = Point2D(600, 300)); title = "Runs")
 
 With `follow_end=true` the pane sticks to the *bottom* of its content — newly
 appended content (e.g. streaming chat turns) stays in view instead of scrolling
@@ -1405,16 +1408,17 @@ See also `WidgetCard`, whose `height` bounds a body that scrolls.
 """
 @document struct WidgetScrollPane <: WidgetDocument
     content::Any
-    position::Point2D
-    size::Point2D
+    position::Union{Point2D, Nothing}
+    size::Union{Point2D, Nothing}
     scroll_position::Point2D
     follow_end::Bool
+    wheel_run::Any               # view state: the last notch of a run of the wheel, or nothing
     vertical_scroll_bar::Any     # :auto, nothing, or the WidgetScrollBar of a maker
     horizontal_scroll_bar::Any   # :auto, nothing, or the WidgetScrollBar of a maker
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -1431,7 +1435,7 @@ function WidgetScrollPane(content;
     WidgetScrollPane(Cell(content),
                      Cell(position), Cell(size),
                      scroll_position isa AbstractCell ? scroll_position : Cell(scroll_position),
-                     follow_end isa AbstractCell ? follow_end : Cell(follow_end),
+                     follow_end isa AbstractCell ? follow_end : Cell(follow_end), Cell(nothing),
                      Cell(vertical_scroll_bar), Cell(horizontal_scroll_bar),
                      Cell(visible), Cell(margin), Cell(border), Cell(padding),
                      Cell(style), Cell(tooltip), Cell(nothing))
@@ -1455,16 +1459,20 @@ matrix, so content is magnified/panned inside a fixed on-screen box.
 single-field `ReplaceReferencedValueOperation(pane, "transform", M')`: Ctrl+wheel zooms
 about the cursor, a plain wheel pans, and Ctrl+0 resets to the identity. Only the
 translate+scale subset is rendered today; rotation/shear is future work.
+
+`wheel_run` is view state, as on a `WidgetScrollPane`: the last notch of a run of
+the wheel, so a fast run pans more at each notch.
 """
 @document struct WidgetTransformPane <: WidgetDocument
     content::Any
-    position::Point2D
+    position::Union{Point2D, Nothing}
     size::Point2D
     transform::AffineTransform
+    wheel_run::Any               # view state: the last notch of a run of the wheel, or nothing
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -1477,7 +1485,7 @@ function WidgetTransformPane(content;
                             margin=nothing, border=nothing, padding=nothing,
                             style=nothing, tooltip=nothing)
     WidgetTransformPane(Cell(content),
-                        Cell(position), Cell(size), Cell(transform),
+                        Cell(position), Cell(size), Cell(transform), Cell(nothing),
                         Cell(visible), Cell(margin), Cell(border), Cell(padding),
                         Cell(style), Cell(tooltip), Cell(nothing))
 end
@@ -1492,6 +1500,11 @@ set_cell_computation!(w::WidgetTransformPane, f::Function) = (set_cell_computati
 A scroll bar. `orientation` is `:horizontal` or `:vertical`. `value`, from 0
 to 1, is the place of the view in the content, and `thumb_size`, from 0 to 1,
 is the part of the content that the view shows.
+
+The bar shows nothing at rest, so it hides no content. It shows while the
+pointer is on it or its thumb is dragged. Its thumb also shows for a second after
+a scroll, which is a change of `value` that keeps `thumb_size`. Then the thumb
+fades out.
 
 A press on the track moves the value one page toward the pointer, and
 Shift and a press put the middle of the thumb under the pointer. A press on the
@@ -1509,12 +1522,12 @@ view is, as the owner of a list that the widget walks from its head: set its
     value::Float64
     thumb_size::Float64
     thumb_drag::Any      # view state: the drag of the thumb that is on, `(along, value, travel)` at the press, or nothing
-    position::Point2D
-    size::Point2D
+    position::Union{Point2D, Nothing}
+    size::Union{Point2D, Nothing}
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -1602,9 +1615,9 @@ See also `WidgetAlert` for a message with a title, and `WidgetLabel`.
     variant::Symbol
     role::Any
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -1613,6 +1626,65 @@ WidgetBadge(content; position::Point2D=Point2D(0, 0), variant::Symbol=:default, 
             tooltip=nothing) =
     WidgetBadge(Cell(position), _make_shown_cell(content), Cell(variant), Cell(role), Cell(visible),
                Cell(margin), Cell(border), Cell(padding), Cell(style), Cell(tooltip), Cell(nothing))
+
+# ── WidgetIcon ──────────────────────────────────────────────────────────────
+
+"""
+    WidgetIconMark(content; role = nothing)
+
+A mark at a corner of a [`WidgetIcon`](@ref): `content` is a Lucide glyph as a
+`Symbol`, or a count as an `Int`, and `role` its color, one of `:success`,
+`:warning`, `:error`, `:info` and `:accent`, or `nothing` for the color of the
+icon.
+
+Use it to show a fact at a corner of an icon, such as unsaved edits or the count
+of what waits for the person.
+
+# Example
+
+    WidgetIconMark(2; role = :warning)
+
+See also `WidgetIcon`.
+"""
+@document struct WidgetIconMark <: WidgetDocument
+    content::Any
+    role::Any
+end
+
+WidgetIconMark(content; role = nothing) = WidgetIconMark(content, role)
+
+"""
+    WidgetIcon(name; role = nothing, top_left = nothing, top_right = nothing,
+               bottom_left = nothing, bottom_right = nothing)
+
+An icon with its decoration: the Lucide glyph `name`, tinted in `role`, one of
+`:success`, `:warning`, `:error`, `:info` and `:accent`, or `nothing` for the
+color of its place, and a [`WidgetIconMark`](@ref) or `nothing` at each corner.
+A row of a tree, a tab and a toolbar button draw it the same way: each mark is a
+glyph or a count, smaller than the icon, half outside its box, on a disc of the
+color behind it. A plain `Symbol` names an icon with no decoration.
+
+Use it to show the state of a thing on its icon, as the decoration of a document
+says it.
+
+# Example
+
+    WidgetIcon(:file; bottom_right = WidgetIconMark(:dot))
+
+See also `WidgetIconMark` and `make_decoration_icon`.
+"""
+@document struct WidgetIcon <: WidgetDocument
+    name::Any
+    role::Any
+    top_left::Any
+    top_right::Any
+    bottom_left::Any
+    bottom_right::Any
+end
+
+WidgetIcon(name::Symbol; role = nothing, top_left = nothing, top_right = nothing, bottom_left = nothing,
+           bottom_right = nothing) =
+    WidgetIcon(name, role, top_left, top_right, bottom_left, bottom_right)
 
 # ── WidgetSeparator ─────────────────────────────────────────────────────────
 
@@ -1638,9 +1710,9 @@ See also `WidgetCard`, which frames a group instead of dividing two.
     orientation::Symbol
     length::Int
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -1666,7 +1738,7 @@ surface is.
 
 # Example
 
-    table = make_result_table(get_simulation_scalar_results(get_project_result_directory()))
+    table = WidgetTable(["run", "delay"], [[1, "1.5 s"], [2, "1.7 s"]])
     open_pane!(WidgetCard(; title = "Delay", content = table, width = 600); title = "Delay")
 
 `collapsed` is transient view state (like `WidgetScrollPane.scroll_position`): a
@@ -1726,9 +1798,9 @@ folding sections, and `VerticalLayout` to stack cards.
     collapsed::Bool
     variant::Symbol
     collapsible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -1757,6 +1829,45 @@ WidgetCard(; position::Point2D=Point2D(0, 0), title=nothing, description=nothing
                Cell(collapsible), Cell(margin), Cell(border), Cell(padding), Cell(style),
                Cell(tooltip), Cell(nothing))
 
+# ── FindBarView ─────────────────────────────────────────────────────────────
+
+"""
+    FindBarView(; bar, content, overlaid = false)
+
+A content with the bar that finds in it, above the content or over it.
+
+Use it to give a text a find bar or a filter bar. `content` is the document that
+the bar works on, and `bar` is the bar that the caller builds, such as a
+collapsible `WidgetCard` that holds a form of the fields of the content.
+
+The bar has three states, each on its own, and all three are view state, so
+undo keeps no step for them:
+
+- shown or hidden: `visible` of the bar;
+- expanded or collapsed: `collapsed` of the bar, which its chevron changes;
+- above the content or over it: `overlaid` of the view, which a button beside
+  the bar changes.
+
+Ctrl+F shows and expands the bar and puts the caret in it. Escape, with the
+caret in the bar, hides the bar and puts the caret back in the content. The view
+keeps the caret of the side that the caret leaves, so each key puts the caret
+back where it was.
+
+# Example
+
+    text = HighlightedText(text = block, pattern = "dolor")
+    bar = WidgetCard(; title = WidgetLabel("Find"), collapsible = true,
+                     content = FormLayout([(WidgetLabel("Find"), ObjectField(text, "pattern"))]))
+    FindBarView(; bar, content = text)
+
+See also `FindBarViewToWidget`, which draws it.
+"""
+@document struct FindBarView
+    bar::Any
+    content::Any
+    overlaid::Bool = false
+end
+
 # ── WidgetSwitch ────────────────────────────────────────────────────────────
 
 """
@@ -1783,13 +1894,13 @@ See also `WidgetCheckbox` and `WidgetToggleGroup`.
 """
 @document struct WidgetSwitch <: WidgetDocument
     position::Point2D
-    checked::Bool
+    checked::Union{Bool, Document}   # or a document whose value it shows, such as an `ObjectField`
     label::Any           # what the switch means, drawn after it, or nothing
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     duration::Int        # slide length in ms; the projection draws no slide
     anim_from::Float64   # knob fraction [0,1] when a slide began
@@ -1797,7 +1908,7 @@ See also `WidgetCheckbox` and `WidgetToggleGroup`.
     gestures::Any        # per-instance gesture bindings (see get_instance_gesture_bindings)
     tooltip::Any
 end
-WidgetSwitch(; label = nothing, position::Point2D=Point2D(0, 0), checked::Bool=false,
+WidgetSwitch(; label = nothing, position::Point2D=Point2D(0, 0), checked::Union{Bool, Document}=false,
              visible::Bool=true, enabled::Bool=true,
              margin=nothing, border=nothing, padding=nothing, style=nothing,
              duration::Integer=0, gestures=GestureBinding[], tooltip=nothing) =
@@ -1831,9 +1942,9 @@ See also `WidgetProgressRing`, which shows the same value in one line of text,
     value::Union{Nothing, Float64}
     width::Int
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -1846,6 +1957,8 @@ _make_share_cell(value::Function) = Cell(@computation _convert_share(value()))
 _convert_share(value::Nothing) = nothing
 _convert_share(value::Real) = Float64(value)
 
+# @optional: the value stands first, as the content of a label does, and a bar with
+# no value is a state of its own: it moves a quarter of its track.
 WidgetProgressBar(value::Union{Nothing, Real, Cell, Function} = nothing; position::Point2D=Point2D(0, 0),
                   width::Integer=240, visible::Bool=true,
                   margin=nothing, border=nothing, padding=nothing, style=nothing, tooltip=nothing) =
@@ -1860,8 +1973,8 @@ WidgetProgressBar(value::Union{Nothing, Real, Cell, Function} = nothing; positio
 A ring filled clockwise from the top to a share between zero and one, as tall as
 a line of text.
 
-Use it where a bar does not fit: in a cell of a table, beside a label, in a row
-of a list. `value` is a number, a cell that holds one, a function of no
+Use it to show a share where a bar does not fit: in a cell of a table, beside a
+label, in a row of a list. `value` is a number, a cell that holds one, a function of no
 arguments that the ring follows, or `nothing`. While the value is `nothing` the
 share is not known, and a quarter of the ring turns around it once a second. The
 ring takes no width: its diameter is one line of the text of the theme.
@@ -1876,13 +1989,15 @@ See also `WidgetProgressBar`, which shows the same value as a bar.
     position::Point2D
     value::Union{Nothing, Float64}
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
 
+# @optional: the value stands first, as the content of a label does, and a ring with
+# no value is a state of its own.
 WidgetProgressRing(value::Union{Nothing, Real, Cell, Function} = nothing; position::Point2D=Point2D(0, 0),
                    visible::Bool=true, margin=nothing, border=nothing, padding=nothing, style=nothing,
                    tooltip=nothing) =
@@ -1908,13 +2023,13 @@ a share that is only shown.
 """
 @document struct WidgetSlider <: WidgetDocument
     position::Point2D
-    value::Float64
+    value::Union{Float64, Document}   # or a document whose value it shows, such as an `ObjectField`
     width::Int
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     dragging::Bool     # the knob is held: a move keeps writing until release
     press_value::Any   # the value of the knob at the press while it is held, else nothing
@@ -1936,11 +2051,11 @@ a share that is only shown.
     mapping::Any
     tooltip::Any
 end
-WidgetSlider(value::Real; position::Point2D=Point2D(0, 0), width::Integer=240, visible::Bool=true,
+WidgetSlider(value::Union{Real, Document}; position::Point2D=Point2D(0, 0), width::Integer=240, visible::Bool=true,
              enabled::Bool=true, margin=nothing, border=nothing, padding=nothing, style=nothing,
              target=nothing, field::AbstractString="value",
              mapping=nothing, tooltip=nothing) =
-    WidgetSlider(Cell(position), Cell(Float64(value)), Cell(Int(width)), Cell(visible),
+    WidgetSlider(Cell(position), Cell(value isa Real ? Float64(value) : value), Cell(Int(width)), Cell(visible),
                  Cell(enabled), Cell(margin), Cell(border), Cell(padding), Cell(style),
                  Cell(false), Cell(nothing), Cell(target), Cell(String(field)),
                  Cell(mapping), Cell(tooltip), Cell(nothing))
@@ -1986,19 +2101,19 @@ for many choices that open on a click.
 @document struct WidgetRadioGroup <: WidgetDocument
     position::Point2D
     options::CellVector
-    selected::Int
+    selected::Union{Int, Document}   # or a document whose value is an option, such as an `ObjectField`
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
-WidgetRadioGroup(options::Vector; position::Point2D=Point2D(0, 0), selected::Integer=1, visible::Bool=true, enabled::Bool=true,
+WidgetRadioGroup(options::Vector; position::Point2D=Point2D(0, 0), selected::Union{Integer, Document}=1, visible::Bool=true, enabled::Bool=true,
                  margin=nothing, border=nothing, padding=nothing, style=nothing, tooltip=nothing) =
     WidgetRadioGroup(Cell(position), CellVector(Cell[Cell(o) for o in options]),
-                     Cell(Int(selected)), Cell(visible), Cell(enabled),
+                     Cell(selected isa Integer ? Int(selected) : selected), Cell(visible), Cell(enabled),
                      Cell(margin), Cell(border), Cell(padding), Cell(style), Cell(tooltip), Cell(nothing))
 
 # ── WidgetAvatar ────────────────────────────────────────────────────────────
@@ -2013,9 +2128,9 @@ A circular avatar showing initials (image-clipping is future work).
     initials::Any
     size::Int
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -2054,9 +2169,9 @@ line.
     variant::Symbol
     width::Int
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -2079,9 +2194,9 @@ A muted rounded placeholder block for loading states.
     width::Int
     height::Int
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -2109,9 +2224,9 @@ color near the background shows too. A swatch takes no input.
     color::StyleColor
     size::Any
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -2160,16 +2275,16 @@ and so do Return and Space while the toggle has the focus.
 @document struct WidgetToggle <: WidgetDocument
     position::Point2D
     content::Any
-    pressed::Bool
+    pressed::Union{Bool, Document}   # or a document whose value it shows, such as an `ObjectField`
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
-WidgetToggle(content; position::Point2D=Point2D(0, 0), pressed::Bool=false, visible::Bool=true, enabled::Bool=true,
+WidgetToggle(content; position::Point2D=Point2D(0, 0), pressed::Union{Bool, Document}=false, visible::Bool=true, enabled::Bool=true,
              margin=nothing, border=nothing, padding=nothing, style=nothing, tooltip=nothing) =
     WidgetToggle(Cell(position), Cell(content), Cell(pressed), Cell(visible), Cell(enabled),
                 Cell(margin), Cell(border), Cell(padding), Cell(style), Cell(tooltip), Cell(nothing))
@@ -2217,9 +2332,9 @@ for on or off.
     selected::Int
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     values::Any        # what each option means, or nothing = its index
     target::Any        # what a pick writes to, or nothing = this group
@@ -2280,9 +2395,9 @@ visible, and `WidgetList` for a list that stays open.
     width::Int
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -2297,34 +2412,38 @@ WidgetSelect(value; position::Point2D=Point2D(0, 0), options::Vector=Any[], widt
 # ── WidgetOption ──────────────────────────────────────────────────────────────
 
 """
-    WidgetOption(select, value; position, label=string(value), popup_id=:widget_popup, width=0)
+    WidgetOption(select, value; position, label=string(value), operation=nothing,
+                 popup_id=:widget_popup, width=0)
 
 One row of an open `WidgetSelect` dropdown. Holds the target `select` document (an
 identity pointer, so its click writes straight back to that object regardless of
-where it lives in the tree), the `value` to assign, the `label` to render, and the
-`popup_id` of the floating window to dismiss. A left click emits a
-`CompoundOperation` that writes `select.value = value` and closes `popup_id` — the
-window-route close is unpacked by `WindowManagingProjection`, the value write bubbles
-to `evaluate_operation`.
+where it lives in the tree), the `value` to assign, the `label` to render, the
+`operation` that a pick sends, and the `popup_id` of the floating window to
+dismiss. A left click emits a `CompoundOperation` of the `operation`, or else of a
+write `select.value = value`, and of the close of `popup_id` — the window-route
+close is unpacked by `WindowManagingProjection`, the value write bubbles to
+`evaluate_operation`. The select fills `operation` when it opens the popup, so a
+document in its value slot answers the write.
 """
 @document struct WidgetOption <: WidgetDocument
     position::Point2D
     select::Any
     value::Any
     label::Any
+    operation::Any     # what a pick sends, or nothing for a write of `value` on `select`
     popup_id::Symbol
     width::Int
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
 WidgetOption(select, value; position::Point2D=Point2D(0, 0), label=string(value),
-             popup_id::Symbol=:widget_popup, width::Integer=0, visible::Bool=true,
+             operation=nothing, popup_id::Symbol=:widget_popup, width::Integer=0, visible::Bool=true,
              margin=nothing, border=nothing, padding=nothing, style=nothing, tooltip=nothing) =
-    WidgetOption(Cell(position), Cell(select), Cell(value), Cell(label),
+    WidgetOption(Cell(position), Cell(select), Cell(value), Cell(label), Cell(operation),
                  Cell(popup_id), Cell(Int(width)), Cell(visible),
                  Cell(margin), Cell(border), Cell(padding), Cell(style), Cell(tooltip), Cell(nothing))
 
@@ -2355,9 +2474,9 @@ read.
     rows::Int
     visible::Bool
     enabled::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -2397,10 +2516,9 @@ the open one.
 
 # Example
 
-    root = get_project_result_directory()
-    table = make_result_table(get_simulation_scalar_results(root))
-    plot = make_result_plot(get_simulation_vector_results(root))
-    open_pane!(WidgetAccordion(Any[("Scalars", table), ("Vectors", plot)]; expanded = 2, width = 600); title = "Results")
+    table = WidgetTable(["run", "delay"], [[1, "1.5 s"], [2, "1.7 s"]])
+    note = WidgetLabel("The delay grows with the load.")
+    open_pane!(WidgetAccordion(Any[("Table", table), ("Note", note)]; expanded = 2, width = 600); title = "Results")
 
 Each item is wrapped in a [`WidgetAccordionItem`](@ref).
 
@@ -2413,9 +2531,9 @@ section that folds.
     expanded::Int
     width::Int
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     tooltip::Any
 end
@@ -2600,6 +2718,11 @@ the table. An Alt+press selects the part itself.
 - `scroll_position`, `top_row` — view state: the one offset of the scrolled
   parts, and the row at the top of a list of rows, counted from its head. The
   row or the column under the pointer lights from the table's mouse target.
+- `shown` — view state: the rows of a list of rows that the view of the cells
+  shows, counted from the head, as a range such as `21:40`, or `nothing` before
+  the first scroll. The table writes it beside each scroll that changes it, so
+  the owner of the rows knows which rows a person sees, as a tree writes the rows
+  that its view shows.
 - `column_drag` — view state: the drag of the right edge of a header that is
   on, as `(column, x, width)`, the column and the point and the width at the
   press, or `nothing`. A left press within 3 pixels of that edge starts it, and
@@ -2630,8 +2753,8 @@ See also `make_result_table` and `WidgetList` for one column.
 """
 @document struct WidgetTable <: WidgetDocument
     position::Point2D
-    column_headers::CellVector   # of Document (or nothing) — optional top strip
-    row_headers::CellVector      # of Document (or nothing) — optional left strip; a ListNode beside a list of rows
+    column_headers::ListDocument # of Document (or nothing) — optional top strip
+    row_headers::ListDocument    # of Document (or nothing) — optional left strip; a ListNode beside a list of rows
     corner::Any                  # Document or nothing — where the header row and the header column meet
     cells::Any                   # CellVector of rows of cells, or a ListNode of them; a row is a CellVector of Document cells
     cell_order::Symbol           # :row_major (cells[r][c]) or :column_major (cells[c][r])
@@ -2642,12 +2765,13 @@ See also `make_result_table` and `WidgetList` for one column.
     row_policy::Any              # SizePolicy — a body row whose data names none
     cell_policy::Symbol          # :clip | :wrap — the cells of a body column whose data names none
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     scroll_position::Point2D     # view state: the one offset of the parts of a table that scrolls itself
     top_row::Int                 # view state: the row at the top of a list of rows, counted from its head
+    shown::Any                   # view state: the rows of a list of rows in view, counted from its head, or nothing
     column_drag::Any             # view state: the drag of the edge of a column that is on, or nothing
     vertical_scroll_bar::Any     # :auto, nothing, or the WidgetScrollBar of an owner, beside the cells
     horizontal_scroll_bar::Any   # :auto, nothing, or the WidgetScrollBar of an owner, under the cells
@@ -2780,7 +2904,7 @@ function WidgetTable(; position::Point2D=Point2D(0, 0), column_headers::Union{Ve
                 _make_table_rows(rows, body, column_major), _make_table_columns(columns, headers, body, column_major),
                 Cell(Int(border_width)), Cell(column_policy), Cell(row_policy), Cell(cell_policy),
                 Cell(visible), Cell(margin), Cell(border), Cell(padding), Cell(style),
-                Cell(scroll_position), Cell(1), Cell(nothing),
+                Cell(scroll_position), Cell(1), Cell(nothing), Cell(nothing),
                 Cell(vertical_scroll_bar), Cell(horizontal_scroll_bar),
                 Cell(open_cells === nothing ? nothing : collect(Any, open_cells)), Cell(tooltip))
 end
@@ -2845,6 +2969,39 @@ function WidgetTable(headers::Vector, rows::Vector; position::Point2D=Point2D(0,
 end
 
 """
+    WidgetTable(headers::CellVector, cells::CellVector)
+
+A table whose header row follows `headers`, a collection of documents, and whose
+body follows `cells`, a collection of rows, each a `CellVector` of documents. A
+header or a row that comes into a collection or goes out of it, as a computation
+gives them (`CellVector(@computation …)`), comes into the table or goes out of
+it. Every column and every row is its content, and a cell is one line, cut at
+the edge of its column.
+
+Use it for a table that a projection derives from a collection that changes,
+such as the rows that a filter keeps.
+"""
+function WidgetTable(headers::CellVector, cells::CellVector)
+    WidgetTable(Cell(Point2D(0, 0)), headers,
+                CellVector(),                        # no row headers
+                Cell(nothing),                       # no corner
+                cells, Cell(:row_major),
+                Cell(@computation WidgetTableRows(length(cells))),
+                Cell(@computation WidgetTableColumns(length(headers))),
+                Cell(1),                             # border width
+                Cell(Content), Cell(Content),        # every column and row is its content
+                Cell(:clip),                         # a cell is one line, cut at the edge
+                Cell(true),                          # visible
+                Cell(nothing), Cell(nothing), Cell(nothing), Cell(nothing),  # margin, border, padding, style
+                Cell(Point2D(0, 0)),                 # scroll position
+                Cell(1),                             # top row
+                Cell(nothing), Cell(nothing),                       # no rows in view yet, no drag of the edge of a column
+                Cell(:auto), Cell(:auto),            # the bars of the cells
+                Cell(nothing),                       # no owner opens a cell
+                Cell(nothing))                       # no tooltip
+end
+
+"""
     get_widget_table_column_count(table) -> Int or nothing
 
 The count of the columns of `table`: the length of its data of the columns, or
@@ -2894,35 +3051,58 @@ _describe_table_header(header) =
 # ── WidgetTree ──────────────────────────────────────────────────────────────
 
 """
-    WidgetTreeNode(icon, label, children = [])
+    WidgetTreeNode(icon, label, children = []; gestures = GestureBinding[], has_children = nothing,
+                   badges = [], detail = "", tooltip = nothing)
 
 A single node of a [`WidgetTree`](@ref) carrying a dedicated **icon** slot
 distinct from its text **label** (the decoration model used by typical widget
 libraries — Swing `JTree` renderers, Qt's `QTreeView` decoration role). `icon`
-is `Any`: a glyph `String` today, an image document later. `children` is a
-`Vector` of child nodes (each a `WidgetTreeNode` or a leaf `String`), or a
-`CellVector` of them; an empty one marks a leaf, and a leaf has no chevron.
+is a Lucide glyph as a `Symbol`, a [`WidgetIcon`](@ref) with its tint and its
+corner marks, a glyph `String`, or `nothing`. `badges` are `WidgetBadge` pills
+that the row draws after the label, and `detail` is dim text between the label
+and the pills. `tooltip` is the text that a rest of the pointer on the row
+shows, or `nothing`. `children` is a
+`Vector` of child nodes (each a `WidgetTreeNode` or a leaf `String`), a
+`CellVector` of them, or a `ListNode`: a lazy list, whose children count from its
+head. An empty `Vector` or `CellVector` marks a leaf, and a leaf has no chevron.
+A tree that scrolls itself and has an open node with a lazy list of children
+makes only the rows that a walk reaches, so the list can have millions of
+children.
 
 The tree reads `children` only for a row that it draws, to know if the row has
 a chevron, and for an open node, to draw the rows under it. So a `CellVector`
 whose elements are computed one at a time reads nothing for a node that is not
 drawn, and one element for each child row that is drawn.
+
+`has_children` is `nothing`, or a function with no argument that answers whether
+the node has children. When a node gives it, its row draws a chevron from it and
+reads no children while it is closed, so the children of a closed row are not
+read, for example a folder whose entries are not read yet.
 """
 struct WidgetTreeNode
-    icon::Any
+    icon::Any                    # a Symbol, a WidgetIcon, a glyph string, or nothing
     label::Any
-    children::Any                # a Vector, or a CellVector read only when needed
+    children::Any                # a Vector, a CellVector read only when needed, or a
+                                 # ListNode counted from its head
     gestures::Any
+    has_children::Any            # nothing, or a function () -> Bool for the chevron
+    badges::Vector{Any}          # the WidgetBadge pills after the label
+    detail::String               # dim text after the label
+    tooltip::Any                 # the text of a rest of the pointer on the row, or nothing
 end
 # A node is a plain value (not a `Document`), so it has no `selection`; its
 # per-instance `gestures` are fired by `read_bound_gesture` against the enclosing
 # tree's selection. `gestures` defaults empty so existing 2-/3-arg calls are
 # unaffected; pass `gestures=[…]` to give a node its own behavior (e.g. a
 # right-click / Enter binding that opens what the node stands for).
-WidgetTreeNode(icon, label, children; gestures=GestureBinding[]) =
-    WidgetTreeNode(icon, label, children, gestures)
+WidgetTreeNode(icon, label, children, gestures) = WidgetTreeNode(icon, label, children, gestures, nothing)
+WidgetTreeNode(icon, label, children, gestures, has_children) =
+    WidgetTreeNode(icon, label, children, gestures, has_children, Any[], "", nothing)
+WidgetTreeNode(icon, label, children; gestures=GestureBinding[], has_children=nothing, badges=Any[], detail="",
+               tooltip=nothing) =
+    WidgetTreeNode(icon, label, children, gestures, has_children, Any[badges...], String(detail), tooltip)
 WidgetTreeNode(icon, label; gestures=GestureBinding[]) =
-    WidgetTreeNode(icon, label, Any[], gestures)
+    WidgetTreeNode(icon, label, Any[], gestures, nothing)
 
 get_instance_gesture_bindings(node::WidgetTreeNode) = node.gestures
 
@@ -2953,14 +3133,28 @@ A tree that gets a slot on the vertical axis fills it and scrolls its rows
 there, inside its border, as a table does; with no slot it is as tall as its
 open rows. `scroll_position` is the offset of the rows, and `vertical_scroll_bar`
 and `horizontal_scroll_bar` are its bars, as a `WidgetScrollPane` takes them.
+
+`anchor` is view state of a tree that makes its rows as a lazy list: the row at
+the head of the list, which the tree writes when a scroll takes the row at the
+top far from the head, or `nothing` for the first row. The offset counts from
+the head.
+
+`shown` is view state of a tree that scrolls itself: the paths of the rows that
+its view shows, which the tree writes beside each scroll and each toggle. A
+projection that shows documents as the rows of a tree reads that write, as it
+reads a write of `expanded`.
+
+`current` is the node path of the row that has the mark of the current page, or
+`nothing`: an owner computes it, such as a tree of documents beside a navigator,
+whose page is the document of that row.
 """
 @document struct WidgetTree <: WidgetDocument
     position::Point2D
     roots::CellVector
     visible::Bool
-    margin::Inset
-    border::Inset
-    padding::Inset
+    margin::Union{Inset, Nothing}
+    border::Union{Inset, Nothing}
+    padding::Union{Inset, Nothing}
     style::Any
     expanded::Set{Vector{Int}}   # transient: node paths whose children show
     gestures::Any                # per-instance tree-level gesture bindings
@@ -2968,6 +3162,9 @@ and `horizontal_scroll_bar` are its bars, as a `WidgetScrollPane` takes them.
     vertical_scroll_bar::Any     # :auto, nothing, or the WidgetScrollBar of an owner
     horizontal_scroll_bar::Any   # :auto, nothing, or the WidgetScrollBar of an owner
     tooltip::Any
+    anchor::Any = nothing        # view state: the row at the head of a lazy list of rows
+    shown::Set{Vector{Int}} = Set{Vector{Int}}()  # view state: the rows in view
+    current::Any = nothing       # view state: the node path of the row of the current page
 end
 WidgetTree(roots::Vector; position::Point2D=Point2D(0, 0), visible::Bool=true,
            margin=nothing, border=nothing, padding=nothing, style=nothing,
@@ -2977,7 +3174,9 @@ WidgetTree(roots::Vector; position::Point2D=Point2D(0, 0), visible::Bool=true,
     WidgetTree(Cell(position), CellVector(Cell[Cell(_convert_to_tree_node(n)) for n in roots]),
                Cell(visible), Cell(margin), Cell(border), Cell(padding), Cell(style),
                Cell(Set{Vector{Int}}(expanded)), Cell(gestures),
-               Cell(scroll_position), Cell(vertical_scroll_bar), Cell(horizontal_scroll_bar), Cell(tooltip))
+               Cell(scroll_position), Cell(vertical_scroll_bar),
+               Cell(horizontal_scroll_bar), Cell(tooltip), Cell(nothing),
+               Cell(Set{Vector{Int}}()))
 
 # A `(label, children)` tuple becomes a node with no icon, and so do the tuples
 # among its children. Any other node is kept as it is.
@@ -3162,8 +3361,8 @@ with none otherwise.
 
 # Example
 
-    again = Action("Run again"; callback = editor -> run_simulations!(select_simulations!(; config = "TandemQueue")))
-    open_pane!(WidgetButton(again); title = "Runner")
+    again = Action("Run again"; callback = editor -> rerun_tasks!(find_task_group("T1"; editor); editor))
+    open_pane!(WidgetButton(again); title = "Run again")
 
 `shortcut` is a `KeyDownPattern` (build one with [`Shortcut`]); `icon` is the
 name of an icon drawn before the label. A click invokes it through
@@ -3325,6 +3524,10 @@ has_dormant_selection(::WidgetTabPage) = true
 # A split pane's selection names which side had the focus, so the same holds for a
 # nested split when the focus comes back from outside it.
 has_dormant_selection(::WidgetSplitPane) = true
+# A find bar view keeps the caret of the bar while the caret is in the content,
+# and the caret of the content while it is in the bar, so its keys put the caret
+# back where it was.
+has_dormant_selection(::FindBarView) = true
 
 # ── Operation evaluation ───────────────────────────────────────────────────
 
@@ -3367,12 +3570,14 @@ function evaluate_operation(editor, op::ResizeSplitPaneOperation)
     k = op.splitter_index
     sizes[k] == op.new_size_a || (sizes[k] = op.new_size_a)
     sizes[k + 1] == op.new_size_b || (sizes[k + 1] = op.new_size_b)
-    # Pin both dragged slots so the constrained layout honours their new size
-    # exactly instead of redistributing it by weight.
+    # Pin every slot but the last. A pinned slot keeps its size exactly, and the
+    # last slot takes the rest of the total, so the drag is exact, and a later
+    # change of the total, such as a resize of the window, goes to the last slot.
     pinned = split.pinned
     if length(pinned) >= k + 1
-        pinned[k] === true     || (pinned[k] = true)
-        pinned[k + 1] === true || (pinned[k + 1] = true)
+        for i in 1:(length(pinned) - 1)
+            pinned[i] === true || (pinned[i] = true)
+        end
     end
 end
 
@@ -3445,24 +3650,44 @@ FocusModule.is_focusable_document(w::FocusableWidget) = !(getfield(w, :enabled)[
 
 # A widget stores what it says about itself, where every other document computes
 # it: whoever places a widget knows why it is there, and the widget does not. Both
-# fields hold `nothing` until somebody sets one. A `String` is wrapped, because most
-# tooltips are one line and `tooltip = "Run the selected configurations"` is what
-# a caller wants to write.
+# fields hold `nothing` until somebody sets one. A `String` is the text of a
+# `TooltipNote`, because most tooltips are one line and
+# `tooltip = "Run the selected configurations"` is what a caller wants to write;
+# any other document, a note too, says itself. A function with no argument makes
+# the note when the pointer rests, so a part reads its facts only when a person
+# asks, and a fact that changes often costs nothing before that.
 _find_widget_tooltip(widget::WidgetDocument) = _as_tooltip_document(widget.tooltip)
 
 _as_tooltip_document(::Nothing) = nothing
-_as_tooltip_document(text::AbstractString) = PrimitiveString(String(text))
+_as_tooltip_document(text::AbstractString) = isempty(text) ? nothing : TooltipNote(; text = String(text))
+_as_tooltip_document(make::Function) = _as_tooltip_document(make())
 _as_tooltip_document(document) = document
 
-# A toolbar item that shows only a picture still says what it does: with no
-# tooltip of its own, it says the label of its action. An empty label says
-# nothing.
-function _find_widget_tooltip(item::WidgetToolbarItem)
-    item.tooltip === nothing || return _as_tooltip_document(item.tooltip)
-    label = item.action.label
-    label isa AbstractString || return _as_tooltip_document(label)
-    isempty(label) ? nothing : _as_tooltip_document(label)
+# A control of an action says a note: the label of the action is its title, the
+# key of the action its key cap, and the tooltip of the control its text. A
+# control that shows its label says nothing more with no tooltip of its own; a
+# control that shows only a picture says its label and its key all the same.
+function _make_action_note(action::Action, tooltip; shows_label::Bool)
+    tooltip === nothing || tooltip isa AbstractString || return _as_tooltip_document(tooltip)
+    text = tooltip === nothing || isempty(tooltip) ? nothing : String(tooltip)
+    text === nothing && shows_label && return nothing
+    label = action.label
+    title = !(label isa AbstractString) ? label : isempty(label) ? nothing : String(label)
+    keys = action.shortcut === nothing ? Any[] : Any[action.shortcut]
+    title === nothing && text === nothing && isempty(keys) && return nothing
+    TooltipNote(; title, keys, text)
 end
+
+# A toolbar item shows only a picture.
+_find_widget_tooltip(item::WidgetToolbarItem) = _make_action_note(item.action, item.tooltip; shows_label = false)
+
+_find_widget_tooltip(item::WidgetMenuItem) = _make_action_note(item.action, item.tooltip; shows_label = true)
+
+# A button with an empty label shows only its icon.
+_find_widget_tooltip(button::WidgetButton) =
+    _make_action_note(button.action, button.tooltip; shows_label = _has_action_label(button.action))
+
+_has_action_label(action::Action) = !(action.label isa AbstractString && isempty(action.label))
 
 # A widget says it when the pointer rests on it: the dwell is a gesture of every
 # widget, and a command runs it on the selected one.
@@ -3503,8 +3728,13 @@ pred_arguments(shell::WidgetShell) =
                                                   :context_menu, :status_bar))
 
 # A saved window keeps a scroll pane whole: what it holds, its size, and where it
-# was scrolled. A list of the Help menu is a tab of this kind.
-pred_arguments(pane::WidgetScrollPane) = (pane.content,), _get_field_keywords(pane, ())
+# was scrolled, but not the run of the wheel. A list of the Help menu is a tab of
+# this kind.
+pred_arguments(pane::WidgetScrollPane) = (pane.content,), _get_field_keywords(pane, (:wheel_run,))
+
+# A transform pane writes what it holds first, as its constructor takes it, and
+# its other fields, but the run of the wheel.
+pred_arguments(pane::WidgetTransformPane) = (pane.content,), _get_field_keywords(pane, (:wheel_run,))
 
 # The keywords that a file writes for `widget` by default, but for its content,
 # which is written as the first argument, and for the fields `left_out`.

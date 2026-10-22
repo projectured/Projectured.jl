@@ -1,4 +1,5 @@
-# Fragment of `EditorModule` — the loop: `run_frame!`, `run_editor!` and `make_editor`.
+# Fragment of `EditorModule` — the loop: `run_frame!`, `run_measured_frame!`,
+# `run_editor!` and `make_editor`.
 
 # ── Performance logging ───────────────────────────────────────────────
 
@@ -63,13 +64,22 @@ clears that field when the input runs out, and `_log_performance_counters!` read
 to tell a frame that did something from an idle one.
 """
 function run_frame!(editor::Editor)
+    # A frame runs with its editor as the editor of the evaluation, as the loop
+    # does, so a frame that a test or an embedder drives by hand finds its editor
+    # too, such as the insertion of a log tab, which shows the log of this editor.
+    run_with_evaluation_editor(() -> _run_frame_stages!(editor), editor)
+end
+
+function _run_frame_stages!(editor::Editor)
     # Every fault the last frame collected, shown before this one reads
     # anything. It belongs to the frame rather than to the loop above it: a
     # driver that steps frames by hand — a playback, a test — must collect its
     # faults too. It runs first because a write to a log document has to happen
     # outside every computation, and this is the one point in a frame that is.
-    _run_barrier(editor, :report) do
-        report_frame_faults!(editor)
+    _time_frame_stage(editor, :report, nothing) do
+        _run_barrier(editor, :report) do
+            report_frame_faults!(editor)
+        end
     end
     applied = nothing
     # True until a read finds no input: the reads can also end at the bound, at a
@@ -78,7 +88,7 @@ function run_frame!(editor::Editor)
     for _ in 1:MAX_OPERATIONS_PER_FRAME
         # A reader that throws is a reader that declined: the gesture is lost,
         # the frame goes on, and the fault says which reader lost it.
-        has_input = @measure_performance_time :read_time begin
+        has_input = _time_frame_stage(editor, :read, nothing) do
             _run_barrier(editor, :read; fallback = _BARRIER_FAILED) do
                 run_read_stage!(editor)
             end
@@ -88,7 +98,9 @@ function run_frame!(editor::Editor)
             is_input_left = false
             break
         end
-        @measure_performance_time :evaluate_time run_evaluate_stage!(editor)
+        _time_frame_stage(editor, :evaluate, editor.operation) do
+            run_evaluate_stage!(editor)
+        end
         applied = editor.operation
         editor.iomap === nothing && break     # repaint before reading anything else
     end
@@ -96,14 +108,65 @@ function run_frame!(editor::Editor)
     # turn of the loop runs a frame without a wait.
     is_input_left && (editor.wake_pending[] = true)
     editor.operation = applied
-    # Outside the paint, so a part that prints again shows in this frame.
-    editor.is_retry_pending && _retry_marked_barriers!(editor)
-    @measure_performance_time :print_time begin
+    # Outside the paint, so a part that prints again shows in this frame. A retry
+    # prints, so its time counts as print.
+    editor.is_retry_pending &&
+        _time_frame_stage(() -> _retry_marked_barriers!(editor), editor, :print, nothing)
+    _time_frame_stage(editor, :print, nothing) do
         _run_barrier(editor, :print; origin = typeof(editor.projection)) do
             run_print_stage!(editor)
         end
     end
+    # The reads of the frame are done, so the background cells that they found
+    # provisional start their work now, off the loop.
+    start_background_cell_work!(editor)
     _consider_safe_mode!(editor)
+end
+
+"""
+    run_measured_frame!(editor::Editor, wall_time::Float64)
+
+Run one turn of the loop after its wait, and measure it: write the clock of the
+frame, drain the feeds, run the frame with [`run_frame!`](@ref), and record what
+the frame measured with `record_frame_performance!`. `wall_time` is the
+wall-clock time since the loop started, in seconds. [`run_editor!`](@ref) calls
+it once in each turn of its loop. A test calls it to measure the frame that the
+loop runs.
+
+The frame runs in a counter store of its own, so the cell operations of the frame
+count into it. The compile timer of Julia is on while the frame runs, and it
+counts the switches, so a frame inside another measurement turns off only its
+own switch.
+"""
+function run_measured_frame!(editor::Editor, wall_time::Float64)
+    frame_started = time_ns()
+    _reset_frame_stages!(editor)
+    Base.cumulative_compile_timing(true)
+    try
+        run_with_performance_counters() do
+            # A backend whose time throws is recorded, and the frame shows the
+            # wall time.
+            clock_time = _run_barrier(editor, :device; origin = typeof(editor.backend),
+                                      fallback = wall_time) do
+                get_frame_clock_time(editor.backend, wall_time)
+            end
+            set_clock_time!(editor.clock, clock_time)
+            # What was posted or stored from outside this task, applied here so
+            # the frame paints what its feeds just wrote. Each feed drains in a
+            # barrier of its own.
+            drain_feeds!(editor)
+            run_frame!(editor)
+            _run_barrier(editor, :report) do
+                _log_performance_counters!(editor)
+                frame_seconds = (time_ns() - frame_started) / 1e9
+                record_frame_performance!(editor, frame_seconds)
+                _report_slow_frame!(editor, frame_seconds)
+            end
+        end
+    finally
+        Base.cumulative_compile_timing(false)
+    end
+    nothing
 end
 
 """
@@ -141,11 +204,14 @@ that does not wait, because a wake is pending or a deadline is due, yields once
 for the same reason.
 
 `mcp` starts an MCP server alongside the loop, so external clients can drive
-the editor; off by default. Its value is `true` for the server's own defaults,
+the editor; off by default. The server starts on a task of its own, because its
+start waits for the server for up to 10 seconds, and the loop does not wait for it. Its value is `true` for the server's own defaults,
 or a `NamedTuple` of `instructions`, `host` and `port`, and a field that is left
 out takes the server's default.
 
-When the loop ends, it answers the calls that wait in the inbox, runs the stop
+An editor runs its loop once: a second `run_editor!` throws `ArgumentError`,
+because the end of the first quit the backend. When the loop ends, it closes its
+queues, so a later post throws, answers the calls that wait in them, runs the stop
 steps of the editor, stops the server and quits the backend it ran on. Each of these steps runs also when the loop or a
 step before it throws. The first exception goes on to the caller: the exception of
 the loop, or else the first exception of a step.
@@ -154,7 +220,20 @@ starts it strict, and a program that a person starts passes `FaultPolicy()`.
 """
 function run_editor!(editor::Editor; mcp::Union{Bool,NamedTuple}=false,
               fault_policy::FaultPolicy=editor.fault_policy)
+    # The loop runs with its editor as the editor of the evaluation, so an
+    # operation that it applies, and a task that it starts, finds the editor, such
+    # as the insertion of a log tab, which shows the log of this editor.
+    run_with_evaluation_editor(editor) do
+        _run_editor_loop!(editor; mcp, fault_policy)
+    end
+end
+
+function _run_editor_loop!(editor::Editor; mcp::Union{Bool,NamedTuple}, fault_policy::FaultPolicy)
+    editor.has_loop_ended &&
+        throw(ArgumentError("The loop of this editor ran and ended, and its end quit the " *
+                            "backend. Make a new editor with `make_editor`."))
     server = nothing
+    server_start = nothing
     has_quit = false
     try
         # A barrier in the projection reads from the printer context whether it
@@ -164,19 +243,23 @@ function run_editor!(editor::Editor; mcp::Union{Bool,NamedTuple}=false,
             invalidate_projection!(editor)
         editor.fault_policy = fault_policy
         # From here on, a call that another task makes through
-        # `run_on_editor_task!` runs in a frame of this task.
+        # `run_on_editor_task!` runs in a frame of this task, and this task owns
+        # the cells: a write from another task is recorded.
         editor.loop_task = current_task()
+        add_cell_writer!(current_task())
         # The server renders the tool set when it starts, so it starts here:
         # a tool that the caller declares between `make_editor` and this call
         # reaches a client too.
         server = mcp === false ? nothing : _make_mcp_server(editor, mcp)
-        server === nothing || start_agent_server!(server)
+        server === nothing ||
+            (server_start = errormonitor(@async start_agent_server!(server)))
         # An editor that has no IoMap prints once before its first frame, because
         # `run_read_stage!` drops an input that no IoMap can read.
         if editor.iomap === nothing
             _run_barrier(editor, :print; origin = typeof(editor.projection)) do
                 run_print_stage!(editor)
             end
+            start_background_cell_work!(editor)
         end
         # Advance this editor's private animation clock once per frame;
         # subscribers via `get_reactive_clock_time(editor.clock)` re-evaluate
@@ -192,50 +275,30 @@ function run_editor!(editor::Editor; mcp::Union{Bool,NamedTuple}=false,
             # kick. The wait itself ends on input, on a kick, or at the
             # timeout — and a backend with no wait of its own polls in 10 ms
             # slices here, exactly as this loop did when it slept. A frame
-            # that does not wait yields once, because the wait is where the
-            # cooperative tasks of this thread get their turn.
+            # that does not wait sleeps 1 ms, because the wait is where the
+            # cooperative tasks of this thread and their I/O get their turn,
+            # and a task that posts work must not shut out the others.
             timeout = editor.wake_pending[] ? 0.0 : compute_wait_timeout(editor)
             if timeout > 0
                 # Through `invokelatest`, as every call of the backend protocol: a
                 # backend package adds methods, which would invalidate a resolved call.
                 Base.invokelatest(wait_for_input, editor.backend, editor.devices, timeout)
             else
-                yield()
+                sleep(TASK_SHARE)
             end
             # The frame takes ownership of every wake posted before it;
             # a wake that arrives from here on belongs to the next frame.
             Threads.atomic_xchg!(editor.wake_pending, false)
-            # A fresh per-frame counter store, bound for this frame's dynamic extent; the
-            # cell operations below count into it and `_log_performance_counters!` reads
-            # it.
-            frame_started = time_ns()
-            run_with_performance_counters() do
-                wall_time = (frame_started - t_start) / 1e9
-                # A backend whose time throws is recorded, and the frame shows
-                # the wall time.
-                clock_time = _run_barrier(editor, :device;
-                                          origin = typeof(editor.backend),
-                                          fallback = wall_time) do
-                    get_frame_clock_time(editor.backend, wall_time)
-                end
-                set_clock_time!(editor.clock, clock_time)
-                # What was posted or stored from outside this task, applied
-                # here so the frame paints what its feeds just wrote. Each feed
-                # drains in a barrier of its own.
-                drain_feeds!(editor)
-                run_frame!(editor)
-                _run_barrier(editor, :report) do
-                    _log_performance_counters!(editor)
-                    record_frame_performance!(editor, (time_ns() - frame_started) / 1e9)
-                end
-            end
+            run_measured_frame!(editor, (time_ns() - t_start) / 1e9)
         end
     catch e
         e isa QuitEditorException || rethrow()
         has_quit = true
     finally
         editor.loop_task = nothing
-        exception = _end_editor_loop!(editor, server)
+        remove_cell_writer!(current_task())
+        editor.has_loop_ended = true
+        exception = _end_editor_loop!(editor, server, server_start)
         # An exception of the loop goes on, so the exception of a step goes on
         # only after a quit.
         has_quit && exception !== nothing && throw(exception)
@@ -243,12 +306,13 @@ function run_editor!(editor::Editor; mcp::Union{Bool,NamedTuple}=false,
 end
 
 # The steps at the end of the loop. Each step runs also when a step before it
-# throws, and the answer is the first exception of a step, or `nothing`.
-function _end_editor_loop!(editor::Editor, server)
+# throws, and the answer is the first exception of a step, or `nothing`. A server
+# that still starts gets the 10 seconds of its start before it stops.
+function _end_editor_loop!(editor::Editor, server, server_start)
     first_exception = nothing
     for step in (() -> _answer_waiting_calls!(editor),
                  (() -> stop_step(editor) for stop_step in editor.stop_steps)...,
-                 () -> server === nothing || stop_agent_server!(server),
+                 () -> server === nothing || _stop_started_server!(server, server_start),
                  () -> Base.invokelatest(quit_backend!, editor.backend))
         try
             step()
@@ -257,6 +321,11 @@ function _end_editor_loop!(editor::Editor, server)
         end
     end
     first_exception
+end
+
+function _stop_started_server!(server, server_start)
+    server_start === nothing || timedwait(() -> istaskdone(server_start), 10.0)
+    stop_agent_server!(server)
 end
 
 # The server gets the options that the caller gave. An option that is left out,
@@ -276,7 +345,7 @@ end
 """
     make_editor(document::Document, projection; backend::Backend,
                 devices = Device[Display(), Keyboard(), Mouse()], feeds = Feed[],
-                fault_policy = make_strict_fault_policy()) -> Editor
+                fault_policy = make_strict_fault_policy(), clock = Clock()) -> Editor
 
 Start `backend`, open the native windows of `document`, build the `Editor`, and
 print it once, so the editor has its iomap and the window shows the document.
@@ -302,6 +371,10 @@ window never has, and the answer then arrives as a resize that computes the
 whole document again. `devices` defaults to a display, a keyboard and a mouse; a
 backend that drives another channel passes its own set (e.g. `Device[Keyboard()]`).
 
+`clock` is the clock that the editor writes at the start of each frame. A
+document that animates with a clock of its own shows its motion only in an editor
+that has the same clock.
+
 `fault_policy` is strict by default: the editor stops at its first fault, so a
 test that forgets the keyword fails loudly. A program that a person starts passes
 `FaultPolicy()` on purpose, and then the loop survives a fault; the one print
@@ -311,7 +384,8 @@ quit and the error goes on to the caller, also when the quit throws.
 function make_editor(document::Document, projection; backend::Backend,
                      devices::Vector{Device}=_make_default_devices(),
                      feeds::Vector{Feed}=Feed[],
-                     fault_policy::FaultPolicy=make_strict_fault_policy())
+                     fault_policy::FaultPolicy=make_strict_fault_policy(),
+                     clock::Clock=Clock())
     # Through `invokelatest`, as every call of the backend protocol: a
     # backend package adds methods, which would invalidate a resolved call.
     Base.invokelatest(initialize_backend!, backend)
@@ -321,9 +395,13 @@ function make_editor(document::Document, projection; backend::Backend,
         # drawn: the backend opens the windows of the screen inside it.
         Base.invokelatest(open_native_windows!, backend, get_wrapped_document(document))
         editor = Editor(document, projection; backend = backend, devices = devices,
-                        feeds = feeds, fault_policy = fault_policy)
-        _run_barrier(editor, :print; origin = typeof(editor.projection)) do
-            run_print_stage!(editor)
+                        feeds = feeds, fault_policy = fault_policy, clock = clock)
+        # The first print runs as a frame does, with its editor as the editor of the
+        # evaluation, so a value that it reads asks this editor.
+        run_with_evaluation_editor(editor) do
+            _run_barrier(editor, :print; origin = typeof(editor.projection)) do
+                run_print_stage!(editor)
+            end
         end
         return editor
     catch
@@ -331,7 +409,7 @@ function make_editor(document::Document, projection; backend::Backend,
         try
             Base.invokelatest(quit_backend!, backend)
         catch exception
-            is_passthrough_exception(exception) && rethrow()
+            is_fault_exception(exception) || rethrow()
         end
         rethrow()
     end
@@ -349,8 +427,11 @@ the loop — a driver that posts its work, a watcher, a tool it declares — cal
 that `run_editor!(make; wait = false)` calls on the task of the loop.
 
 With `wait = false` the call returns the editor at once, and the editor runs on
-a task of its own: a task pinned to a thread of the default pool that is not the
-thread of the caller, or an `@async` task when the process has no such thread.
+a task of its own, pinned to a thread that is not the thread of the caller: an
+interactive thread when the process has a second one (`julia -t auto,2`), where
+no task of the default pool runs, so a task that the caller starts never holds the
+window; else a thread of the default pool; else an `@async` task. Its code units
+then run on the default pool.
 The task builds the editor too, because a backend such as SDL answers only the
 thread that started it. The loop's task is `editor.loop_task`, from the moment
 the call returns until the loop ends. The loop keeps the world of its start, so a
@@ -407,21 +488,27 @@ function _start_editor_task(make, mcp)
     editor
 end
 
-# A thread of the default pool that is not the thread of the caller, or `nothing`
-# when the process has no such thread.
+# A thread for a loop that the caller does not wait for, not the thread of the
+# caller: an interactive thread first, where no task of the default pool runs, and
+# else a thread of the default pool. `nothing` when the process has neither.
 function _find_editor_thread()
     current = Threads.threadid()
-    candidates = [thread for thread in Threads.threadpooltids(:default) if thread != current]
-    isempty(candidates) ? nothing : last(candidates)
+    for pool in (:interactive, :default)
+        candidates = [thread for thread in Threads.threadpooltids(pool) if thread != current]
+        isempty(candidates) || return last(candidates)
+    end
+    nothing
 end
 
-# Run `f` in a task that never moves from thread `thread`: a sticky task, pinned
-# with the internal call that `Threads.@threads :static` makes.
-function _spawn_pinned(f, thread::Int)
+# A task for `f` that never moves from thread `thread`, not yet scheduled: a sticky
+# task, pinned with the internal call that `Threads.@threads :static` makes.
+function _make_pinned_task(f, thread::Int)
     task = Task(f)
     task.sticky = true
     ccall(:jl_set_task_tid, Cint, (Any, Cint), task, thread - 1) == 1 ||
-        error("The editor task could not be pinned to thread ", thread, ".")
-    schedule(task)
+        error("The task could not be pinned to thread ", thread, ".")
     task
 end
+
+# Run `f` in a task that never moves from thread `thread`.
+_spawn_pinned(f, thread::Int) = schedule(_make_pinned_task(f, thread))

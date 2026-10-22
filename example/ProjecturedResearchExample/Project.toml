@@ -1,0 +1,19 @@
+name = "ProjecturedResearchExample"
+uuid = "bab7c980-c37e-4728-8721-418e90de58f8"
+version = "0.1.0"
+authors = []
+
+[deps]
+ProjecturedKernel = "a3e3499a-684d-4df9-a0d6-de2d1797b1f3"
+ProjecturedKernelExample = "b2967ee9-386e-4698-a92b-2bf5f698f2fd"
+ProjecturedPlatform = "b21cb890-5227-4e91-ae0e-8ab4d844f9f7"
+ProjecturedPlatformExample = "5049da3f-9201-47d6-95d8-24bb99c7096c"
+ProjecturedResearch = "226d5d21-7a82-49ae-88d7-994b1059b66b"
+
+[compat]
+ProjecturedKernel = "0.2.0"
+ProjecturedKernelExample = "0.1.2"
+ProjecturedPlatform = "0.3.0"
+ProjecturedPlatformExample = "0.1.2"
+ProjecturedResearch = "0.1.0"
+julia = "1.12"

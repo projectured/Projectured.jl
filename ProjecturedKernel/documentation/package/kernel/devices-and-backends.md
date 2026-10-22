@@ -45,8 +45,12 @@ are in `event/KeyboardEvent.jl`, and the `Mouse*` events are in
 `get_device_pixel_ratio(display)` is `display.density * display.zoom`: the number
 of device pixels that a backend draws for one logical pixel. Layout and events
 work in logical pixels. The SDL backend keeps the `Display` that
-`configure_devices!` gives it. It sizes its windows, rasterizes its text and
-converts its input coordinates with the ratio of that `Display`. The zoom of an
+`configure_devices!` gives it. It sizes and places its windows, rasterizes its
+text, and converts its input coordinates, the place of each window and the
+global pointer with the ratio of that `Display`. So the `x` and the `y` of a
+`WindowDocument` and the answer of `get_pointer_position` are in logical pixels
+of the screen, and a point in a window plus the place of the window is a point
+on the screen. The zoom of an
 editor is in its `Appearance`, and the `appearance` wrapper copies it into the
 `Display` of the editor, so Ctrl+= and Ctrl+- change the zoom of one editor. The
 web backend sends the `zoom` of its `Display` to the browser, which draws with it.
@@ -59,7 +63,7 @@ Projection readers only see these events, never SDL-specific structs:
 ```julia
 KeyPress('a'; time = t)                           # character input
 KeyDown(:left, ModifierKeys(); time = t)          # arrow key, no modifiers
-KeyDown(:return, ModifierKeys(ctrl=true); time = t) # Ctrl-Enter
+KeyPress('\n', ModifierKeys(ctrl=true); time = t) # Ctrl+Return: Return types '\n'
 MouseClick(:left, 132, 47; time = t)              # left button at pixel (132, 47)
 MouseMove(120, 90; time = t)                      # cursor moved to (120, 90)
 MouseScroll(0, 1, 200, 300; time = t)             # wheel scrolled (dx, dy) at (200, 300)
@@ -83,10 +87,10 @@ Escape is an ordinary `KeyDown(:escape, …)`, not a quit. A backend reports wha
 happened and attaches no meaning, so it must not turn one key into a quit before
 any reader has seen it. A dialog, an insertion and the command palette all bind
 Escape, and a quit the backend issues directly leaves no reader able to stop it.
-The editor loop quits on an unmodified
-Escape that the pipeline did not handle; `run_read_stage!` in
+The editor loop quits only on a `WindowQuit`; an Escape that no reader took does
+not quit it. `run_read_stage!` in
 [editor/ReadEvaluatePrint.jl](../../../source/kernel/editor/ReadEvaluatePrint.jl)
-recognises no other gesture itself.
+recognises no key itself except the Escape that leaves the safe mode.
 
 ## Backends
 
@@ -107,6 +111,9 @@ wake_backend!(::Backend)                             # end a wait, from any task
 get_display_size(::Backend)                          # the usable size in logical pixels
 find_system_colors(::Backend)                        # the colour settings of the system, or nothing
 get_pointer_position(::Backend)                      # the global position of the pointer
+prepare_held_frames!(::Backend, devices, descriptions) # make what held frames draw, before a code unit
+run_held_frame!(::Backend, devices, state)           # one held frame while a code unit runs
+end_held_frames!(::Backend, devices)                 # give the pointer back, free what held frames drew
 quit_backend!(::Backend)                             # release everything
 ```
 
@@ -125,6 +132,17 @@ producer on another task ends the sleep. `timeout_seconds` must be above zero, a
 `Inf` is legal. The defaults in `BackendDefaults.jl` are one 10 ms poll slice and
 a no-op, so a backend that answers neither polls every 10 ms.
 
+A held frame is what the editor runs while a code unit runs on another thread
+and owns the documents. `prepare_held_frames!` makes all that the held frames
+draw before the unit starts, because a held frame makes no text: the unit owns the
+text state of the backend. Each `run_held_frame!` pumps the events of the window
+system, presents the last picture where the window system asks for it, shows the
+busy state of its `HeldFrameState`, keeps the keys and the window events for later,
+and drops the pointer input that starts during the hold. It answers `:none`,
+`:stop`, `:close` or `:quit`. `end_held_frames!` gives the pointer back its shape.
+The defaults prepare nothing, wait one 10 ms slice in each held frame and answer
+`:none`.
+
 There are four backends and a test double:
 
 | Backend | Package | Output | Input |
@@ -133,7 +151,7 @@ There are four backends and a test double:
 | `WebBackend` | `ProjecturedWeb`, opt-in | a canvas in a browser page | the events that the page sends |
 | `ConsoleBackend` | `ProjecturedConsole`, required | a terminal, for the text domain | the bytes of the terminal |
 | `VideoBackend` | `ProjecturedVideo`, opt-in | the frames of a video file | a scripted timeline |
-| `HeadlessBackend` | `ProjecturedKernelExample`, test double | a log of each output | a queue of scripted events |
+| `HeadlessBackend` | `ProjecturedKernelExample`, test double | a log of each output, which it also reads once in paint order | a queue of scripted events |
 
 Each generic has a method of its own in a backend (✓), or the backend uses the
 default of `BackendDefaults.jl`. A generic with no default and no method raises a
@@ -152,6 +170,9 @@ default of `BackendDefaults.jl`. A generic with no default and no method raises 
 | `get_display_size` | `(1280, 800)` | ✓ | default | default | ✓ the video size | default |
 | `find_system_colors` | `nothing` | ✓ gsettings, the portal, the registry, defaults | default | default | default | ✓ the script |
 | `get_pointer_position` | `(-1, -1)` | ✓ | default | default | ✓ the last pointer | default |
+| `prepare_held_frames!` | no-op | default | default | default | default | default |
+| `run_held_frame!` | a sleep of 10 ms, `:none` | default | default | default | default | default |
+| `end_held_frames!` | no-op | default | default | default | default | default |
 | `write_image` | — | ✓ | — | — | — | — |
 | `record_video` | — | — | — | — | ✓ | — |
 | `render_canvas` | — | an empty image | — | — | — | — |
@@ -164,15 +185,20 @@ all of the above with SDL2 + SDL_ttf; [sdl.md](../backend/sdl/sdl.md) is its des
 
 - A font measurement cache shared across all windows.
 - `sdl_to_keydown` maps an SDL keysym and the modifier bits to a `KeyDown`, and
-  `sdl_to_keypress` makes a `KeyPress` from an `SDL_TEXTINPUT` event.
+  `sdl_to_keypress` makes a `KeyPress` from an `SDL_TEXTINPUT` event. SDL gives no
+  text input for Return and Tab, so the backend owes their `KeyPress` of `'\n'`
+  and `'\t'` after the `KeyDown`, at each down and each repeat.
 - Mouse events are mapped inline in `take_from_devices!` (there is no
   `sdl_to_mouse` function) to the `Mouse*` structs.
 - The painter walks a `GraphicsCanvas` (and its nested
   `GraphicsViewport`/`GraphicsImage`/`GraphicsFence` children) and issues
   SDL draw calls. `render_sdl_canvas` is a stub that returns an empty image.
-- `wait_for_input` blocks in `SDL_WaitEventTimeout` with a NULL event
-  pointer — SDL's look-only form, so everything stays queued for `run_read_stage!` —
-  in GC-safe slices with a `yield` between them. `wake_backend!` pushes a
+- `wait_for_input` looks at the queue and removes nothing, so everything
+  stays queued for `run_read_stage!`. A wait of at most 0.1 s looks with
+  `SDL_PollEvent` and a NULL event pointer, and sleeps 1 ms between the looks.
+  A longer wait blocks in `SDL_WaitEventTimeout` with a NULL event pointer, in
+  GC-safe slices with a `yield` between them; see [sdl.md](../backend/sdl/sdl.md).
+  `wake_backend!` pushes a
   user event registered at `initialize_backend!`; `SDL_PushEvent` is SDL's
   documented thread-safe entry, and `_poll_window_input` skips the event
   like any other unknown type.
@@ -185,8 +211,8 @@ renders the **Text domain** straight to a terminal. Crucially it consumes a
 `JsonToSyntax → SyntaxToText` (no graphics step), so `write_to_devices!` receives
 a `TextBlock` rather than a `ScreenDocument`. Highlights:
 
-- `write_to_devices!` flattens the spans to a character stream, preserving each
-  span's `font_color`/`fill_color` as 24-bit ANSI SGR codes (set `ansi=false`
+- `write_to_devices!` flattens the runs to a character stream, preserving each
+  run's `font_color`/`fill_color` as 24-bit ANSI SGR codes (set `ansi=false`
   for plain output). The selection is shown as inverse-video span colors baked
   in by the `SelectionInverting` projection at the end of the console pipeline,
   so the backend itself just emits each span's colors.
@@ -315,7 +341,7 @@ positive `dy`, as SDL does.
 #### Incremental rendering (dirty-rect patches)
 
 Rather than resend a whole window on every change, a reactive **dirty-walk**
-(`_collect_canvas_dirty!` and friends) keyed on the cells' `is_cell_up_to_date` flags
+(`_collect_canvas_dirty!` and friends) keyed on the cells' `is_cell_valid` flags
 computes the smallest rectangle covering everything that changed since the last
 paint, reusing SDL's bounds helpers. Per-window `prev_bounds` unions a unit's old
 and new extent so moved/shrunk content clears its vacated pixels.
@@ -407,7 +433,9 @@ instead.
    so projection code does not need to change. A letter key has the name of its
    lower-case letter, a button that the event layer does not name makes no
    event, and a positive `dy` of a `MouseScroll` is a wheel turn away from the
-   user.
+   user. `dx` and `dy` are whole notches; `precise_dx` and `precise_dy` hold the
+   turn with the fraction that a touchpad gives, or the whole notches when the
+   source has no fraction.
 5. Draw each glyph where a `TextMeasure` places it, so the ink lands where the
    layout put it.
 
@@ -605,6 +633,7 @@ The layer lives in [source/kernel/backend/](../../../source/kernel/backend/):
 ```
 BackendModule.jl    (BackendModule)         — the module: its docstring, exports, and fragments
 BackendInterface.jl (BackendModule)         — Backend abstract + batch generics
+HeldFrameState.jl   (BackendModule)         — what one held frame shows while a code unit runs
 BackendDefaults.jl  (BackendModule)         — the fallback behaviours the contract supplies itself
 ```
 
@@ -613,8 +642,10 @@ BackendDefaults.jl  (BackendModule)         — the fallback behaviours the cont
 Declares `Backend <: Any` and the backend generics `initialize_backend!`,
 `quit_backend!`, `write_to_devices!`, `open_native_windows!`, `take_from_devices!`,
 `wait_for_input`, `wake_backend!`, `get_pointer_position`, `get_display_size`,
-`find_system_colors`, `configure_devices!`, `write_image`, `record_video`, `render_canvas` and
-`decode_image`. A concrete backend lives in a package above the kernel, subtypes
+`find_system_colors`, `configure_devices!`, `prepare_held_frames!`,
+`run_held_frame!`, `end_held_frames!`, `write_image`, `record_video`,
+`render_canvas` and `decode_image`, and the plain `HeldFrameState` that a held
+frame shows. A concrete backend lives in a package above the kernel, subtypes
 `Backend` and adds methods for its own `::MyBackend` type (see the tables in
 [Backends](#backends)). A backend is constructed by
 naming its type directly (`SdlBackend()`, `ConsoleBackend()`). Code that must
@@ -633,7 +664,9 @@ capabilities a backend can lack: `get_pointer_position` answers `(-1, -1)`,
 `configure_devices!` is a no-op that
 leaves the devices at their default properties, `open_native_windows!` is a
 no-op for a backend that has no native windows to open, `wait_for_input` sleeps
-for at most 10 ms, and `wake_backend!` is a no-op. Each is a legal answer rather
+for at most 10 ms, `wake_backend!` is a no-op, `prepare_held_frames!` and
+`end_held_frames!` are no-ops, and `run_held_frame!` sleeps for 10 ms and answers
+`:none`. Each is a legal answer rather
 than a missing implementation. The batch generics deliberately have no
 such fallback: an unimplemented `write_to_devices!` or `write_image` must raise a
 `MethodError` rather than fabricate a result.
@@ -649,6 +682,20 @@ The dependency-free in-memory `HeadlessBackend` — which logs every
 PAR-NO-TEST-DOUBLES-IN-MAIN it lives in `ProjecturedKernelExample`, not here, so
 no double is reachable from a production build; the kernel editor tests import it
 from there to drive the loop without any real backend.
+
+`write_to_devices!` stores the document in `rendered`. Then it reads each part of
+the document once, in paint order, as a real backend does (`_paint_headless!` in
+[BackendHeadless.jl](../../../example/kernel/BackendHeadless.jl)). It follows the
+fields `windows`, `content`, `canvas`, `elements`, `children` and `items` of a
+part, and the elements of a vector. It reads a cell. It skips a part whose read
+throws a fault.
+
+A lazy list is a chain of links with the fields `value` and `next`. The paint
+reads the links that a computation made already, and at most 200 new links in one
+paint (`_FRESH_LINKS_PER_PAINT`).
+
+A cell that a part shows computes in the frame, with the editor of the frame. So a
+background cell records its demand as it does with a real backend.
 
 ### Downward edges
 
@@ -727,8 +774,8 @@ Write it in the pattern slot of the rule form that already exists:
 
 ```julia
 @gestures JsonObject begin
-    KeyDown(:tab) => "Move from key to value" => move_to_field(doc; from = :key, to = :value)
-    nothing       => "Move from value to key" => move_to_field(doc; from = :value, to = :key)
+    KeyPress('\t') => "Move from key to value" => move_to_field(doc; from = :key, to = :value)
+    nothing         => "Move from value to key" => move_to_field(doc; from = :value, to = :key)
 end
 ```
 

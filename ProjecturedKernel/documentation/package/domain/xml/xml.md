@@ -64,6 +64,10 @@ default styles for `nothing`; the insertion and the empty placeholder take
 `Appearance` of the editor, so the view follows its scales, and the appearance
 tab shows a section for `XmlTheme`.
 
+### The tooltip of a part
+
+An XML file says what the pointer is on: the path of the element, as `/root/a[1]/b`, the namespace of its prefix from the `xmlns` of the elements on the path, and its attributes and children; a text or an attribute says the element that holds it ([tooltip.md](../../platform/tooltip/tooltip.md)).
+
 ## How it fits
 
 `ProjecturedXML` depends on the kernel and the platform. No other domain package depends on it. Its `__init__` registers the natural row with the rung `:syntax`, the format `:xml`, the extension `.xml` and the parser `parse_xml`, and it registers `XmlFile` for `.xml`.
@@ -110,7 +114,7 @@ The paths use `[i]` for the i-th item, from 1, and `{k}` for the caret at bounda
 
 ## Limits
 
-- An empty text, tag, attribute name or attribute value shows no hint. JSON and YAML show one with `make_hinted_text`. The four hints "enter xml text", "enter xml element name", "enter xml attribute name" and "enter xml attribute value" are phase 5 of [plan/pending/xml-to-syntax-lisp-parity.md](../../../../plan/pending/xml-to-syntax-lisp-parity.md).
+- An empty text, tag, attribute name or attribute value shows no hint. JSON and YAML show one with `make_hinted_text`. The four hints "enter xml text", "enter xml element name", "enter xml attribute name" and "enter xml attribute value" are phase 5 of [plan/pending/xml-to-syntax-reference-parity.md](../../../../plan/pending/xml-to-syntax-reference-parity.md).
 - No projection reads `collapsed`. `XmlToSyntax` does not give it to the output, and `SyntaxConcatenation` has no `collapsed` field. [plan/pending/collapse-expand-syntax-nodes.md](../../../../plan/pending/collapse-expand-syntax-nodes.md) holds the open step.
 - An element with no children prints as `<tag></tag>`, never as `<tag/>`.
 - The parser raises an error on a CDATA section.

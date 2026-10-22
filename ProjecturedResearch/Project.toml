@@ -1,0 +1,30 @@
+name = "ProjecturedResearch"
+uuid = "226d5d21-7a82-49ae-88d7-994b1059b66b"
+version = "0.1.0"
+authors = []
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
+ProjecturedFormula = "5b0a9501-da97-468b-b7ab-96b2aab72c39"
+ProjecturedGraph = "cfb0314b-b1fd-4c94-91d2-2de69579dcb1"
+ProjecturedKernel = "a3e3499a-684d-4df9-a0d6-de2d1797b1f3"
+ProjecturedMarkdown = "0d968d4c-e8d6-48b2-bf35-e636991e1b44"
+ProjecturedMath = "80f7b254-0441-42e3-ab4d-62a480615fad"
+ProjecturedPlatform = "b21cb890-5227-4e91-ae0e-8ab4d844f9f7"
+
+[compat]
+PrecompileTools = "1.3.4"
+ProjecturedFormula = "0.2.0"
+ProjecturedGraph = "0.1.2"
+ProjecturedKernel = "0.2.0"
+ProjecturedMarkdown = "0.1.2"
+ProjecturedMath = "0.1.2"
+ProjecturedPlatform = "0.3.0"
+julia = "1.12"
+
+[auto-integration]
+default = "auto"
+
+    [auto-integration.triggers]
+    Projectured = "92922de3-b970-4d9a-8b2a-9d6f361397b5"

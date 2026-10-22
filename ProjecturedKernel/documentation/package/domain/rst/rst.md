@@ -14,6 +14,8 @@ The documents are in three groups:
 
 As in Markdown, the domain does not use `@domain`. It declares `RstDocument` by hand, `RstInsertion` has a `value::Any` field, and no `@gestures` table exists. A text edit of a field goes through the shared splice.
 
+Each list declares the type of its elements, by the same rules as Markdown, and a write of another type fails at the write. A run of blocks declares `Document`, so it holds a part of any domain: the `elements` of the root, a section, a list item, a definition, a field, a block quote, a footnote, a table cell, an admonition and a directive, and the caption of a figure. A run of inlines declares `RstDocument`: the `content` of a paragraph, an emphasis and a strong, the `title` of a section and the `term` of a definition. The structural places are narrow: the items of a list, the fields of a field list, the rows of a table and the cells of a row, the lines of a line block, the entries of a table of contents, and the options of a directive. Each of them also admits `RstInsertion`, the intermediate state of an edit.
+
 ### Sections nest, the source does not
 
 RST writes a section as a title line under an adornment line, and the adornment character alone sets the depth. No character has a fixed meaning: the order in which a file first uses a character sets its depth in that file.
@@ -51,11 +53,11 @@ A table maps the role name to the colour of its chip, and an unknown name gets a
 
 Every compound of this domain has `indentation = 0` and writes the indent into its own `open` and `sep` text. The current column travels as an ambient `:rst_indent` in the printer context. A container that owns an indented body pushes a deeper indent, and every rule that writes a newline puts the ambient after it.
 
-The `indentation` field of a compound can not do this. It writes a newline before the first child too, and it always costs one indent level of the pipeline, so the items of a list would leave their marker column. `@projection_template` builds a printer from `(prj, doc)` alone and has no access to the context. So two macros of `source/domain/rst/RstToSyntax.jl`, `@rst_flat` and `@rst_indented`, call `print_template_document`, the entry point of the template macro, and give the builder the ambient column as well. A rule keeps its template body, and the reader still comes from the template.
+The `indentation` field of a compound can not do this. It indents by whole levels of the pipeline, so the items of a list would leave their marker column. `@projection_template` builds a printer from `(prj, doc)` alone and has no access to the context. So two macros of `source/domain/rst/RstToSyntax.jl`, `@rst_flat` and `@rst_indented`, call `print_template_document`, the entry point of the template macro, and give the builder the ambient column as well. A rule keeps its template body, and the reader still comes from the template.
 
 ### Seven opaque bodies
 
-The body of a code block, a literal include, a literal block, a math block, a raw block, a comment and a grid table is text of more than one line, indented under its marker. A `bound` leaf maps a splice back by offset, and an indent written into the text would move every offset after the first line. So these seven bodies print through a computed `TextString`. They are correct on the page and in a saved file, but you can not edit them in the source view. Every other field is `bound`.
+The body of a code block, a literal include, a literal block, a math block, a raw block, a comment and a grid table is text of more than one line, indented under its marker. A `bound` leaf maps a splice back by offset, and an indent written into the text would move every offset after the first line. So these seven bodies print through `make_text_block` with a function, as lines whose text holds the indent. They are correct on the page and in a saved file, but you can not edit them in the source view. Every other field is `bound`.
 
 ### The page as a stack of blocks
 

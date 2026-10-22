@@ -16,7 +16,7 @@ function test_native_window()
     width, height = get_display_size(backend)
     window = WindowDocument(; id = :native_window_test, title = "native_window_test",
                               x = 100, y = 100, width = width, height = height,
-                              content = "content")
+                              content = PrimitiveString("content"))
     screen = ScreenDocument([window])
 
     @test open_native_windows!(backend, screen) === nothing
@@ -64,7 +64,7 @@ end
     for style in (:default, :tooltip, :floating, :popup)
         held = WindowDocument(; id = :held_window_test, title = "held_window_test",
                                 x = 100, y = 100, width = 200, height = 100,
-                                style = style, content = "content")
+                                style = style, content = PrimitiveString("content"))
         resource = SDL._open_native_window!(backend, held; hidden = true)
         @test !SDL._is_native_window_shown(resource)
         # Painted, then shown. The paint that follows asks for the whole window,
@@ -85,6 +85,43 @@ end
     write_to_devices!(backend, Device[Display()], screen)
     resource = backend.windows[:painted_window_test]
     @test SDL._is_native_window_shown(resource)
+
+    quit_backend!(backend)
+
+end
+
+@testset "a tooltip or a popup window never takes the key focus" begin
+    SDL = ProjecturedSDL.SdlModule
+
+    # A tooltip and a popup refuse the key focus: their keys come through the
+    # window under them.
+    @test !SDL._can_take_key_focus(:tooltip)
+    @test !SDL._can_take_key_focus(:popup)
+    @test all(SDL._can_take_key_focus, (:default, :floating))
+
+    backend = SdlBackend()
+    initialize_backend!(backend)
+    tooltip = WindowDocument(; id = :key_focus_test, title = "key_focus_test",
+                               x = 100, y = 100, width = 200, height = 100,
+                               style = :tooltip, content = PrimitiveString("content"))
+    resource = SDL._open_native_window!(backend, tooltip; hidden = true)
+
+    # The backend reads the window struct of SDL by offset. On X11 the subsystem
+    # is X11, and the first handle, the `Display`, is set.
+    found = SDL._find_native_window_handle(resource.win)
+    if unsafe_string(SDL.SDL_GetCurrentVideoDriver()) == "x11"
+        @test found !== nothing
+        @test found.subsystem == SDL._SDL_SYSWM_X11
+        @test found.handle != C_NULL
+    end
+
+    # Only a window of Cocoa gets the mark, and only there does the backend answer
+    # the questions of AppKit. The tooltip shows as before.
+    @test SDL._refuse_key_focus!(resource.win) === nothing
+    @test isempty(SDL._REPLACED_KEY_WINDOW_METHODS) == !Sys.isapple()
+    SDL._show_painted_window!(backend, resource, tooltip)
+    @test SDL._is_native_window_shown(resource)
+    SDL._close_native_window!(resource)
 
     quit_backend!(backend)
 
@@ -253,7 +290,7 @@ end
         window = WindowDocument(; id = :fit_test, title = "fit_test", x = 0, y = 0,
                                   width = maximum_size[1], height = maximum_size[2],
                                   minimum_size = minimum_size, maximum_size = maximum_size,
-                                  content = "content")
+                                  content = PrimitiveString("content"))
         canvas = GraphicsCanvas(CellVector(Any[]), layout_none)
         canvas.w = Int32(canvas_width)
         canvas.h = Int32(canvas_height)
@@ -268,7 +305,7 @@ end
     @test fit(10, 5; minimum_size = (120, 32), maximum_size = (560, 400)) == (120, 32)
     # A window with no maximum keeps the size it was asked for.
     fixed = WindowDocument(; id = :fixed_test, title = "fixed_test", x = 0, y = 0,
-                             width = 420, height = 120, content = "content")
+                             width = 420, height = 120, content = PrimitiveString("content"))
     canvas = GraphicsCanvas(CellVector(Any[]), layout_none)
     canvas.w = Int32(150)
     canvas.h = Int32(40)
@@ -278,7 +315,7 @@ end
 
 @testset "such a window stays on the screen, and beside the pointer" begin
     place = ProjecturedSDL.SdlModule.compute_window_place
-    area = (area_width = 1000, area_height = 800)
+    area = (areas = [(0, 0, 1000, 800)],)
 
     # Inside the work area, wherever it was asked for.
     @test place(100, 100, 200, 80; area..., pointer = nothing) == (100, 100)
@@ -289,6 +326,39 @@ end
     # right when there is no room on the left.
     @test place(900, 100, 200, 80; area..., pointer = (850, 120)) == (642, 100)
     @test place(0, 100, 200, 80; area..., pointer = (40, 120)) == (48, 100)
+end
+
+@testset "a window on a monitor above, left of or right of the main one stays there" begin
+    SDL = ProjecturedSDL.SdlModule
+    place = SDL.compute_window_place
+    main, above = (0, 0, 1920, 1080), (0, -1080, 1920, 1080)
+    left, right = (-1280, 0, 1280, 1024), (1920, 0, 2560, 1440)
+    areas = [main, above, left, right]
+
+    # A tooltip beside the pointer on the monitor above stays on that monitor.
+    @test place(885, -950, 300, 60; areas, pointer = (869, -974)) == (885, -950)
+    # Each monitor keeps a window inside its own area: the bottom of the one above,
+    # the one on the left, and the right edge of the one on the right.
+    @test place(100, -50, 200, 80; areas, pointer = nothing) == (100, -80)
+    @test place(-300, 100, 200, 80; areas, pointer = nothing) == (-300, 100)
+    @test place(4400, 100, 200, 80; areas, pointer = nothing) == (4280, 100)
+    # A window beside a pointer at the left edge of the right monitor goes to the
+    # right of the pointer, and stays on that monitor.
+    @test place(1930, 100, 200, 80; areas, pointer = (1940, 120)) == (1948, 100)
+    # A point on no display takes the main one.
+    @test place(5000, 2000, 200, 80; areas, pointer = nothing) == (1720, 1000)
+
+    # Only the place (-1, -1) lets the backend choose; SDL centers that window and
+    # gets every other place as it is, negative too.
+    window(x, y) = WindowDocument(; id = :place_test, title = "place_test", x = x, y = y,
+                                    width = 200, height = 100, content = PrimitiveString("content"))
+    @test is_automatic_window_place(window(-1, -1))
+    @test !is_automatic_window_place(window(885, -950))
+    @test !is_automatic_window_place(window(-1, 100))
+    @test SDL._get_native_window_place(window(-1, -1), 1.0) ==
+          (SDL.SDL_WINDOWPOS_CENTERED, SDL.SDL_WINDOWPOS_CENTERED)
+    @test SDL._get_native_window_place(window(885, -950), 1.0) == (Int32(885), Int32(-950))
+    @test SDL._get_native_window_place(window(-1, 100), 2.0) == (Int32(-2), Int32(200))
 end
 
 @testset "a tooltip goes beside the pointer, and a popup stays under it" begin
@@ -302,7 +372,7 @@ end
     x, y = clamp(px - 20, 0, area_width - 200), clamp(py - 20, 0, area_height - 100)
     held(style) = WindowDocument(; id = :place_test, title = "place_test", x = x, y = y,
                                    width = 200, height = 100, maximum_size = (200, 100),
-                                   style = style, content = "content")
+                                   style = style, content = PrimitiveString("content"))
     if x <= px < x + 200 && y <= py < y + 100
         popup = SDL._place_fitted_window!(backend, held(:popup))
         @test (popup.x, popup.y) == (x, y)
@@ -315,27 +385,110 @@ end
 @testset "a window takes the place that the window manager gives it" begin
     # A window manager can put a window elsewhere than asked, and a person can move
     # it. The document takes that place, so a popup opens at the window; a place
-    # the document asks for itself still moves the window.
+    # the document asks for itself still moves the window. The place of the document
+    # is in logical pixels and the place of SDL in window units, which are device
+    # pixels on X11, at each zoom.
     LibSDL2 = ProjecturedSDL.SdlModule.SimpleDirectMediaLayer.LibSDL2
+    for zoom in (1.0, 2.0)
+        backend = SdlBackend()
+        initialize_backend!(backend)
+        backend.display.zoom = zoom
+        ratio = get_device_pixel_ratio(backend.display)
+        canvas = GraphicsCanvas(CellVector(Any[GraphicsRect(10, 10, 60, 20)]), layout_none)
+        window = WindowDocument(; id = :moved_window_test, title = "moved_window_test",
+                                  x = 100, y = 100, width = 200, height = 100, content = canvas)
+        screen = ScreenDocument([window])
+        write_to_devices!(backend, Device[Display()], screen)
+        resource = backend.windows[:moved_window_test]
+        placed() = (x = Ref{Cint}(0); y = Ref{Cint}(0);
+                    LibSDL2.SDL_GetWindowPosition(resource.win, x, y); (Int(x[]), Int(y[])))
+        # The window manager moves it.
+        LibSDL2.SDL_SetWindowPosition(resource.win, Int32(600), Int32(400))
+        moved = placed()
+        write_to_devices!(backend, Device[Display()], screen)
+        @test (window.x, window.y) == (round(Int, moved[1] / ratio), round(Int, moved[2] / ratio))
+        # The document asks for a place of its own, and the window goes there.
+        window.x = window.x + 50
+        write_to_devices!(backend, Device[Display()], screen)
+        @test placed()[1] == round(Int, window.x * ratio)
+        quit_backend!(backend)
+    end
+end
+
+@testset "a window whose units are points converts with the window unit ratio" begin
+    # On macOS SDL counts a window in points, and a Retina screen has two device
+    # pixels in each point. A window on X11 measures one pixel in each unit, so the
+    # test gives it two, as a window on a Retina screen measures, at the density 2
+    # that such a window finds. A logical pixel is then one window unit. With one
+    # pixel in each unit, as on X11 at a density of 2, it is two window units.
+    SDL = ProjecturedSDL.SdlModule
+    LibSDL2 = SDL.SimpleDirectMediaLayer.LibSDL2
+    for (pixels_per_window_unit, unit_ratio) in ((2.0, 1.0), (1.0, 2.0))
+        backend = SdlBackend()
+        initialize_backend!(backend)
+        canvas = GraphicsCanvas(CellVector(Any[GraphicsRect(10, 10, 60, 20)]), layout_none)
+        window = WindowDocument(; id = :unit_window_test, title = "unit_window_test",
+                                  x = 100, y = 100, width = 160, height = 80, content = canvas)
+        screen = ScreenDocument([window])
+        write_to_devices!(backend, Device[Display()], screen)
+        resource = backend.windows[:unit_window_test]
+        resource.pixels_per_window_unit = pixels_per_window_unit
+        backend.display.density = 2.0
+        @test SDL._get_window_unit_ratio(backend, :unit_window_test) == unit_ratio
+        # A new size of the document reaches SDL in window units, and the size of
+        # SDL reads back as the size of the document.
+        window.width, window.height = 200, 100
+        write_to_devices!(backend, Device[Display()], screen)
+        width, height = Ref{Cint}(0), Ref{Cint}(0)
+        LibSDL2.SDL_GetWindowSize(resource.win, width, height)
+        @test (Int(width[]), Int(height[])) ==
+              (round(Int, 200 * unit_ratio), round(Int, 100 * unit_ratio))
+        @test SDL._native_window_size(resource) == (200, 100)
+        # A press at a place in window units arrives at that place over the ratio.
+        _push_sdl_event!(_SDL.SDL_MouseButtonEvent(_SDL_MOUSEBUTTONDOWN, UInt32(0),
+                                                   resource.sdl_id, UInt32(0),
+                                                   _SDL_BUTTON_LEFT, UInt8(1), UInt8(1),
+                                                   UInt8(0), Int32(120), Int32(40)))
+        pressed = nothing
+        for _ in 1:50
+            input = take_from_devices!(backend, Device[])
+            input === nothing && break
+            input isa Tuple && (input = input[1])
+            input isa WindowInput && input.event isa MouseDown && (pressed = input.event)
+        end
+        @test pressed isa MouseDown
+        pressed isa MouseDown &&
+            @test (pressed.x, pressed.y) == (round(Int, 120 / unit_ratio), round(Int, 40 / unit_ratio))
+        quit_backend!(backend)
+    end
+end
+
+@testset "a window made in the units of another screen takes its size in its own" begin
+    # A new window is made in the units of the last window. Here the last window
+    # was on a Retina screen, with two pixels in each unit, and the new window on
+    # X11 measures one, so at the density 2 it takes its size again: 200 logical
+    # pixels are 200 units in the units of the last window and 400 in its own.
+    SDL = ProjecturedSDL.SdlModule
+    LibSDL2 = SDL.SimpleDirectMediaLayer.LibSDL2
+    # The work area that the backend reads first is in the units of that window.
+    SDL._LAST_PIXELS_PER_WINDOW_UNIT[] = 2.0
     backend = SdlBackend()
     initialize_backend!(backend)
-    canvas = GraphicsCanvas(CellVector(Any[GraphicsRect(10, 10, 60, 20)]), layout_none)
-    window = WindowDocument(; id = :moved_window_test, title = "moved_window_test",
-                              x = 100, y = 100, width = 200, height = 100, content = canvas)
-    screen = ScreenDocument([window])
-    write_to_devices!(backend, Device[Display()], screen)
-    resource = backend.windows[:moved_window_test]
-    placed() = (x = Ref{Cint}(0); y = Ref{Cint}(0);
-                LibSDL2.SDL_GetWindowPosition(resource.win, x, y); (Int(x[]), Int(y[])))
-    # The window manager moves it.
-    LibSDL2.SDL_SetWindowPosition(resource.win, Int32(300), Int32(200))
-    moved = placed()
-    write_to_devices!(backend, Device[Display()], screen)
-    @test (window.x, window.y) == moved
-    # The document asks for a place of its own, and the window goes there.
-    window.x = moved[1] + 50
-    write_to_devices!(backend, Device[Display()], screen)
-    @test placed()[1] == window.x
+    backend.display.density = 2.0
+    window = WindowDocument(; id = :other_units_test, title = "other_units_test",
+                              x = 100, y = 100, width = 200, height = 100,
+                              content = GraphicsCanvas(CellVector(Any[GraphicsRect(10, 10, 60, 20)]),
+                                                       layout_none))
+    write_to_devices!(backend, Device[Display()], ScreenDocument([window]))
+    resource = backend.windows[:other_units_test]
+    @test SDL._LAST_PIXELS_PER_WINDOW_UNIT[] == resource.pixels_per_window_unit
+    unit_ratio = SDL._get_window_unit_ratio(resource, 2.0)
+    width, height = Ref{Cint}(0), Ref{Cint}(0)
+    LibSDL2.SDL_GetWindowSize(resource.win, width, height)
+    @test (Int(width[]), Int(height[])) == (round(Int, 200 * unit_ratio), round(Int, 100 * unit_ratio))
+    @test SDL._native_window_size(resource) == (200, 100)
+    # The work area follows the units of the new window.
+    @test (backend.display.width, backend.display.height) == SDL.get_sdl_display_size()
     quit_backend!(backend)
 end
 
@@ -347,7 +500,7 @@ end
     backend = SdlBackend()
     initialize_backend!(backend)
     held = WindowDocument(; id = :start_test, title = "start_test", x = 100, y = 100,
-                            width = 200, height = 100, content = "content")
+                            width = 200, height = 100, content = PrimitiveString("content"))
     resource = SDL._open_native_window!(backend, held; hidden = true)
     @test all(_ -> SDL._start_sdl_video!(), 1:300)
     @test LibSDL2.SDL_GetWindowFlags(resource.win) != 0
@@ -389,9 +542,18 @@ end
     backend.display.width, backend.display.height = 400, 300
     popup = WindowDocument(; id = :area_test, title = "area_test", x = 380, y = 280,
                              width = 200, height = 100, maximum_size = (200, 100),
-                             style = :popup, content = "content")
+                             style = :popup, content = PrimitiveString("content"))
     SDL._place_fitted_window!(backend, popup)
     @test (popup.x, popup.y) == (200, 200)
+    # The size of the display is at the zoom 1, and a window is placed in the
+    # logical pixels of the zoom: at twice the zoom the area is 200 by 150.
+    backend.display.zoom = 2.0
+    zoomed = WindowDocument(; id = :area_zoom_test, title = "area_zoom_test", x = 180, y = 130,
+                              width = 100, height = 50, maximum_size = (100, 50),
+                              style = :popup, content = PrimitiveString("content"))
+    SDL._place_fitted_window!(backend, zoomed)
+    @test (zoomed.x, zoomed.y) == (100, 100)
+    backend.display.zoom = 1.0
     _push_sdl_event!(_SDL.SDL_DisplayEvent(UInt32(_SDL.SDL_DISPLAYEVENT), UInt32(0), UInt32(0),
                                            UInt8(_SDL.SDL_DISPLAYEVENT_CONNECTED),
                                            0x00, 0x00, 0x00, Int32(0)))

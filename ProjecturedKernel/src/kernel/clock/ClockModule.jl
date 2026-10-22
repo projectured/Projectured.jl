@@ -2,9 +2,9 @@
     ClockModule
 
 The animation clock. A `Clock` holds a time in seconds in a reactive cell, and a
-computation that reads the time computes again after each write of it. Each
-`Clock` is independent: a write invalidates only the cells that read that clock,
-so one process can run many editors at once.
+computation that reads the time computes again after each write of a new time.
+Each `Clock` is independent: a write invalidates only the cells that read that
+clock, so one process can hold many clocks, each with readers of its own.
 
 A clock has two reads:
 
@@ -14,11 +14,9 @@ A clock has two reads:
 - `get_clock_time(clock)` records nothing. Use it to take the start time of an
   animation, so the code that takes it does not run again on each write.
 
-A clock must have one writer. An owner with a frame loop writes its clock once
-per frame with `set_clock_time!`. `start_wall_clock!(clock)` starts a heartbeat that
-writes real time into a clock where no frame loop exists, and
-`stop_wall_clock!(clock)` ends it. The heartbeat runs on the thread of the task
-that starts it, so the owner starts it on the task that reads the clock.
+A clock has one writer, the task that owns the cells that read it. The writer
+writes the time with `set_clock_time!` before it reads those cells, and
+`has_clock_readers` tells it whether a cell reads the clock.
 
 The module lives in one fragment, [`Clock.jl`](Clock.jl).
 """
@@ -27,8 +25,7 @@ module ClockModule
 using ..CellModule
 using ..CellStructModule
 
-export Clock, get_reactive_clock_time, get_clock_time, set_clock_time!,
-       start_wall_clock!, stop_wall_clock!
+export Clock, get_reactive_clock_time, get_clock_time, set_clock_time!, has_clock_readers
 
 include("Clock.jl")
 

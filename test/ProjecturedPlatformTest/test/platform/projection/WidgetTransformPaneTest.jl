@@ -4,8 +4,9 @@
 function test_widget_transform_pane()
 @testset "WidgetTransformPane zoom/pan" begin
 
-    # The transform an answer writes.
-    _written(op) = get_wrapped_operation(op).value
+    # The transform an answer writes. A pan writes it first, before the run of
+    # the wheel.
+    _written(op) = get_wrapped_operation(op isa CompoundOperation ? first(op.operations) : op).value
 
     # Deterministic measure: "M" → (10, 24), so the pan step (line height) is 24.
     _stub = FixedMeasure(10, 18, 6, 0)
@@ -53,11 +54,12 @@ function test_widget_transform_pane()
         proj  = _proj()
         iomap = print_document(proj, doc)
         op = read_intent(proj, iomap, MouseScroll(0, 1, 50, 50, ModifierKeys(); time = 0.0))
-        @test op isa ReplaceViewStateOperation
+        @test op isa CompoundOperation
+        @test all(o -> o isa ReplaceViewStateOperation, op.operations)
         M = _written(op)
         @test M.a ≈ 1.0            # no scale change
         @test M.d ≈ 1.0
-        @test M.f ≈ 24.0           # panned vertically by the line step
+        @test M.f ≈ 72.0           # panned vertically by three lines of 24
         @test M.e ≈ 0.0
     end
 
@@ -66,9 +68,73 @@ function test_widget_transform_pane()
         proj  = _proj()
         iomap = print_document(proj, doc)
         op = read_intent(proj, iomap, MouseScroll(1, 0, 50, 50, ModifierKeys(); time = 0.0))
-        @test op isa ReplaceViewStateOperation
-        @test _written(op).e ≈ 24.0
+        @test op isa CompoundOperation
+        @test _written(op).e ≈ 72.0
         @test _written(op).f ≈ 0.0
+    end
+
+    @testset "a touchpad pans by the fraction of a notch" begin
+        doc   = _doc()
+        proj  = _proj()
+        iomap = print_document(proj, doc)
+        op = read_intent(proj, iomap, MouseScroll(0, 0, 50, 50, ModifierKeys(); time = 0.0,
+                                                  precise_dy = 0.5))
+        @test _written(op).f ≈ 36.0     # half of three lines of 24
+    end
+
+    @testset "Ctrl and the wheel zoom a step for each notch, and not for a fraction" begin
+        doc   = _doc()
+        proj  = _proj()
+        iomap = print_document(proj, doc)
+        op = read_intent(proj, iomap, MouseScroll(0, 2, 50, 50, ModifierKeys(ctrl=true); time = 0.0))
+        @test _written(op).a ≈ 1.1^2
+        @test read_intent(proj, iomap, MouseScroll(0, 0, 50, 50, ModifierKeys(ctrl=true); time = 0.0,
+                                                   precise_dy = 0.3)) === nothing
+    end
+
+    @testset "Ctrl and the wheel zoom a pane inside a composite" begin
+        doc   = _doc()
+        proj  = _proj()
+        iomap = print_document(proj, WidgetComposite(Any[doc]))
+        op = read_intent(proj, iomap, MouseScroll(0, 1, 50, 50, ModifierKeys(ctrl=true); time = 0.0))
+        @test _written(op).a ≈ 1.1
+    end
+
+    # The shape of a dashboard: a pane in a card, and the card in a scroll pane
+    # that is shorter than the card. The card gives the wheel to the slot under
+    # the pointer.
+    _card_page() = WidgetScrollPane(WidgetCard(; title = WidgetLabel("plot"), content = _doc());
+                                    size = Point2D(240, 120))
+
+    @testset "Ctrl and the wheel zoom a pane in a card, and do not scroll the page" begin
+        proj  = _proj()
+        iomap = print_document(proj, _card_page())
+        op = read_intent(proj, iomap, MouseScroll(0, 1, 50, 80, ModifierKeys(ctrl=true); time = 0.0))
+        @test _written(op) isa AffineTransform
+        @test _written(op).a ≈ 1.1
+    end
+
+    @testset "a turn that no slot of a card uses scrolls the page" begin
+        proj  = _proj()
+        iomap = print_document(proj, _card_page())
+        op = read_intent(proj, iomap, MouseScroll(0, -1, 50, 12, ModifierKeys(); time = 0.0))
+        @test _written(op) isa Point2D
+        @test Int(_written(op).y[]) > 0
+    end
+
+    @testset "Ctrl and the wheel never scroll a page" begin
+        proj  = _proj()
+        iomap = print_document(proj, _card_page())
+        @test read_intent(proj, iomap, MouseScroll(0, -1, 50, 12, ModifierKeys(ctrl=true); time = 0.0)) === nothing
+    end
+
+    @testset "a zoom at its limit gives the page no notch" begin
+        pane  = WidgetTransformPane(WidgetComposite(Any[WidgetLabel("x")]);
+                                    size=Point2D(200, 200), transform=make_affine_scale(4.0, 4.0))
+        proj  = _proj()
+        iomap = print_document(proj, WidgetScrollPane(WidgetCard(; title = WidgetLabel("plot"), content = pane);
+                                                      size = Point2D(240, 120)))
+        @test read_intent(proj, iomap, MouseScroll(0, 1, 50, 80, ModifierKeys(ctrl=true); time = 0.0)) === nothing
     end
 
     @testset "successive zooms accumulate" begin

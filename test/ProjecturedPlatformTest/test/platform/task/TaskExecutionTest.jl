@@ -6,6 +6,9 @@
 
 struct _TaskExecutionProbeTask <: AbstractTask end
 TaskModule.get_result_codes(::_TaskExecutionProbeTask) = RUN_RESULT_CODES
+# The kind marks its progress lines and the lines that warn.
+TaskModule.find_task_output_mark(::_TaskExecutionProbeTask, stream::Symbol, line::AbstractString) =
+    startswith(line, "progress") ? :progress : occursin("warning", line) ? :warning : nothing
 
 struct _TaskExecutionProbeResult <: TaskResult
     task::_TaskExecutionProbeTask
@@ -64,9 +67,13 @@ function test_task_execution()
             @test execution.process_id == getpid(execution.runtime.process)
             @test isdir("/proc/$(execution.process_id)")
             @test execution.start_time !== nothing && execution.end_time === nothing
-            sample_task_usage!(execution)
-            sleep(0.2)
-            sample_task_usage!(execution)
+            # The sampler of the process writes its use of the processor and of the
+            # memory off the loop, with no call.
+            deadline = time() + 5
+            while lock(() -> execution.processor_load, execution.runtime.lock) === nothing &&
+                  time() < deadline
+                sleep(0.05)
+            end
             @test execution.resident_memory !== nothing && execution.resident_memory > 0
             @test execution.processor_load !== nothing && execution.processor_load >= 0
             wait_task_execution(execution)
@@ -77,6 +84,32 @@ function test_task_execution()
             @test collect_output_lines(execution.output) == ["progress 10% at one", "progress 50% at two"]
             @test collect_output_lines(execution.error_output) == ["a warning"]
             @test execution.progress == 0.5 && execution.position == "two"
+            # The marks that the kind gives the lines, counted with the first of each.
+            @test execution.output.mark_counts == Dict(:progress => 2)
+            @test execution.output.first_mark_lines == Dict(:progress => 1)
+            @test execution.error_output.mark_counts == Dict(:warning => 1)
+        end
+
+        @testset "a stream keeps every line in a file of the process" begin
+            execution = _start_probe_process("seq 1 1500 | sed 's/^/line /'; echo oops >&2")
+            wait_task_execution(execution)
+            lines = execution.output
+            @test lines.count == 1500
+            @test get_left_out_line_count(lines) == 400
+            path = lines.path
+            @test path !== nothing && isfile(path)
+            @test dirname(path) == get_session_output_folder!()
+            @test !startswith(path, tempdir())
+            @test countlines(path) == 1500
+            @test readline(path) == "line 1"
+            @test readlines(execution.error_output.path) == ["oops"]
+            @test copy(lines).path == path
+            # A task keeps the files of its executions until they are removed.
+            document = TaskDocument(_TaskExecutionProbeTask())
+            add_task_execution!(document, execution, make_task_execution_shadow(execution))
+            remove_task_output_files!(document)
+            @test !isfile(path) && !isfile(execution.error_output.path)
+            @test lines.count == 1500
         end
 
         @testset "a shadow follows its execution, and a sync writes only what changed" begin

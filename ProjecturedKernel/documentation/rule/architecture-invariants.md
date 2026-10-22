@@ -66,9 +66,10 @@ requirement; the rule is its own lead sentence.
 | [PAR-PURE-THUNK](#par-pure-thunk) | Every reactive computation must be a pure function of the cells it reads |
 | [PAR-NO-WRITE-IN-THUNK](#par-no-write-in-thunk) | A computation must never write another cell or mutate shared document state |
 | [PAR-STORE-THEN-DRAIN](#par-store-then-drain) | Data enters a running editor through a store and a drain, never through a direct write |
+| [PAR-SINGLE-WRITER](#par-single-writer) | One task writes and reads a set of cells, in write phases and read phases that do not overlap |
 | [PAR-ACYCLIC-CELLS](#par-acyclic-cells) | The cell dependency graph must stay acyclic |
 | [PAR-MONOTONE-INVALIDATION](#par-monotone-invalidation) | Never hand-set `valid` and never partially invalidate |
-| [PAR-WRITE-DRIVEN-PROPAGATION](#par-write-driven-propagation) | Treat propagation as write-driven, not value-driven |
+| [PAR-WRITE-DRIVEN-PROPAGATION](#par-write-driven-propagation) | Propagation starts at a write, and stops at plain data that stays the same |
 | [PAR-NO-PROJECTION-GLOBALS](#par-no-projection-globals) | No global mutable state in projections (or the machinery they call) |
 | [PAR-DERIVED-CELLS](#par-derived-cells) | Use the reactive engine for derived state; do not read a cell before its wiring is complete |
 | [PAR-FINEST-GRANULARITY](#par-finest-granularity) | Choose the reactive container that preserves the finest granularity |
@@ -79,12 +80,12 @@ requirement; the rule is its own lead sentence.
 | --- | --- |
 | [PAR-FIELDS-ARE-CELLS](#par-fields-are-cells) | Every document field is a `Cell`, accessed transparently |
 | [PAR-FIELD-NAMES-ARE-API](#par-field-names-are-api) | A document's struct field names are its public reference vocabulary |
-| [PAR-WIDE-FIELD-TYPES](#par-wide-field-types) | A field's declared type must admit every value the field can hold |
-| [PAR-NO-NESTED-CELL](#par-no-nested-cell) | A macro-wrapped field may never hold a `Cell` or a `Function` as its logical value |
+| [PAR-WIDE-FIELD-TYPES](#par-wide-field-types) | A field's declared type must admit every value the field can hold, and a place that a person edits admits the intermediate states of its domain |
+| [PAR-NO-NESTED-CELL](#par-no-nested-cell) | A macro-wrapped field may never hold a `Cell` or a `Computation` as its logical value, and each write through a document meets the check of the declared type |
 | [PAR-DOCUMENT-IDENTITY](#par-document-identity) | Do not assume two documents with equal fields are `==` |
 | [PAR-NO-EDITOR-IN-DOCUMENT](#par-no-editor-in-document) | No document stores the editor, not even in a closure or a `Ref` that a field holds |
 | [PAR-DOMAINS-INDEPENDENT](#par-domains-independent) | Domains are independent; a document owns no cross-domain edge |
-| [PAR-DOMAIN-OWNS-EDITS](#par-domain-owns-edits) | Every domain defines its own structural operations and its own insertion type |
+| [PAR-DOMAIN-OWNS-EDITS](#par-domain-owns-edits) | Every domain defines its own structural operations, its own insertion type and its own nothing type |
 | [PAR-WIDGETS-ARE-PRESENTATION](#par-widgets-are-presentation) | Keep the edited document in its semantic domain; widgets are presentation only |
 | [PAR-SEARCH-DONT-WALK](#par-search-dont-walk) | Prefer `search_references` / `search_documents` over hand-walking the tree, and scope by domain node type |
 
@@ -107,7 +108,7 @@ requirement; the rule is its own lead sentence.
 | [PAR-GEOMETRY-FREE-IN-DOCUMENT](#par-geometry-free-in-document) | Geometry-free gesture handling belongs to the document, not the projection |
 | [PAR-DELEGATE-AND-LIFT](#par-delegate-and-lift) | A structural projection's reader delegates a raw gesture to the selected child and lifts the result |
 | [PAR-SHARED-CHILDREN-IOMAP](#par-shared-children-iomap) | A compound (node-shaped) projection stores its child IoMaps in one shared reactive cell and returns a `ChildrenIoMap` |
-| [PAR-STABLE-IOMAP-IDENTITY](#par-stable-iomap-identity) | A projection's IoMap keeps its identity; its varying parts are computed cells and its children reconcile by identity and index |
+| [PAR-STABLE-IOMAP-IDENTITY](#par-stable-iomap-identity) | A projection's IoMap keeps its identity; its varying parts are computed cells and its children reconcile by identity, each with a cell of its index |
 | [PAR-CROSS-DOMAIN-LATE](#par-cross-domain-late) | Cross domains as late as possible in the mappers; an introduced part maps forward and backward |
 | [PAR-HIGHER-ORDER-IS-DOMAIN-FREE](#par-higher-order-is-domain-free) | Higher-order projections touch no domain; generic projections are input-domain-independent |
 | [PAR-USE-PROJECTION-MACRO](#par-use-projection-macro) | Use `@projection` for projection structs with reactive fields, defaulting the supertype |
@@ -146,6 +147,8 @@ requirement; the rule is its own lead sentence.
 | [PAR-OPT-IN-DEPENDENCY](#par-opt-in-dependency) | Add a backend/engine as an opt-in package behind a factory seam, not by coupling core code to the dependency |
 | [PAR-PROFILE-WITH-COUNTERS](#par-profile-with-counters) | Profile edits with the per-frame performance counters |
 | [PAR-PER-EDITOR-STATE](#par-per-editor-state) | No process-global state in the editor or the machinery it drives; one process must run many editors at once |
+| [PAR-LOOP-RUNS-NO-USER-CODE](#par-loop-runs-no-user-code) | The loop runs no code of a person or a model; it waits for a code unit only in held frames |
+| [PAR-DRAIN-MOVES-PREPARED-DATA](#par-drain-moves-prepared-data) | A feed drain moves only data that its producer prepared off the loop |
 | [PAR-REPORT-NEVER-THROWS](#par-report-never-throws) | A fault report never throws, and a barrier never swallows a fault in silence |
 
 **Package, layer, slice, and module structure**
@@ -209,8 +212,10 @@ times for one logical change must leave the same value behind. A write to an
 object with two properties changes no result: no cell depends on the object, and
 no computation reads it. A count in such an object can grow at each run, because
 no cached value can see it. `PAR-NO-WRITE-IN-THUNK` carries the same carve-out and
-names the case: the fault store. A counter or a log that a cell or a computation
+names the cases: the fault store and the counter store of a performance scope. A counter or a log that a cell or a computation
 reads does not qualify, and a write to it stays forbidden.
+
+The record of a demand of a background cell is a case of the carve-out: the editor holds the demands in a session document that no cell depends on and no computation reads. The read of the state that guards the record, which tells whether a demand for the same inputs waits or runs, is a case too. It decides whether the record is made, and it never decides the value that the computation gives.
 
 ### PAR-NO-WRITE-IN-THUNK
 
@@ -245,13 +250,20 @@ The editor's other feed stores — the inbox, the message log store, the frame
 measurement store — share the shape but do not need the carve-out: their producers
 run on ordinary tasks, outside every computation, so this ban is not in play for
 them. Only a store a computation itself writes must have the two properties above,
-and the fault store is the one that does.
+and two stores do: the fault store, and the counter store of
+`run_with_performance_counters` (`source/kernel/performance/PerformanceCounter.jl`),
+to which a cell read, a computation, an invalidation, a write, a check and a stop
+add a count.
 
 **Accepted carve-out — a new cell that the same run made.** A computation can write
 a cell that it made in the same run, before it gives the cell out. Until then no
-cell depends on the new cell, so the write invalidates nothing. The computation
-reads such a cell only with `peek`, so that the cell gets no dependent before the
-write. The template walk of `@projection_template` does this: a nested template
+other cell depends on the new cell. The computation itself can read the new cell
+before the write: the walk of the write then reaches the computing cell, and it
+stops there (`PAR-SINGLE-WRITER`). No other cell may read the new cell before the
+write: the walk would mark that reader invalid and stop at the computing cell,
+which then ends valid above a reader that is invalid. `push!` on a
+`CellVector` that the run made does this: it reads the elements cell, then writes
+it. The template walk of `@projection_template` does this too: a nested template
 builds an output node inside the computation of its parent, reads the blueprint
 of that node with `peek`, and completes its cells.
 
@@ -263,40 +275,92 @@ barrier inside a computation — writes a plain store outside the reactive graph
 write never blocks and never touches a cell. The editor drains the store into
 the target document on its own task, once per frame, before `run_read_stage!`
 (`drain_feeds!`; the fault report at the top of `run_frame!` is the same
-motion). Only the editor task writes a document a running editor shows. The
-heartbeat of a wall clock is the accepted exception: `start_wall_clock!` writes
-the time cell of its clock from a task of its own, on the thread of the task that
-reads the clock. A producer that wants a frame soon calls the wake function it was
+motion). Only the editor task writes a document a running editor shows
+(`PAR-SINGLE-WRITER`), and its clock too, at the start of each frame. A producer that wants a frame soon calls the wake function it was
 given (`wake_editor!`, or the callback its store received at registration); it
 never reaches into the editor. The inbox (`post_operation!`) is the queue-shaped
 case of the same rule, for a payload that is an edit: ordered, applied exactly
 once, with backpressure.
 
+### PAR-SINGLE-WRITER
+
+**One task writes and reads a set of cells, in write phases and read phases that
+do not overlap.** A set of cells that depend on each other, such as the document
+of an editor and the cells that its projections derive, has one owner task. In a
+write phase the owner writes cells, and no computation runs. In a read phase the
+owner reads cells, the reads compute what is invalid, and no cell of the set
+changes. A write between two reads of one read phase can give a result that
+mixes an old value and a new value, and no walk of a write can repair it. The
+engine does not lock a cell, so the rule is what keeps the cached values right:
+
+- Another task never writes a cell of the set. It writes a plain store, and the
+  owner drains the store in a write phase (`PAR-STORE-THEN-DRAIN`).
+- Another task reads a cell of the set only while the owner waits for it, as in
+  `fetch(Threads.@spawn c[])` inside a computation. The computing stack is per
+  task, so that read records no reader. One task at a time reads for the owner:
+  a read of a cell that is not valid computes it and changes the edges of the
+  graph. Several tasks at once read only cells that are valid.
+- A computation runs in a read phase, so it writes no cell that another cell
+  reads (`PAR-NO-WRITE-IN-THUNK`).
+
+The engine relies on the rule twice: the walk of a write stops at a computing cell,
+because a write that reaches it comes from inside that computation, and a read of a
+computing cell is a cycle (`PAR-ACYCLIC-CELLS`). The
+editor task owns the cells of an editor. A frame runs its steps one after the
+other on that task: a drain and an applied operation write, and a read of input
+against the IO map, a print and a paint read. The editor writes its clock at the
+start of a frame, before the reads.
+
 ### PAR-ACYCLIC-CELLS
 
 **The cell dependency graph must stay acyclic.** `_recompute!` evaluates a computation
-while its cell is on the computing stack; a cell that transitively reads
-itself recurses forever. The engine records no edge for a *direct* self-read,
-but that read recurses too, and the engine detects no cycle, so a computed cell
-must never read itself, directly or through any chain.
+while its cell is on the computing stack, in the state *computing*. By
+`PAR-SINGLE-WRITER`, a read of a computing cell comes from inside its own computation,
+directly, through any chain, or through a task that the computation waits for. So
+the read is a cycle, which the state alone shows. A read of a *checking* cell is
+a cycle for the same reason: it comes from inside the check of its own
+dependencies. The engine throws a `CellCycleException`, an ordinary exception
+that a barrier records, and each cell of the cycle is failed. So a cycle costs
+one fault and not the editor, but a computed cell must still never read itself: its value is
+missing until a write breaks the cycle.
 
 ### PAR-MONOTONE-INVALIDATION
 
-**Never hand-set `valid` and never partially invalidate.** Invalidation is
-monotone (an invalid cell implies all its transitive dependents are already
-invalid), and the engine's early-stop walk relies on it. `_recompute!` is the
-only thing that re-validates a cell. Setting `valid` by hand, or invalidating
-only a subset of dependents, breaks the early-stop and leaves cells stale
-forever.
+**Never hand-set the state of a cell and never partially invalidate.** A reactive
+cell is *valid*, *invalid*, *maybe invalid*, *checking*, *failed* or *computing*.
+Invalidation is monotone: a cell that is invalid or maybe invalid implies that
+all its transitive readers are invalid or maybe invalid already, and the
+early-stop walk of a write relies on it. A write marks the direct readers
+invalid and the cells below them maybe invalid. A *failed* cell, whose
+computation threw, can have valid readers, which caught its exception, so the
+walk goes on through it, and it stays failed. A *computing* cell stops the walk,
+as a marked cell does: by `PAR-SINGLE-WRITER`, a write that reaches it comes from
+inside its own computation. A *checking* cell is a maybe invalid cell whose
+dependencies a read brings up to date. Only `_recompute!`, a check that finds no
+new value and a write of a value make a cell valid. Setting the state by hand,
+or invalidating only a subset of readers, breaks the early stop and leaves cells
+stale forever.
+
+**Provisional is a flag, not a state.** A provisional cell is valid. The flag sits beside the state, and no walk of a write reads or sets it. So the states and the early stop above do not change.
 
 ### PAR-WRITE-DRIVEN-PROPAGATION
 
-**Treat propagation as write-driven, not value-driven.** Writing a cell
-invalidates its dependents unconditionally — there is no `old == new`
-short-circuit, and a computation that returns an unchanged value does not stop
-propagation. Consequently `c[] = c[]` is not free: a printer that rewrites
-`selection` (or any cell) every frame pays to recompute the whole subtree that
-reads it. Write a cell only when its value actually needs to change.
+**Propagation starts at a write, and stops at plain data that stays the same.**
+Writing a cell invalidates its direct readers and makes the cells below them
+maybe invalid. There is no `old == new` check. Plain data is a value that is
+`isbits`, a `String` or a `Symbol`; it can not change inside, so `===` shows that
+no reader can tell it from the value before. A write of plain data `===` to the
+value of a cell that holds no computation invalidates nothing, and a computation
+that gives plain data `===` to the value that it gave leaves the cells below it
+as they were, when its provisional flag is the same too. A write of the same mutable value, and a computation that gives a
+mutable value, still count as a change. An exception during a check is no stop:
+each cell on the path of the check computes once, also above a cell that catches
+the exception and gives the value that it had. So `c[] = c[]` of a mutable value is not
+free: a printer that rewrites `selection` every frame pays to recompute the
+subtree that reads it. Write a cell only when its value needs to change. After a
+change that a write does not show, such as a change inside a mutable value, call
+`invalidate_cell!(c)`. A computation must not depend on a run of its own when the
+cells that it read give the values that they gave.
 
 ### PAR-NO-PROJECTION-GLOBALS
 
@@ -352,33 +416,69 @@ rename as an API migration, not a local refactor.
 
 ### PAR-WIDE-FIELD-TYPES
 
-**A field's declared type must admit every value the field can hold.** The
-annotation is preserved verbatim into the generated immutable snapshot
-(`ICFoo`), where it becomes enforced. If a field can ever hold `nothing` as an
-empty sentinel, annotate it `Union{…, Nothing}`; a dishonest annotation stays
-silent until the first `snapshot`/`ICFoo(foo)` throws. Type honestly for
-*representability*, not just for the well-formed case: a field that is too
-tight silently forecloses an *intermediate* state the user's mental model
-passes through on the way between two valid ones (product requirement
-PR-INTERMEDIATE-STATES). Widen the annotation to admit the transient value —
-including one that is ill-formed in the domain's own terms — rather than
-assuming only fully-formed values ever occur (see PAR-DOMAIN-OWNS-EDITS).
+**A field's declared type must admit every value the field can hold.** Every
+layout checks a write against the declared type: the reactive layout at each write
+through the document (PAR-NO-NESTED-CELL), and the kind layouts (`ICFoo`, `MCFoo`)
+in their typed cells. So a declaration that is too narrow throws
+`DeclaredTypeMismatchException` at the first write of a value that it does not
+admit. If a field
+can hold `nothing` as an empty sentinel, declare it `Union{…, Nothing}`.
+
+A field chooses one of four forms:
+
+| Form | Admits | Use it for |
+| --- | --- | --- |
+| `Any` | every value | a generic container, such as the tabs, the clipboard or the messages of a conversation |
+| `Document` | every document | a place where documents of several domains combine |
+| the root type of a domain, such as `JuliaDocument` | the documents of that domain | a place that admits no other domain |
+| a narrow type, such as `Bool`, `String` or `Vector{JsonObjectEntry}` | that type only | a place with one kind of value |
+
+**Each place that a person can edit admits the intermediate states of its
+domain**: the insertion and the nothing of the domain (product requirement
+PR-INTERMEDIATE-STATES, and PAR-DOMAIN-OWNS-EDITS). Otherwise a person can not type
+there. A field declared `Document`, or the root type of its domain, admits them
+with no change. A narrow field that a person edits admits them in its declaration,
+for example `Vector{Union{JsonObjectEntry, JsonInsertion, JsonNothing}}`. A narrow
+field that a person changes only through the gestures of its domain needs no
+intermediate state: a `JsonBool` takes no text, and a key changes it to `true` or
+`false`.
+
+**An insertion offers only what its place admits.** The candidates that an
+insertion completes and commits are the ones that the declared type of its place
+admits; the insertion finds that type from the reference of its context, which
+each container types against itself. Insert widens the insertion of a domain to
+the insertion of every domain where the place admits a `DocumentInsertion` as it
+is, so a person can type a document of another domain only into a place that
+admits one.
 
 ### PAR-NO-NESTED-CELL
 
 **A macro-wrapped field may never hold a `Cell` or a `Computation` as its logical
 value.** Both are cell vocabulary, and the auto-wrapping constructor consumes
-them rather than storing them. A cell that a constructor gets becomes the cell of
-the field, whatever type of value it holds, and a `Computation` becomes the
-field's *derivation*, making it a computed cell. The declared type of a field is
-the type that the field holds at rest. The reactive layout does not enforce it,
-because an edit passes through intermediate values, such as a text to parse or a
-document of another domain that a projection gives meaning to. The kind layouts
-(`ImmutableCell`, `MutableCell`) check a raw value and a write against the
-declared type. To hold either as
-data, box it (a one-element tuple or wrapper struct) or use a plain hand-rolled
-`struct` (as `SyntaxCompoundToText` does). Any convenience constructor must be
-an *outer* constructor — the macro emits the only inner one.
+them rather than storing them. A cell that the constructor of a `@document` gets
+becomes the cell of the field, whatever type of value it holds; `@cell_struct`
+takes only a cell of the type of the field cell, and throws a `MethodError` for
+another. A `Computation` becomes the field's *derivation*, making it a computed
+cell. A write of a cell through the setter of either macro throws an
+`ArgumentError`, so a write can not store a cell as a value either. The declared type of a field is
+the type that the field holds. The reactive layout stores every field in a
+`ReactiveCell{Any}`, and it checks each write through the document against the
+declared type: the constructor, the setter, an operation, and an element write of
+a `CellVector`. The kind layouts (`ImmutableCell`, `MutableCell`) check a raw value
+and a write against the declared type in their typed cells.
+
+Two values are outside the check of the reactive layout. A computed cell has its
+value only after the computation, so a computation must give a value of the
+declared type itself: for a field declared `Vector{T}`, a `CellVector{T}`. A cell
+that a constructor gets is checked for the value that it holds then, and a later
+write into that cell from another place is not checked. [macros.md](../package/kernel/macros.md)
+gives the declared type of each field of the reactive layout, the modes of the
+check and its conversions.
+
+To hold a `Cell` or a `Computation` as data, box it (a one-element tuple or
+wrapper struct) or use a plain hand-rolled `struct` (as `SyntaxCompoundToText`
+does). Any convenience constructor must be an *outer* constructor — the macro
+emits the only inner one.
 
 A `Function`, by contrast, is an ordinary value and needs no ceremony: a field
 may hold a callback, predicate, or factory, and `field` reads it back
@@ -418,25 +518,35 @@ imports only its own slice and packages below it. All cross-domain coupling
 lives in projections (the edges), never in documents (the nodes) — this is what
 makes the domain package sliceable. Anything two slices both need is a
 framework and sinks to the platform slice that owns the concept, not into either
-slice.
+slice. A field that admits documents of other domains declares `Document`, so the
+declaration of a domain names no other domain. A domain whose places hold only its
+own nodes can still hold a document of another domain as a value: a node of its
+own holds it in a field that declares `Document`, and a write that puts such a
+document into one of its places makes that node. The Julia domain does so with
+`JuliaObject`, a literal that stands in the code as itself.
 
 ### PAR-DOMAIN-OWNS-EDITS
 
-**Every domain defines its own structural operations and its own insertion
-type.** A domain's edits are expressed structurally in its own terms ("insert
+**Every domain defines its own structural operations, its own insertion type
+and its own nothing type.** A domain's edits are expressed structurally in its own terms ("insert
 element at index 3", not "delete the `[` at line 12"), and its type-in entry
 point is a per-domain `…Insertion` document whose reader interprets typed text
-in that domain's vocabulary. Generate the whole insertion kit with one `@domain
-X` line rather than re-implementing the root/placeholder/insertion/
-gesture/traits per domain. The per-domain `…Insertion` document is also what
-makes *every intermediate state representable* (product requirement
-PR-INTERMEDIATE-STATES): as the user builds toward a well-formed value the
-content may pass through states that are ill-formed in the domain's own terms,
-and the insertion document — together with permissive field typing
-(PAR-WIDE-FIELD-TYPES) — is the sanctioned place to hold such a transient state
-rather than forbidding it. Do not constrain a domain's structural operations or
-types so tightly that a reachable intermediate the user pictures has nowhere to
-live; the architecture must permit that state to exist, one way or another.
+in that domain's vocabulary. Its empty place is a per-domain `…Nothing` document.
+Generate the whole insertion kit with one `@domain X` line rather than
+re-implementing the root/placeholder/insertion/gesture/traits per domain.
+
+The insertion and the nothing of a domain are its **intermediate states**, and
+they make *every intermediate state representable* (product requirement
+PR-INTERMEDIATE-STATES). As the user builds toward a well-formed value, the
+content can pass through states that are ill-formed in the domain's own terms.
+The insertion holds such a state, and each place that a person edits declares a
+type that admits it (PAR-WIDE-FIELD-TYPES). An operation that writes a text into a
+field whose declared type does not admit the text, but admits the insertion of the domain
+of the field's owner, writes that insertion with the text. In a domain that gives
+the method `make_incomplete_number_document`, such as JSON, a number whose text
+does not parse yet, such as `-` or `1e`, becomes the insertion of the domain, which
+holds the text. Do not constrain a domain's structural operations or types so tightly that a
+reachable intermediate the user pictures has nowhere to live.
 
 ### PAR-WIDGETS-ARE-PRESENTATION
 
@@ -661,16 +771,17 @@ backward.
 ### PAR-STABLE-IOMAP-IDENTITY
 
 **A projection's IoMap keeps its identity; its varying parts are computed cells,
-and its children reconcile by identity and index.** `print_document` returns one
+and its children reconcile by identity, each with a cell of its index.** `print_document` returns one
 IoMap per projection instance and never rebuilds or replaces it in response to a
 change.
 Every part that can vary — the output document, its `selection`, and every child
 IoMap — is a *computed cell* deriving from the projection's input and parameter
 cells, not a value captured eagerly at print time; and a collection of children
-goes through the shared reconciler, keyed by the identity and the index of each
-child, so the IoMap of a child that keeps its object and its index is reused. A
-delete or a front insert moves the later children to other indices, so their
-IoMaps are made again. A change
+goes through the shared reconciler, keyed by the identity of each child, so the
+IoMap of a child that keeps its object is reused. Each child gets a cell of its
+index, and the path of the child is a computation that reads it, so a delete or
+a front insert moves the later children with no new IoMap. A child at two places
+of the collection is not kept, and each of its prints has a fixed index. A change
 therefore propagates through the cells the projection already wired — never by
 allocating a new IoMap, and never by nulling `editor.iomap`. This is the
 generalization, from "a compound projection should" to "every projection must,"
@@ -1036,11 +1147,12 @@ events.
 
 ### PAR-PROFILE-WITH-COUNTERS
 
-**Profile edits with the per-frame performance counters.** Set
-`PROJECTURED_PERFORMANCE_COUNTERS=true` and recompile to compile the counters in.
+**Profile edits with the per-frame performance counters.** Set the preference
+`performance_counters` of `ProjecturedKernel` to `true` and start Julia again; the
+package cache then compiles the kernel with the counters.
 The read-eval-print loop then binds a fresh counter store for each frame, and
-`_log_performance_counters!` logs `reads / computes / invalidations / writes` for each frame that
-applied an operation. Use them to find unintentional recomputation (a single
+`_log_performance_counters!` logs `reads / computes / invalidations / writes`, and
+`checks / stops` when a frame had them, for each frame that applied an operation. Use them to find unintentional recomputation (a single
 keypress causing thousands of `computes` means something reads more cells than
 necessary).
 
@@ -1074,19 +1186,27 @@ per-editor `Clock` (a `@cell_struct`, not a document — `clock/ClockModule.jl`)
 `run_editor!` advances `editor.clock`, and every animated cell subscribes to the
 clock the printer context carries, so two editors in one process never
 cross-invalidate each other's animation graph. No clock is shared by the whole
-process: an owner without a frame loop starts a heartbeat on its own clock with
-`start_wall_clock!`, on the task that reads that clock.
+process: a document that animates takes the clock of the editor that shows it,
+through the keyword `clock` of `make_editor`, `build_editor` and `run_editor!`.
 
-**The editor of an evaluation is state of one evaluation.** While the code of
-the evaluator, of the assistant or of the `execute_julia_code` tool runs,
-`_run_expression` binds its editor in a `ScopedValue`, and
-`get_evaluation_editor()` reads it. The tasks that the code starts get the same
-editor, and nothing else does. Only a verb reads it, and only as the default of
-its `editor` keyword, `focus_pane!(reference; editor = get_evaluation_editor())`,
-so the code of a person or a model names no editor. Every other code passes the
-editor it has: an operation gets it from `evaluate_operation(editor, operation)`,
-and a projection, the editor loop and a call from a package never read the
-scope. The argument guard, `test/suite/arguments.jl`, fails on a call of
+**The editor of an evaluation is state of one evaluation.** It is bound in a
+`ScopedValue` (`run_with_evaluation_editor`) while the code of the evaluator, of
+the assistant or of the `execute_julia_code` tool runs, and while the loop of
+`run_editor!`, a frame (`run_frame!`) or a drain of the feeds (`drain_feeds!`)
+runs. The tasks that the code starts, and its background work, get the same
+editor, and nothing else does. `get_evaluation_editor()` reads it and throws
+when none is bound; `find_evaluation_editor()` answers `nothing` then. Only a
+verb reads it, and only as the default of its `editor` keyword,
+`focus_pane!(reference; editor = get_evaluation_editor())`, so the code of a
+person or a model names no editor. A document of the session of an editor, such
+as the message log, the gesture log or the assistant list, is kept on the editor
+(`get_session_document!`), and its reader takes `editor =
+find_evaluation_editor()`: with no editor it answers a new document that nothing
+keeps. The loop and a frame bind their editor because an insertion or a source of
+a roster calls such a reader in a frame, with no editor to pass. Every other code
+passes the editor it has: an operation gets it from `evaluate_operation(editor,
+operation)`, and a projection and a call from a package never read the scope.
+The argument guard, `test/suite/arguments.jl`, fails on a call of
 `get_evaluation_editor` anywhere else.
 
 **Accepted carve-out — state that is identical for every editor.** Process-global
@@ -1112,6 +1232,72 @@ qualifies:
 A shared read of one such value does not reintroduce the cross-editor *write*
 conflict PAR-PER-EDITOR-STATE targets.
 
+### PAR-LOOP-RUNS-NO-USER-CODE
+
+**The loop runs no code of a person or a model; it waits for a code unit only in
+held frames.** Code whose length is not known before it starts runs off the loop,
+so the window always answers:
+
+- **A code unit** (`run_code_unit!`, `editor/HeldFrames.jl`) is a tool call,
+  which reaches the loop through the inbox, or a run of the code tool that an
+  operation of the evaluator or the composer starts. It runs on an interactive
+  thread that neither the loop nor the main task uses, where no task of the
+  default pool runs, so it never waits behind a computation; without one, on the
+  default pool (`julia --threads=auto,2` gives the thread, and the window says so
+  when it is missing). Until it ends, it owns the cells of its editor and the text
+  state of its backend, and units of one editor run one at a time.
+- **A held frame** is what the loop runs while it waits for a unit. It pumps the
+  events of the window system, presents the last picture again, and after 0.5 s
+  shows a busy bar that names the unit, with a stop control. It reads no cell,
+  applies no operation, drains no feed, writes no fault store and makes no text.
+  It keeps the keys and the window events for the frames after the unit, and drops
+  the pointer input that starts in it. Escape, the stop control and the first
+  close of a window stop the unit; a second close asks whether to quit without a
+  save.
+- **Background work** (`start_background_work`) is code that no frame waits for,
+  such as a long computation that model code starts. It reaches a document only
+  through `run_on_editor_task!`. The formula task of an editor is background
+  work: a formula computes from its inputs as values, and a print reads its
+  stored value.
+
+Four rules keep a unit the only task that touches the documents while it runs:
+a verb reads or edits a document through `run_on_editor_task!`, which runs at once
+for the owner and posts for any other task (a); a call with `wait = true` from
+work that the running unit started throws at once, because the two would wait for
+each other (b); the description of the code tool says that a task that model code
+starts uses the verbs (c); and the cell engine records a fault for a write, from a
+task that does not own the cells, to a cell that a computation reads (d,
+`cell/CellWriterCheck.jl`).
+
+The guarantee, in the words that the owner agreed: **the editor stays responsive
+while a task that touches no document runs, when the task runs on a thread other
+than the one of the loop, does not run as a code unit, holds no lock that the loop
+takes, and lets the garbage collector run.** With one thread, or with
+`run_editor!(...; wait = false)` and the default threads, a unit runs at once on
+the loop task and no held frame shows. Julia can not cancel a task, so a stop ends
+only the waits of the editor and the `sleep` of the scratch module of the code
+tool; code that computes and never waits ends only with the quit. A loop that does
+not allocate delays each garbage collection, and the loop waits for it too.
+
+### PAR-DRAIN-MOVES-PREPARED-DATA
+
+**A feed drain moves only data that its producer prepared off the loop.**
+`drain_changes!` does no I/O, calls no method of a type that a user defines, and
+does work that grows only with what changed, so a frame stays short whatever its
+store holds (`PAR-STORE-THEN-DRAIN` says where the data goes; this rule says what
+a drain may cost). A producer that reads a file, a process or a value of the user
+does that on its own task, and stores the result as plain data, or as a new
+document that no computation reads yet:
+
+- the file-change watcher reads and parses a changed file after it settles, and
+  the drain applies the parsed content in a `ReloadFileOperation`;
+- the task feed samples `/proc` on its reader tasks and keeps the set of tasks
+  that changed, so a drain writes only those;
+- the reflection feed takes the snapshot of a value along its open paths off the
+  loop, and the next drain applies it. A cell value is read on the loop, because
+  only the owner of the cells reads them (rule d of
+  `PAR-LOOP-RUNS-NO-USER-CODE`).
+
 ### PAR-REPORT-NEVER-THROWS
 
 **A fault report never throws, and a barrier never swallows a fault in
@@ -1133,11 +1319,12 @@ A program that a person starts passes `FaultPolicy()` on purpose, and
 turns a real bug into a passing run, which is the one way error tolerance can
 make the program worse than it was.
 
-An exception that means the program is to stop or can not go on is never caught:
-`is_passthrough_exception` names them one at a time — `QuitEditorException`,
-`InterruptException`, `StackOverflowError`, `OutOfMemoryError` — and a layer that
-owns a control-flow exception adds its own method. **Every catch-all arm asks it
-first and rethrows when it answers true**, in every layer: a barrier, the report
+An exception that means the program is to stop or can not go on is never caught,
+because it is not a fault: `is_fault_exception` answers `false` for each one, one
+method at a time — `QuitEditorException`, `InterruptException`,
+`StackOverflowError`, `OutOfMemoryError` — and a layer that owns a control-flow
+exception adds its own method. **Every catch-all arm asks it first and rethrows
+when it answers false**, in every layer: a barrier, the report
 path, a walk, a search, a fallback for a text. "A report never throws" is about an
 ordinary exception; an exception that means stop is a request to stop the editor,
 and a report lets it go on. A catch that hands the exception on to its caller,
@@ -1521,9 +1708,11 @@ describe — a docstring that names a function that no longer exists is a defect
 
 **Persistence crosses cell boundaries by value and never enters the reactive
 graph.** Serialization (binary and natural-format) writes a `Cell`'s *value*
-only — reading it via `getfield(c, :value)`, never `c[]`, so no spurious
-reactive dependency is registered — and never traverses a cell's `dependents`
-out into the projection-output graph. Keep this boundary intact: what is
+only. It reads the value with `peek(c)`, never `c[]`, so no reactive dependency is
+registered, and it asks `is_computed_cell(c)` where it must refuse a computed cell. A
+computed cell that is invalid computes at the save, so a save writes the file
+only after the whole document is written. Serialization never traverses a cell's
+`dependents` out into the projection-output graph. Keep this boundary intact: what is
 durable is the document's data, not the reactive machinery or the projected
 view built over it. Transient view/UI state (hover, drag, scroll, zoom) is
 projection output and is therefore excluded from serialization by construction.

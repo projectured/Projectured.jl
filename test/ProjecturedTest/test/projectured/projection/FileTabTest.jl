@@ -9,6 +9,10 @@
 
 using Test
 
+# The operation of a choice of a band, which names no place.
+struct _FileBandChoiceProbe <: Operation end
+OperationModule.is_self_contained_operation(::_FileBandChoiceProbe) = true
+
 function test_file_tab()
 @testset "a file tab draws its content and saves/reloads it" begin
 
@@ -84,6 +88,75 @@ mktempdir() do dir
         @test occursin(r"^\.content\.entries\[1\]\.value\.value\{\d+\}$",
                        repr(strip_reference_types(answer.path)))
         @test read_intent(renderer, iomap, KeyDown(:s, ModifierKeys(ctrl = true); time = 0.0)) isa SaveFileOperation
+    end
+
+    # The page of a file draws its band above the file, a click on a button of the
+    # band answers the operation of its choice, and a press in the file reaches the
+    # content of the file through the page.
+    @testset "a page draws its band above its file, and the file still takes a press" begin
+        write(path, "{\"greeting\": \"hello\"}")
+        file = make_file(get_file_document_type(path), path, read(path, String))
+        page = FilePage(; content = WidgetScrollPane(file),
+                          band = FileBand(; message = "a.json changed on disk.",
+                                            choices = ["Load it" => _FileBandChoiceProbe()]))
+        @test find_page_file(page) === file
+        @test get_document_title(page) == "a.json"
+        renderer = NaturalToGraphics(measure = _stub)
+        print_page() = print_document(renderer, nothing, page,
+                                      PrinterContext(EmptyReference(), Cell(600), Cell(400),
+                                                     Dict{Symbol,Any}()))
+        iomap = print_page()
+        texts = _app_drawn_at(get_iomap_output(iomap))
+        band_y = only(y for (text, x, y) in texts if occursin("changed on disk", text))
+        (hello_x, hello_y) = only((x, y) for (text, x, y) in texts if occursin("hello", text))
+        @test band_y < hello_y
+        (load_x, load_y) = only((x, y) for (text, x, y) in texts if strip(text) == "Load it")
+        click(x, y) = read_intent(renderer, iomap, MouseClick(:left, x + 3, y + 3, 1, ModifierKeys(); time = 0.0))
+        @test click(load_x, load_y) isa _FileBandChoiceProbe
+        answer = click(hello_x, hello_y)
+        @test answer isa ReplaceSelectionOperation
+        @test occursin(r"^\.content\.content\.content\.entries\[1\]\.value\.value\{\d+\}$",
+                       repr(strip_reference_types(answer.path)))
+        # With no band, the page draws the file alone.
+        page.band = nothing
+        texts = _app_drawn_at(get_iomap_output(print_page()))
+        @test !any(entry -> occursin("changed on disk", entry[1]), texts)
+        @test any(entry -> occursin("hello", entry[1]), texts)
+    end
+
+    # Ctrl+S and Ctrl+O in a page answer the save and the load of the page, so the
+    # save checks the disk first, and both keep the hash of the text of the file.
+    @testset "Ctrl+S and Ctrl+O in a page answer the save and the load of the page" begin
+        write(path, "{\"greeting\": \"hello\"}")
+        page = make_file_tab_content(path)
+        @test page.file_hash == hash(read(path, String))
+        renderer = NaturalToGraphics(measure = _stub)
+        print_page() = print_document(renderer, nothing, page,
+                                      PrinterContext(EmptyReference(), Cell(600), Cell(400), Dict{Symbol,Any}()))
+        iomap = print_page()
+        # A key reaches the file where the caret is: a click puts it in the file.
+        (x, y) = only((x, y) for (text, x, y) in _app_drawn_at(get_iomap_output(iomap))
+                      if occursin("hello", text))
+        click = read_intent(renderer, iomap, MouseClick(:left, x + 3, y + 3, 1, ModifierKeys(); time = 0.0))
+        replace_selection!(page, click.path)
+        iomap = print_page()
+        save = read_intent(renderer, iomap, KeyDown(:s, ModifierKeys(ctrl = true); time = 0.0))
+        @test save isa SaveFilePageOperation && save.page === page && !save.force
+        load = read_intent(renderer, iomap, KeyDown(:o, ModifierKeys(ctrl = true); time = 0.0))
+        @test load isa CompoundOperation
+        @test any(o -> o isa LoadFilePageOperation && o.page === page, load.operations)
+        @test !any(o -> o isa ReloadFileOperation, load.operations)
+        # Another program writes the file: the save shows the band and writes nothing.
+        write(path, "{\"greeting\": \"theirs\"}")
+        @test evaluate_operation(nothing, save) === false
+        @test occursin("theirs", read(path, String))
+        @test page.band isa FileBand
+        texts = _app_drawn_at(get_iomap_output(print_page()))
+        @test any(entry -> occursin("a.json changed on disk.", entry[1]), texts)
+        evaluate_operation(nothing, only(o for o in load.operations if o isa LoadFilePageOperation))
+        @test page.band === nothing
+        @test page.file_hash == hash(read(path, String))
+        @test occursin("theirs", render(find_page_file(page)))
     end
 
     @testset "a file with an empty name declines both" begin

@@ -94,6 +94,7 @@ for _src in _SOURCES
 end
 
 # ── the tests of the packages that came out of base ─────────────────────────
+include("../test/platform/document/WidgetNotes.jl")
 include("../test/platform/document/CollectionDocumentTest.jl")
 include("../test/platform/document/TableInterfaceTest.jl")
 include("../test/platform/document/MouseTargetFieldTest.jl")
@@ -131,7 +132,10 @@ include("../test/platform/document/GraphicsLayoutTest.jl")
 include("../test/platform/document/LayoutAllocatorTest.jl")
 include("../test/platform/document/PrimitiveDocumentTest.jl")
 include("../test/platform/document/PrimitiveTypeInTest.jl")
+include("../test/platform/document/ObjectConversionTest.jl")
+include("../test/platform/document/TextPatternTest.jl")
 include("../test/platform/document/PaneDocumentTest.jl")
+include("../test/platform/document/DocumentReadTest.jl")
 include("../test/platform/document/PaneGeometryTest.jl")
 include("../test/platform/document/DocumentDuplicateTest.jl")
 include("../test/platform/document/TextSelectionEnumeration.jl")
@@ -145,18 +149,20 @@ include("../test/platform/projection/TextToGraphicsTest.jl")
 include("../test/platform/projection/TextLineModelTest.jl")
 include("../test/platform/projection/InlineImageCaretTest.jl")
 include("../test/platform/projection/WordWrappingTest.jl")
-include("../test/platform/projection/TextFilteringTest.jl")
+include("../test/platform/projection/FilteredTextToTextTest.jl")
 include("../test/platform/projection/TextFirstLineTest.jl")
 include("../test/platform/projection/TextLineNumberingTest.jl")
-include("../test/platform/projection/TextHighlightingTest.jl")
+include("../test/platform/projection/HighlightedTextToTextTest.jl")
+include("../test/platform/projection/MarkedTextToTextTest.jl")
 include("../test/platform/projection/SelectionInvertingTest.jl")
 # ── widget projections ───────────────────────────────────────────────────────
 include("../test/platform/projection/ObjectToWidgetTest.jl")
 include("../test/platform/projection/ObjectFieldToWidgetTest.jl")
+include("../test/platform/projection/WidgetValueSlotTest.jl")
 include("../test/platform/projection/ObjectFieldToSyntaxTest.jl")
 include("../test/platform/projection/MouseTargetDriver.jl")
 include("../test/platform/projection/ReflectionToWidgetTest.jl")
-include("../test/platform/projection/ProjectionConfiguringTest.jl")
+include("../test/platform/projection/FindBarViewToWidgetTest.jl")
 include("../test/platform/projection/CellTableToWidgetTableTest.jl")
 include("../test/platform/projection/WidgetTextEditTest.jl")
 include("../test/platform/projection/WidgetButtonTest.jl")
@@ -207,16 +213,39 @@ include("../test/platform/projection/WidgetTablePartsTest.jl")
 include("../test/platform/projection/WidgetTableHeaderLevelsTest.jl")
 include("../test/platform/projection/WidgetTableCellOrderTest.jl")
 include("../test/platform/projection/WidgetTablePartSelectionTest.jl")
+include("../test/platform/arrangement/ArrangementTest.jl")
+include("../test/platform/arrangement/ArrangementFilterSortTest.jl")
+include("../test/platform/arrangement/ArrangementNaturalTest.jl")
+include("../test/platform/arrangement/ArrangementMenuTest.jl")
+include("../test/platform/arrangement/ArrangeCollectionOperationTest.jl")
+include("../test/platform/arrangement/ArrangementQuickTextTest.jl")
+include("../test/platform/arrangement/ArrangementFindTest.jl")
+include("../test/platform/arrangement/ArrangementProgramTest.jl")
+include("../test/platform/arrangement/ArrangementGroupTest.jl")
+include("../test/platform/roster/RosterTest.jl")
+include("../test/platform/roster/RosterTableTest.jl")
+include("../test/platform/roster/RosterSourceTest.jl")
+include("../test/platform/roster/RosterFacetTest.jl")
+include("../test/platform/roster/RosterProgramTest.jl")
+include("../test/platform/tree/TreeTest.jl")
+include("../test/platform/explorer/ExplorerTest.jl")
+include("../test/platform/explorer/ExplorerRowNoteTest.jl")
+include("../test/platform/backgroundwork/BackgroundWorkTest.jl")
+include("../test/platform/projection/WidgetDecorationTest.jl")
+include("../test/platform/systemprocess/SystemProcessTest.jl")
+include("../test/platform/workplan/WorkPlanTest.jl")
 include("../test/platform/projection/LayoutListTest.jl")
 include("../test/platform/projection/WidgetTabStripTest.jl")
 include("../test/platform/projection/WidgetTabLabelTest.jl")
 include("../test/platform/mcplog/McpLogTest.jl")
+include("../test/platform/terminal/TerminalTest.jl")
 include("../test/platform/task/TaskResultTest.jl")
 include("../test/platform/task/TaskExecutionTest.jl")
 include("../test/platform/task/TaskGroupTest.jl")
 include("../test/platform/task/BuildStepTest.jl")
 include("../test/platform/task/TaskDocumentTest.jl")
 include("../test/platform/task/TaskGroupToWidgetTest.jl")
+include("../test/platform/task/TaskPagesTest.jl")
 include("../test/platform/task/TaskVerbsTest.jl")
 include("../test/platform/projection/WidgetSplitPaneTest.jl")
 include("../test/platform/projection/PaneToWidgetTest.jl")
@@ -241,6 +270,7 @@ include("../test/platform/projection/TextFoldingTest.jl")
 # fixtures (Primitive / Text / Screen), so this is their lowest test home.
 include("../test/platform/projection/ClipboardTest.jl")
 include("../test/platform/projection/TooltipProjectionTest.jl")
+include("../test/platform/projection/TooltipNoteTest.jl")
 include("../test/platform/projection/WindowFitTest.jl")
 include("../test/platform/projection/WindowWrapperTest.jl")
 include("../test/platform/projection/DocumentCompositionTest.jl")
@@ -296,6 +326,7 @@ using ProjecturedKernel.IntentModule
 using ProjecturedKernel.IoMapModule
 using ProjecturedKernel.ProjectionModule
 using ProjecturedKernel.ReferenceModule
+using ProjecturedKernel.ToolModule
 using ProjecturedKernelExample
 using ProjecturedPlatform.ProjectionAlgebraModule
 using ProjecturedPlatform.SyntaxModule
@@ -367,6 +398,8 @@ module ConversationTests
 
 using Test
 import ProjecturedPlatform
+# The notation of a part of code that a node of a tree names by its first line.
+import ProjecturedJSON
 import ProjecturedKernel
 import ProjecturedPDF
 import ProjecturedConsole
@@ -396,8 +429,13 @@ for _src in _SOURCES
 end
 
 include("../test/platform/conversation/AssistantApiTest.jl")
+include("../test/platform/conversation/AssistantOverviewTest.jl")
+include("../test/platform/conversation/AssistantListTest.jl")
 include("../test/platform/conversation/ConversationThemeTest.jl")
 include("../test/platform/conversation/ExternalAgentTurnTest.jl")
+include("../test/platform/conversation/AgentWorkTest.jl")
+include("../test/platform/conversation/AssistantWorkTest.jl")
+include("../test/platform/conversation/ConversationTreeTest.jl")
 
 include("../test/platform/conversation/ConversationSuite.jl")
 end # module ConversationTests
@@ -463,6 +501,7 @@ include("../test/platform/shell/WindowShellTest.jl")
 include("../test/platform/shell/WindowWrappersTest.jl")
 include("../test/platform/shell/FileDialogTest.jl")
 include("../test/platform/shell/TrackingScreenTest.jl")
+include("../test/platform/shell/EscapeQuittingTest.jl")
 include("../test/platform/shell/DragTrackingTest.jl")
 include("../test/platform/shell/DragPointerShapeTest.jl")
 include("../test/platform/shell/PointerLightTest.jl")
@@ -487,11 +526,46 @@ using ProjecturedKernel.ReferenceModule
 using ProjecturedKernel.SelectionModule
 using ProjecturedKernel.ToolModule
 using ProjecturedPlatform.ProjectionAlgebraModule: IdentityProjection
+using ProjecturedPlatform.FileFormatModule: record_saved_state!, has_unsaved_edits
 using ProjecturedPlatform.UndoModule
+using ProjecturedPlatform.NaturalModule: NaturalToGraphics
+using ProjecturedPlatform.GraphicsModule: GraphicsCanvas, GraphicsText, GraphicsViewport
+using ProjecturedPlatform.StyleModule: FixedMeasure
+using ProjecturedPlatform.PrimitiveModule: PrimitiveString
 
 include("../test/platform/undo/UndoBufferTest.jl")
 include("../test/platform/undo/UndoSuite.jl")
 end # module UndoTests
+
+module FileChangeTests
+
+using Test
+import ProjecturedPlatform
+using ProjecturedKernel.CellModule
+using ProjecturedKernel.DocumentModule
+using ProjecturedKernel.OperationModule
+using ProjecturedKernel.FeedModule
+using ProjecturedKernel.ReferenceModule: Reference
+using ProjecturedPlatform.PrimitiveModule: PrimitiveString
+using ProjecturedPlatform.SerializationModule
+import ProjecturedPlatform.SerializationModule
+using ProjecturedPlatform.FileFormatModule
+using ProjecturedPlatform.FileChangeModule
+import ProjecturedPlatform.FileChangeModule
+using ProjecturedPlatform.UndoModule: UndoBuffer, UndoEntry, push_undo_entry!
+using ProjecturedKernel.EditorModule: Editor, build_editor
+using ProjecturedKernel.DeviceModule: Device
+using ProjecturedKernel.ToolModule: run_with_evaluation_editor
+using ProjecturedPlatform.ProjectionAlgebraModule: IdentityProjection
+using ProjecturedKernelExample: HeadlessBackend
+using ProjecturedPlatform.DomainModule: AcquireDocumentOperation, ReleaseDocumentOperation, ChangeHeldDocumentsOperation,
+    is_document_held
+using ProjecturedPlatform.PaneModule: PaneTab
+using ProjecturedPlatform.WidgetModule: WidgetScrollPane
+
+include("../test/platform/filechange/FileChangeStoreTest.jl")
+include("../test/platform/filechange/FileChangeSuite.jl")
+end # module FileChangeTests
 
 module DisplayTests
 
@@ -514,7 +588,8 @@ include("../test/platform/display/EditorDisplayTest.jl")
 include("../test/platform/display/DisplaySuite.jl")
 end # module DisplayTests
 
-for _part in (FaultTests, FileSystemTests, ConversationTests, HelpTests, ShellTests, UndoTests, DisplayTests)
+for _part in (FaultTests, FileSystemTests, ConversationTests, HelpTests, ShellTests, UndoTests,
+              FileChangeTests, DisplayTests)
     Core.eval(@__MODULE__, Expr(:using, Expr(:., :., nameof(_part))))
     for _n in names(_part)
         _n === nameof(_part) || Core.eval(@__MODULE__, Expr(:export, _n))

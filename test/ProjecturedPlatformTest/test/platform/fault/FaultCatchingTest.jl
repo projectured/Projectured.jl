@@ -100,7 +100,7 @@ function _read_with_marks(read, context)
         try
             return read()
         catch exception
-            exception isa RecordedFaultException || rethrow()
+            exception isa RecordedCellFaultException || rethrow()
             foreach(show_barrier_mark!, noted)
             empty!(noted)
         end
@@ -182,7 +182,7 @@ function test_fault_catching()
         @test operation isa ReplaceSelectionOperation
         report = evaluate_reference(leaf, operation.path)
         @test report isa FaultReport
-        @test occursin("leaf 1 is odd", _read_fault_tooltip(report).content)
+        @test occursin("leaf 1 is odd", _read_fault_tooltip(report).text)
 
         # The same path, twice: a selection that named a new report on every
         # frame would be lost on the next one.
@@ -204,13 +204,14 @@ function test_fault_catching()
         report = FaultReport(site = "print", origin = "OddLeafBreaker",
                              message = "BoundsError: index 4 of a vector of 3")
         # The one line a mark draws is cut where the mark ends; the window says
-        # what failed, where it was caught, and the whole message.
+        # what failed, the whole message, and where it was caught.
         said = _read_fault_tooltip(report)
-        @test said isa TextString
-        text = string(said.content)
-        @test occursin("OddLeafBreaker", text)
-        @test occursin("print", text)
-        @test occursin("BoundsError: index 4 of a vector of 3", text)
+        @test said isa TooltipNote
+        @test (said.title, said.tone) == ("OddLeafBreaker", :error)
+        @test said.text == "BoundsError: index 4 of a vector of 3"
+        @test said.facts == ["Caught in" => "the print"]
+        # No barrier made this report, so no right click tries it again.
+        @test said.hint === nothing
 
         # A mark is inert, so the selection never names the report: what a person
         # points at is the widget the mark is drawn as, and a widget says what its
@@ -218,7 +219,7 @@ function test_fault_catching()
         alert = print_document(FaultToWidget(), FaultToWidget(), report,
                                PrinterContext()).output
         @test alert isa WidgetAlert
-        @test String(_read_fault_tooltip(alert).value) == text
+        @test _read_fault_tooltip(alert).text == said.text
     end
 
     @testset "the barrier needs no store to work" begin
@@ -228,6 +229,20 @@ function test_fault_catching()
         context = _make_tolerant_context(nothing)
         iomap = print_document(projection, nothing, _probe_branch(4), context)
         @test length(_read_with_marks(() -> _drawn_children(iomap.output), context)) == 4
+    end
+
+    @testset "a full store leaves a mark its own fault" begin
+        # The store is full, and its one record waits for the drain, so the
+        # overflow record counts the new fault. The mark still names its own.
+        store = FaultStore(capacity = 1)
+        record_fault!(store, :print; origin = :Other, exception = ErrorException("first"))
+        barrier = FaultCatchingProjection(inner = _probe_dispatch(),
+                                          substitute = FaultToSyntax())
+        context = _make_tolerant_context(store)
+        iomap = print_document(barrier, barrier, FaultProbeLeaf(value = 1), context)
+        _read_with_marks(() -> _force_cell(iomap.output), context)
+        @test occursin("leaf 1 is odd", iomap.fault.message)
+        @test last(get_fault_records(store)).origin === :FaultStore
     end
 
     @testset "the fault reaches the log with its count" begin
@@ -324,24 +339,29 @@ function test_fault_catching()
         tolerant.fault_policy = FaultPolicy(is_console_enabled = false,
                                             is_sound_enabled = false)
         run_print_stage!(tolerant)
-        @test_throws RecordedFaultException _drawn_children(tolerant.iomap.output)
+        @test_throws RecordedCellFaultException _drawn_children(tolerant.iomap.output)
         # The frame shows the mark of the barrier that took the fault.
         report_frame_faults!(tolerant)
         @test length(_drawn_children(tolerant.iomap.output)) == 2
         @test length(get_fault_records(tolerant.faults)) == 1
     end
 
-    @testset "a person opens the session's log, and a window fills it" begin
+    @testset "a person opens the log of the editor, and a window fills it" begin
         domain = ProjecturedPlatform.DomainModule
-        log = get_session_fault_log()
-        # `Ctrl+T` and `faults` give the one log of the session, never a fresh
-        # one that nothing fills.
-        @test domain.make_insertion_document(FaultLog) === log
+        editor = Editor(_probe_branch(2), _probe_dispatch(); backend = HeadlessBackend(), devices = Device[])
+        log = get_session_fault_log(; editor)
+        # `Ctrl+T` and `faults` give the one log of the session of the editor,
+        # never a fresh one that nothing fills.
+        @test run_with_evaluation_editor(() -> domain.make_insertion_document(FaultLog), editor) === log
+        @test get_session_fault_log() !== log
         @test "faults" in domain.get_insertion_names(FaultLog)
         @test get_document_title(log) == "Faults"
-        # A saved window keeps the capacity of the log and none of its faults.
-        @test ProjecturedPlatform.SerializationModule.pred_arguments(log) ==
-              ((), Pair{Symbol,Any}[:capacity => log.capacity])
+        # A saved window keeps that it shows the log of the session, and none of its
+        # faults: a load gives the log of the session of its editor.
+        serialization = ProjecturedPlatform.SerializationModule
+        @test serialization.pred_arguments(log) == ((), Pair{Symbol,Any}[])
+        @test run_with_evaluation_editor(() -> serialization.make_pred_document(FaultLog, (), Pair{Symbol,Any}[]),
+                                         editor) === log
 
         store = FaultStore()
         attach_fault_target!(store, log)

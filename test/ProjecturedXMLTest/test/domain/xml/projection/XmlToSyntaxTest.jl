@@ -5,9 +5,10 @@ x2s = RecursiveProjection(XmlToSyntax())
 @test render(print_document(x2s, XmlText("hi")).output) == "hi"
 @test render(print_document(x2s, XmlElement("br")).output) == "<br></br>"
 
-# element with an attribute and a text child
+# element with an attribute and a text child: the body puts each child on a line
+# of its own, and `render` joins the texts with their breaks
 el = XmlElement("a", [XmlAttribute("href", "x")], XmlDocument[XmlText("hi")])
-@test render(print_document(x2s, el).output) == "<a href=\"x\">hi</a>"
+@test render(print_document(x2s, el).output) == "<a href=\"x\">\nhi\n</a>"
 
 # attribute values are XML-escaped
 @test render(print_document(x2s, XmlElement("x", [XmlAttribute("k", "a\"b")])).output) ==
@@ -19,7 +20,7 @@ etree = print_document(x2s, edoc).output
 eout = Cell(@computation render(etree))
 @test eout[] == "<old></old>"
 edoc.tag = "new"
-@test !is_cell_up_to_date(eout)
+@test !is_cell_valid(eout)
 @test eout[] == "<new></new>"
 
 end # @testset "XmlToSyntax"
@@ -31,8 +32,8 @@ mutable struct _XmlReaderEditor
     iomap::Any
 end
 
-# Drive the XML reader command set (the Lisp xml/insertion, xml/element and
-# xml/attribute readers). Each XML projection must work as the whole document on
+# Drive the XML reader command set: the insertion, element and attribute
+# readers. Each XML projection must work as the whole document on
 # its own, so the cursor is placed with a selection and a raw key gesture is fed
 # straight to the root XML reader.
 function test_xml_to_syntax_reader()
@@ -110,7 +111,7 @@ end
 @testset "Space inserts an attribute and selects its name" begin
     e = XmlElement("a")
     # Cursor in the start tag → fires.
-    op = read_key(e, @reference(e, tag{0}), KeyDown(:space, ModifierKeys(); time = 0.0))
+    op = read_key(e, @reference(e, tag{0}), KeyPress(' '; time = 0.0))
     @test op isa CompoundOperation
     ed = _XmlReaderEditor(e, nothing)
     evaluate_operation(ed, op)
@@ -119,7 +120,7 @@ end
     @test selof(e.attrs[1]) isa ConcreteReference  # cursor in the name
     # Gating: Space while editing a child node declines.
     e2 = XmlElement("a", XmlDocument[XmlText("hi")])
-    @test read_key(e2, @reference(e2, children[1].content{0}), KeyDown(:space, ModifierKeys(); time = 0.0)) === nothing
+    @test read_key(e2, @reference(e2, children[1].content{0}), KeyPress(' '; time = 0.0)) === nothing
 end
 
 @testset "Insert key inserts a generic insertion child" begin

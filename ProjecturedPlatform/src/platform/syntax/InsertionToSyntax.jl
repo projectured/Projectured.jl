@@ -1,7 +1,6 @@
 # Fragment of `SyntaxModule`.
 #
-# The insert-by-typing mechanism, ported from the Common Lisp ProjecturEd
-# `document-to-syntax.lisp` — now with the live completion hint and green/red
+# The insert-by-typing mechanism, with the live completion hint and green/red
 # commitability colouring.
 #
 # `InsertionToSyntaxLeaf(commit; prefix, suffix, completion)` projects any
@@ -29,8 +28,7 @@
 # domain scope), and constructors all come from `DomainModule`'s
 # reflection — nothing here is a table. The chain is *domain-independent
 # insertion (`DocumentInsertion`) → domain-specific insertion
-# (`DomainInsertionToSyntaxLeaf(root)`) → the domain's values*, exactly as in
-# the Lisp editor.
+# (`DomainInsertionToSyntaxLeaf(root)`) → the domain's values*.
 #
 # Nothing here names a domain. A domain that wants a *source* insertion — one
 # that commits by parsing rather than by naming a type — builds its own leaf from
@@ -43,8 +41,10 @@
 struct InsertionToSyntaxLeaf <: Projection
     prefix::String
     suffix::String
-    commit::Any            # (ins, text::String) -> Union{Document,Nothing}
-    completion::Any        # (ins) -> (state::Symbol, continuation::String)
+    # (ins, text::String, place::Type) -> Union{Document,Nothing}, where `place` is the
+    # declared type of the place of the insertion, `Any` when it is unknown.
+    commit::Any
+    completion::Any        # (ins, place::Type) -> (; state, hint, extension)
     # `nothing`, or (ins, text::String, caret::Int) -> Union{Document,Nothing}:
     # the document that replaces the insertion at the key that makes `text`, with
     # its caret at `caret`, or `nothing` to keep the insertion.
@@ -69,6 +69,11 @@ struct InsertionToSyntaxLeaf <: Projection
     # The text of an empty buffer, a function of the insertion that gives it, or
     # `nothing` for none.
     placeholder::Any
+    # The declared type of the place where the insertion stands, or `nothing` when
+    # it is unknown. The rule in a table holds `nothing`; its print finds the place
+    # in the reference of its context and prints with a copy that holds it, so the
+    # reader of the insertion gets the place too.
+    place::Any
 end
 
 function InsertionToSyntaxLeaf(commit; prefix::AbstractString = "", suffix::AbstractString = "",
@@ -82,8 +87,17 @@ function InsertionToSyntaxLeaf(commit; prefix::AbstractString = "", suffix::Abst
                           something(hint, get_syntax_style(theme, :hint_text)),
                           get_syntax_style(theme, :wrong_color),
                           get_syntax_style(theme, :found_color),
-                          placeholder isa AbstractString ? String(placeholder) : placeholder)
+                          placeholder isa AbstractString ? String(placeholder) : placeholder,
+                          nothing)
 end
+
+_with_insertion_place(p::InsertionToSyntaxLeaf, place) =
+    InsertionToSyntaxLeaf(p.prefix, p.suffix, p.commit, p.completion, p.commit_at_key, p.cancel,
+                          p.label, p.value, p.hint, p.wrong_color, p.found_color, p.placeholder,
+                          place)
+
+# The type that the place of the insertion admits, `Any` when the place is unknown.
+_get_insertion_place(p::InsertionToSyntaxLeaf) = something(p.place, Any)
 
 # ── Completion policies ───────────────────────────────────────────────────────
 #
@@ -97,8 +111,9 @@ end
 
 
 # Source insertions (SQL) are committable when the buffer parses: green =
-# complete source, red = not (yet) parseable; there is nothing to Tab-extend.
-parse_completion(parser) = ins -> begin
+# complete source, red = not (yet) parseable; there is nothing to Tab-extend. A
+# source names no candidate, so the place does not narrow it.
+parse_completion(parser) = (ins, place::Type = Any) -> begin
     value = something(ins.value, "")
     isempty(strip(value)) && return (state = :empty, hint = "", extension = "")
     parsed = try parser(value); true catch; false end
@@ -166,18 +181,23 @@ end
 # commitability feedback updates per keystroke with no re-print.
 
 function print_document(p::InsertionToSyntaxLeaf, recursion, ins, ctx)
+    place = ctx isa PrinterContext ? find_declared_place_type(peek(ctx.reference)) : nothing
+    place === p.place ||
+        return print_document(_with_insertion_place(p, place), recursion, ins, ctx)
     iomap_cell = Cell(nothing)
     label_style = unwrap_cell(p.label)
     hint_style = unwrap_cell(p.hint)
     typed = TextString(Cell(@computation something(ins.value, "")),
                        Cell(unwrap_cell(p.value).font),
-                       Cell(@computation _typed_color(p, p.completion(ins).state)),
+                       Cell(@computation _typed_color(p,
+                                                      p.completion(ins, _get_insertion_place(p)).state)),
                        Cell(nothing), Cell(nothing), Cell(nothing), Cell(nothing))
     # An empty buffer with a placeholder shows the placeholder alone: it stands in
     # the span of the completion hint, and the frame of the label is empty.
     placeholder_of() = p.placeholder isa Function ? p.placeholder(ins) : p.placeholder
     shows_placeholder() = placeholder_of() !== nothing && isempty(something(ins.value, ""))
-    hint = TextString(Cell(@computation shows_placeholder() ? placeholder_of() : p.completion(ins).hint),
+    hint = TextString(Cell(@computation shows_placeholder() ? placeholder_of() :
+                                        p.completion(ins, _get_insertion_place(p)).hint),
                       Cell(hint_style.font),
                       Cell(@computation shows_placeholder() ? label_style.color : hint_style.color),
                       Cell(nothing), Cell(nothing), Cell(nothing), Cell(nothing))
@@ -264,13 +284,16 @@ end
 # shows. Value char-editing (insert / Backspace / Delete) mirrors PrimitiveString;
 # Commit / Cancel are projection-specific (they call `p.commit` / abort to a
 # `DocumentNothing`), which is why this stays a projection table rather than a
-# document-level `@gestures`. ModifierKeys are matched loosely (`mods=nothing`) to
-# preserve the old bare `@gesture_case` patterns exactly. Operations capture `p`/`ins`
-# and return `nothing` to decline (no value cursor / commit refused).
+# document-level `@gestures`. ModifierKeys are matched loosely (`mods=nothing`).
+# Operations capture `p`/`ins` and return `nothing` to decline (no value cursor /
+# commit refused).
 function get_projection_gesture_bindings(p::InsertionToSyntaxLeaf, iomap)
+    # The rule that printed the insertion holds its place. A dispatch table passes the
+    # rule of the table, so the printed one comes from the iomap.
+    iomap.projection isa InsertionToSyntaxLeaf && (p = iomap.projection)
     ins = iomap.input
     GestureBinding[
-        GestureBinding(KeyDownPattern(:return),
+        GestureBinding(KeyPressPattern('\n'),
                        (doc, event) -> _insertion_commit(p, ins);
                        description = "Commit insertion", domain = "insertion"),
         # Escape aborts to the domain's own placeholder (`get_nothing_document`, a
@@ -282,7 +305,7 @@ function get_projection_gesture_bindings(p::InsertionToSyntaxLeaf, iomap)
         # Tab accepts the completion: the full remainder when unambiguous, the
         # longest-common-prefix *partial* completion when ambiguous; declines
         # (keeps propagating) when there is nothing to extend.
-        GestureBinding(KeyDownPattern(:tab),
+        GestureBinding(KeyPressPattern('\t'),
                        (doc, event) -> _insertion_tab(p, ins);
                        description = "Accept completion", domain = "insertion"),
         GestureBinding(KeyDownPattern(:backspace),
@@ -293,11 +316,28 @@ function get_projection_gesture_bindings(p::InsertionToSyntaxLeaf, iomap)
                        (doc, event) -> _make_insertion_key_operation(p, ins,
                                            delete_insertion_text_operation(ins, :delete));
                        description = "Delete forward", domain = "insertion"),
-        GestureBinding(KeyPressPattern(nothing),
+        # A type-in holds one line, so it takes printable text only.
+        GestureBinding(KeyPressPattern(nothing; guard = event -> !any(iscntrl, event.text)),
                        (doc, event) -> _make_insertion_key_operation(p, ins,
                                            insert_insertion_text_operation(ins, event.text));
                        description = "Insert character", domain = "insertion"),
+        # Insert widens the insertion of a domain to the insertion of every domain, with
+        # the same text, where the place admits a `DocumentInsertion` as it is: a
+        # person can then type a document of any domain there.
+        GestureBinding(KeyDownPattern(:insert),
+                       (doc, event) -> _make_insertion_widen_operation(ins);
+                       applicable = (doc, selection) -> _is_insertion_widenable(p, ins),
+                       description = "Widen the insertion to every domain", domain = "insertion"),
     ]
+end
+
+_is_insertion_widenable(p::InsertionToSyntaxLeaf, ins) =
+    !(ins isa DocumentInsertion) && p.place isa Type && DocumentInsertion <: p.place
+
+function _make_insertion_widen_operation(ins)
+    text = something(ins.value, "")
+    make_replace_document_operation(EmptyReference(),
+                                    with_value_caret(DocumentInsertion(text), length(text)))
 end
 
 # Insert printable text at the value cursor; nothing without a value[range] cursor.
@@ -309,7 +349,7 @@ end
 # Commit the typed value through the projection's `commit` callback; nothing when
 # the callback refuses (unknown/incomplete value).
 function _insertion_commit(p::InsertionToSyntaxLeaf, ins)
-    doc = p.commit(ins, something(ins.value, ""))
+    doc = p.commit(ins, something(ins.value, ""), _get_insertion_place(p))
     doc === nothing ? nothing : make_replace_document_operation(EmptyReference(), doc)
 end
 
@@ -336,7 +376,7 @@ end
 # after it; nothing without a value cursor or with nothing to extend.
 function _insertion_tab(p::InsertionToSyntaxLeaf, ins)
     _value_range(ins) === nothing && return nothing
-    extension = p.completion(ins).extension
+    extension = p.completion(ins, _get_insertion_place(p)).extension
     isempty(extension) && return nothing
     n = length(something(ins.value, ""))
     ReplaceStringRangeOperation(_value_path(RangeReferenceStep(n, n)), extension)
@@ -380,14 +420,15 @@ end
 # `"json"`, …) live on as `get_insertion_aliases` emitted by each `@domain`.
 
 """
-    default_factory(name) -> Document | nothing
+    default_factory(name; place = Any) -> Document | nothing
 
 Map a typed name to a fresh document — an exact name/alias match or an
-unambiguous prefix of the reflected top-level candidates (`resolve_insertion`
-over `Document`), or `nothing` when `name` doesn't name a committable type.
+unambiguous prefix of the reflected top-level candidates that `place` admits
+(`resolve_insertion` over `Document`), or `nothing` when `name` doesn't name a
+committable type.
 """
-function default_factory(name::AbstractString)
-    T = resolve_insertion(Document, name)
+function default_factory(name::AbstractString; place::Type = Any)
+    T = resolve_insertion(Document, name; place)
     T === nothing ? nothing : make_insertion_document(T)
 end
 
@@ -411,8 +452,8 @@ The domain-independent insertion: `"Insert a new <name> here"`, committing via
 scaled one, or `nothing` for the default styles.
 """
 DocumentInsertionToSyntaxLeaf(; theme = nothing) =
-    InsertionToSyntaxLeaf((ins, text) -> default_factory(text); prefix = "Insert a new ", suffix = " here",
-                          theme)
+    InsertionToSyntaxLeaf((ins, text, place::Type = Any) -> default_factory(text; place);
+                          prefix = "Insert a new ", suffix = " here", theme)
 
 """
     DomainInsertionToSyntaxLeaf(root; prefix = "insert a new ", suffix = " here", placeholder = nothing,
@@ -430,8 +471,8 @@ DomainInsertionToSyntaxLeaf(root::Type;
                             suffix::AbstractString = " here",
                             placeholder::Union{Nothing,AbstractString} = nothing,
                             theme = nothing) =
-    InsertionToSyntaxLeaf((ins, value) -> begin
-            T = resolve_insertion(root, value)
+    InsertionToSyntaxLeaf((ins, value, place::Type = Any) -> begin
+            T = resolve_insertion(root, value; place)
             T === nothing ? nothing : make_insertion_document(T)
         end; prefix, suffix, placeholder, theme)
 

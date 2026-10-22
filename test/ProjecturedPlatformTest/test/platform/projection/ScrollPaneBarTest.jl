@@ -171,14 +171,76 @@ function test_scroll_pane_bar()
         @test _bar_test_written(down, pane, "follow_end") == true
     end
 
+    @testset "a touchpad scrolls the pane by the fraction of a notch" begin
+        pane = WidgetScrollPane(_make_bar_test_content(); size = Point2D(200, 200))
+        iomap = print_document(projection, pane)
+        turn(precise) = _bar_test_xy(_bar_test_written(
+            read_intent(projection, iomap, MouseScroll(0, 0, 100, 100; time = 0.0, precise_dy = precise)),
+            pane, "scroll_position"))
+        whole = turn(-1.0)[2]
+        @test whole > 0
+        @test turn(-0.5) == (0, round(Int, whole / 2))
+    end
+
+    @testset "a fast run of notches scrolls more at each notch, up to the view less one line" begin
+        pane = WidgetScrollPane(WidgetTextarea(join(("line $i" for i in 1:400), "\n"); rows = 400);
+                                size = Point2D(200, 200))
+        iomap = print_document(projection, pane)
+        y() = Int(pane.scroll_position.y[])
+        function turn!(notches, time; precise_dy = notches)
+            before = y()
+            _bar_test_apply!(read_intent(projection, iomap,
+                                         MouseScroll(0, notches, 100, 100; time, precise_dy)))
+            y() - before
+        end
+        step = turn!(-1, 1.0)
+        @test step > 0
+        # Sooner than 80 ms a notch scrolls more, and up to 150 ms as much.
+        @test turn!(-1, 1.05) == round(Int, 1.25 * step)
+        @test turn!(-1, 1.15) == round(Int, 1.25 * step)
+        # A pause, and the other direction, start a new run.
+        @test turn!(-1, 2.0) == step
+        @test turn!(1, 2.05) == -step
+        # The notches of a merged turn share the time since the last notch: a
+        # merged turn that starts a run moves a step for each notch, and two
+        # notches in 0.1 s are a fast pace, so each grows.
+        @test turn!(-2, 3.0) == 2 * step
+        @test turn!(-2, 3.1) == round(Int, 1.25 * step) + round(Int, 1.5625 * step)
+        # A touchpad moves its fraction and ends the run.
+        @test turn!(0, 3.15; precise_dy = -0.5) == round(Int, step / 2)
+        @test turn!(-1, 3.2) == step
+        # A long fast run stops growing at the view less one line: a notch is
+        # three lines.
+        for k in 1:20
+            turn!(-1, 4.0 + 0.05 * k)
+        end
+        @test turn!(-1, 5.1) == 200 - step ÷ 3
+        # In a view less than four lines tall, a notch moves the view less one
+        # line, and at least one line, so it passes no line unseen.
+        line = step ÷ 3
+        for height in (2 * line + line ÷ 2, 30 * line ÷ 10)
+            small = WidgetScrollPane(WidgetTextarea(join(("line $i" for i in 1:400), "\n"); rows = 400);
+                                     size = Point2D(200, height))
+            small_iomap = print_document(projection, small)
+            _bar_test_apply!(read_intent(projection, small_iomap,
+                                         MouseScroll(0, -1, 100, height ÷ 2; time = 10.0)))
+            @test Int(small.scroll_position.y[]) == max(line, height - line)
+        end
+    end
+
     @testset "the pointer on a bar names the bar and lights it" begin
         area = _make_bar_test_content()
         pane = WidgetScrollPane(area; size = Point2D(200, 200))
-        driver = MttDriver(projection, pane)
+        # A clock that the test moves, so the thumb can fade out.
+        clock = Clock()
+        driver = MttDriver(projection, pane,
+                           print_document(projection, nothing, pane,
+                                          ProjecturedKernel.ProjectionModule.with_clock(PrinterContext(), clock)))
         found = _find_test_pane_bar(driver.iomap, "vertical_scroll_bar")
         bar = found.document
         thumb = found.iomap.output.elements[end - 1]
         rest = thumb.color
+        @test rest == color_transparent
         @test strip_reference_types(compute_part_at_point(driver.iomap, 198, 100)) ==
               ConcreteReference(FieldReferenceStep("vertical_scroll_bar"), EmptyReference())
         _mtt_move!(driver, 198, 100, 1.0)
@@ -191,6 +253,9 @@ function test_scroll_pane_bar()
         _mtt_move!(driver, 20, 100, 1.1)
         @test get_mouse_target(bar) === nothing
         @test get_mouse_target(area) !== nothing
+        # The paint of the next frame sees the leave, and the thumb fades out.
+        @test thumb.color == found.iomap.projection.thumb_scrolled_color
+        ProjecturedKernel.ClockModule.set_clock_time!(clock, 1.0)
         @test thumb.color == rest
     end
 end

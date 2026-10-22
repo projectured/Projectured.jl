@@ -52,7 +52,18 @@ Write `document` to `path`, choosing the format by extension: the binary snapsho
 format for `.pdoc`, the natural text format for an extension a domain parses,
 and the registered file type for any other extension that has one (`.pred`,
 `.txt`, no extension). An extension with neither is written as natural text.
+
+Use it to save a document to a file, in the format of the extension of the file.
+
+# Example
+
+    notes_1 = read_document_file("notes.json")
+    write_document_file(notes_1, "notes_copy.json")
+
+See also `read_document_file` and `export_document`.
 """
+function write_document_file end
+
 function write_document_file(document::Document, path::AbstractString)
     _ext(path) == _BINARY_EXT && return save_document(document, path)
     _is_registered_file_path(path) && return _write_registered_file(document, path)
@@ -69,7 +80,17 @@ Read `path` into a document. When the file exists the format is chosen by
 extension, as [`write_document_file`](@ref) chooses it. When it does not exist,
 return a fresh extension-appropriate seed (see [`make_document_for`](@ref)) so a
 new file opens as an editable placeholder.
+
+Use it to read a file of any supported format into a document.
+
+# Example
+
+    notes_1 = read_document_file("notes.json")
+
+See also `write_document_file` and `import_document`.
 """
+function read_document_file end
+
 function read_document_file(path::AbstractString)
     isfile(path) || return make_document_for(path)
     _ext(path) == _BINARY_EXT && return load_document(path)
@@ -107,7 +128,7 @@ seed and saving creates the file.
 make_document_for(path::AbstractString) = make_document_seed(Val(_ext_symbol(_ext(path))))
 
 """
-    make_file_tab(path, wrap = identity) -> FileDocument
+    make_file_tab(path, wrap = identity) -> file document, or what `wrap` makes of it
 
 The file document a tab opens for `path`: the type its extension is registered
 under, holding the absolute path and [`read_document_file`](@ref)'s content. A
@@ -118,25 +139,57 @@ and `ReloadFileOperation` read the file back through, and what
 the working directory still saves and reloads through the file it was opened
 from.
 
+A file that is its own content ([`is_own_content`](@ref)) holds no content apart
+from itself. The tab then holds the file that
+[`make_file`](@ref) builds from the text under the absolute path.
+
 `wrap` is applied to the content before the file holds it. It is how an
 application gives every file it opens an overlay of its own — a history, say —
-without this layer naming one.
+without this layer naming one. A file that is its own content is its content, so
+`wrap` is applied to the file, and the result is what `wrap` makes.
+
+Use it to make the document of a file, with the content that the file holds on the disk.
+
+# Example
+
+    file_1 = make_file_tab("notes.json")
+
+See also `make_file_tab_content` and `read_document_file`.
 """
-make_file_tab(path::AbstractString, wrap = identity) =
-    get_file_document_type(path)(abspath(path), wrap(read_document_file(path)))
+function make_file_tab end
+
+function make_file_tab(path::AbstractString, wrap = identity)
+    file_type = get_file_document_type(path)
+    content = read_document_file(path)
+    is_own_content(content) || return file_type(abspath(path), wrap(content))
+    # The read built the file with the name that its parser gives, which is not the
+    # absolute path.
+    wrap(make_file(file_type, abspath(path), read(path, String)))
+end
 
 """
-    make_file_tab_content(path, wrap = identity) -> WidgetScrollPane
+    make_file_tab_content(path, wrap = identity) -> FilePage
 
-The content of a tab that shows the file at `path`: the file document of
-[`make_file_tab`](@ref) in a scroll pane, so a file longer than its tab scrolls.
-The scroll is made here, where a file tab is made, and not by the tab: a tab page
-gets no scroll of its own, because a page can hold two parts that each scroll.
+The content of a tab that shows the file at `path`: the [`FilePage`](@ref) of the
+file document of [`make_file_tab`](@ref) in a scroll pane, so a file longer than
+its tab scrolls, and the band of the page stays above it. The page knows the hash
+of the text of the file that it read ([`make_file_page`](@ref)). The scroll is
+made here, where a file tab is made, and not by the tab: a tab page gets no
+scroll of its own, because a page can hold two parts that each scroll.
 
 Use it to open a file in a tab.
+
+# Example
+
+    content_1 = make_file_tab_content("notes.json")
+    open_pane!(content_1; title = "notes.json")
+
+See also `make_file_tab` and `open_pane!`.
 """
+function make_file_tab_content end
+
 make_file_tab_content(path::AbstractString, wrap = identity) =
-    WidgetScrollPane(make_file_tab(path, wrap))
+    make_file_page(WidgetScrollPane(make_file_tab(path, wrap)))
 
 # ── What a file is called ────────────────────────────────────────────────────
 
@@ -155,6 +208,15 @@ get_document_title(file::FileDocument) = basename(String(get_filename(file)))
 
 Write `file`'s current content to its own name. A pure side effect; the
 document is not mutated.
+
+Use it to write an open file to the disk, as Ctrl+S does.
+
+# Example
+
+    file_1 = make_file_tab("notes.json")
+    evaluate_operation(editor, SaveFileOperation(file_1))
+
+See also `ReloadFileOperation` and `write_document_file`.
 """
 struct SaveFileOperation <: Operation
     file::FileDocument
@@ -168,13 +230,153 @@ end
 # `FileDocument`.
 function evaluate_operation(editor, op::SaveFileOperation)
     file = op.file
-    # The file writes the document, not a wrapper around it: a content that
-    # carries a history writes what the history is about. The save walks the
-    # content for nodes of the file's own domain, and a wrapper is not one.
-    content = get_wrapped_document(get_file_content(file))
-    plain = Base.typename(typeof(file)).wrapper(get_filename(file), content)
-    save_file!(plain, dirname(abspath(get_filename(file))))
+    # A file that a person does not edit has nothing of a person to write.
+    is_editable_file_type(typeof(file)) || return nothing
+    _write_file_text!(file) !== nothing
 end
+
+# Write the text of `file` to its name, and answer that text, or `nothing` when
+# nothing was written. The history of the file notes that the file holds what the
+# history holds now.
+function _write_file_text!(file::FileDocument)
+    text = save_file_text!(_make_plain_file(file), dirname(abspath(get_filename(file))))
+    text === nothing || record_saved_state!(get_file_content(file))
+    text
+end
+
+"""
+    record_saved_state!(content) -> nothing
+
+Note that the file that holds `content` holds what `content` is now, as after a
+save, so [`has_unsaved_edits`](@ref) answers `false` until the next edit. A
+history answers it by keeping its newest step. The default does nothing, for a
+content that keeps no history.
+"""
+function record_saved_state! end
+
+record_saved_state!(content) = nothing
+
+"""
+    has_unsaved_edits(content) -> Union{Bool, Nothing}
+
+Whether `content`, what a file holds, has edits since its file was read or saved.
+A history answers it from its steps. The default answers `nothing`, for a content
+that keeps no history and so can not say.
+"""
+function has_unsaved_edits end
+
+has_unsaved_edits(content) = nothing
+
+"""
+    compute_file_text_hash(path) -> UInt64
+
+The hash of the text of the file at `path` on disk now, or the hash of `nothing`
+when there is no file. A [`FilePage`](@ref) keeps the hash of the text of its last
+load or save and compares it with this one, and a watcher of the file reports it
+with a change.
+"""
+compute_file_text_hash(path::AbstractString) = isfile(path) ? hash(read(path, String)) : hash(nothing)
+
+# The facets of a file document, which a roster of files shows, filters and sorts
+# by. The folder is the folder of the file name as the file gives it.
+get_item_facets(::Type{FileDocument}) = [
+    "name" => "the name of the file, without its folder",
+    "folder" => "the folder of the file, as its file name gives it",
+    "has_edits" => "whether the document has edits since its file was read or saved; nothing for a file " *
+                   "that keeps no history"]
+compute_item_facet(file::FileDocument, ::Val{:name}) = basename(String(get_filename(file)))
+compute_item_facet(file::FileDocument, ::Val{:folder}) = dirname(String(get_filename(file)))
+compute_item_facet(file::FileDocument, ::Val{:has_edits}) = has_unsaved_edits(get_file_content(file))
+
+"""
+    get_file_icon(path) -> Symbol
+
+The icon of the kind of the file at `path`, by its extension: Julia code, JSON,
+text and Markdown, a `.pred` document, a NED network, an INI configuration, a
+`.math` formula, and `:file` for any other file.
+
+Use it to show what kind of file a name names, as a file tree and a tab do.
+
+# Example
+
+    get_file_icon("notes.md")
+
+See also `get_document_decoration`.
+"""
+function get_file_icon end
+
+function get_file_icon(path::AbstractString)
+    extension = lowercase(splitext(path)[2])
+    extension == ".jl"            ? :lambda       :
+    extension == ".json"          ? :braces       :
+    extension in (".md", ".txt")  ? :pilcrow      :
+    extension == ".pred"          ? :diamond      :   # a document written as its constructor
+    extension == ".ned"           ? :hexagon      :   # a network: nodes and the links between them
+    extension == ".ini"           ? :file_sliders :   # a configuration: lines of keys and values
+    extension == ".math"          ? :sigma        :
+    :file
+end
+
+# A file says the kind of its name, the edits that no save wrote, and that it
+# takes no edit, with its folder as its detail.
+function get_document_decoration(file::FileDocument)
+    name = String(get_filename(file))
+    conditions = DocumentCondition[]
+    has_unsaved_edits(get_file_content(file)) === true && push!(conditions, DocumentCondition(:unsaved))
+    is_editable_file_type(typeof(file)) || push!(conditions, DocumentCondition(:read_only))
+    folder = dirname(name)
+    DocumentDecoration(; icon = get_file_icon(name), conditions,
+                       detail = folder in ("", ".") ? "" : replace(folder, homedir() => "~"),
+                       tooltip = () -> make_file_note(name; lines = _count_file_lines(file)))
+end
+
+# The lines of a file that holds plain text, and `nothing` for a file whose
+# content is a document.
+function _count_file_lines(file::FileDocument)
+    content = get_wrapped_document(get_file_content(file))
+    text = content isa PrimitiveString ? content.value : content
+    text isa AbstractString || return nothing
+    isempty(text) ? 0 : count(==('\n'), text) + (endswith(text, '\n') ? 0 : 1)
+end
+
+"""
+    make_file_note(path; lines = nothing) -> TooltipNote
+
+What a row of the file `path` says when the pointer rests on it: its name, its
+full path, its format by its extension, and its lines when they are known. It
+reads no disk.
+"""
+function make_file_note(path::AbstractString; lines::Union{Integer,Nothing} = nothing)
+    extension = uppercase(lstrip(splitext(path)[2], '.'))
+    facts = Pair{String,Any}["Path" => replace(String(path), homedir() => "~")]
+    isempty(extension) || push!(facts, "Format" => extension)
+    lines === nothing || push!(facts, "Lines" => string(lines))
+    TooltipNote(; title = basename(path), facts)
+end
+
+# The file with the document that it holds and not a wrapper around it: a content
+# that carries a history writes what the history is about. The save walks the
+# content for nodes of the file's own domain, and a wrapper is not one. A file
+# that holds no document, such as a text file, holds a `String`, which the
+# editor edits as a `PrimitiveString` (`_read_registered_file`); the save takes
+# the string back out.
+function _make_plain_file(file::FileDocument)
+    content = get_wrapped_document(get_file_content(file))
+    (content isa PrimitiveString && get_file_domain(typeof(file)) === Union{}) &&
+        (content = something(content.value, ""))
+    Base.typename(typeof(file)).wrapper(get_filename(file), content)
+end
+
+"""
+    compute_file_text(file) -> String
+
+The text that `SaveFileOperation` writes for `file` now: the document that the
+file holds, without a wrapper such as a history, in the notation of the file
+type. It writes nothing. Use it to compare a file document with its file on
+disk.
+"""
+compute_file_text(file::FileDocument) =
+    cut_file_text(_make_plain_file(file), dirname(abspath(get_filename(file))))
 
 # The text of a file is the text of what it holds, so a caller with a tab in
 # hand asks the file itself. The history a file carries stays out of the answer,
@@ -185,32 +387,72 @@ NaturalModule.print_natural_text(file::FileDocument) =
     end
 
 """
-    ReloadFileOperation(file)
+    ReloadFileOperation(file; content = nothing)
 
-Re-read `file`'s own name from disk and swap the result into its `content` (a
-reactive write, so the projection re-renders). A non-existent file re-seeds
-the extension's insertion placeholder.
+Swap the document of the file of `file` into its `content`, a reactive write, so
+the projection renders it again: `content` when it is given, such as a document
+that a watcher of the file read off the loop with
+[`read_file_content_again`](@ref), or else the file read again from disk now. A
+non-existent file seeds the insertion placeholder of its extension again.
 
 It writes no selection. Ctrl+O answers it together with a selection of the whole
 file, which every reader above makes a path from the root, because the old
 selection pointed into the replaced content.
+
+Use it to read an open file again from the disk, as Ctrl+O does.
+
+# Example
+
+    file_1 = make_file_tab("notes.json")
+    evaluate_operation(editor, ReloadFileOperation(file_1))
+
+See also `SaveFileOperation` and `make_file_tab`.
 """
 struct ReloadFileOperation <: Operation
     file::FileDocument
+    content::Any
 end
+
+ReloadFileOperation(file::FileDocument; content = nothing) = ReloadFileOperation(file, content)
 
 function evaluate_operation(editor, op::ReloadFileOperation)
     file = op.file
+    content = op.content === nothing ? _read_file_again(file) : op.content
     # A wrapper around the content — a history — keeps its place and takes the
     # new document; a plain content is replaced outright.
-    file.content = replace_wrapped_document!(get_file_content(file),
-                                             read_document_file(get_filename(file)))
+    file.content = replace_wrapped_document!(get_file_content(file), content)
     nothing
 end
 
+"""
+    read_file_content_again(type, path) -> document
+
+The document that the file at `path` holds, read as the file type `type` reads
+it. An opener can choose a file type that its extension does not name, such as a
+store in a `.json` file, and the read does not hand that file to the parser of
+the extension. Any task can call it: it reads the file and makes a new document,
+which no computation reads yet.
+"""
+function read_file_content_again(type::Type, path::AbstractString)
+    is_extension_type = has_file_document_type(path) && get_file_document_type(path) === type
+    (isfile(path) && !is_extension_type) ? _read_own_file(type, path) : read_document_file(path)
+end
+
+# The document of the file of `file`, read again as its own file type reads it.
+_read_file_again(file::FileDocument) =
+    read_file_content_again(Base.typename(typeof(file)).wrapper, get_filename(file))
+
+function _read_own_file(type, path::AbstractString)
+    content = is_editable_file_type(type) ? get_file_content(make_file(type, basename(path), read(path, String))) :
+                                            read_file_content(type, path)
+    content isa AbstractString ? PrimitiveString(String(content)) : content
+end
+
 # Both commands need a name; decline (no binding fires) when the file has
-# none — a "Save As" path picker for unnamed files is future work.
-_save_file(doc::FileDocument)   = isempty(get_filename(doc)) ? nothing : SaveFileOperation(doc)
+# none — a "Save As" path picker for unnamed files is future work. A save also
+# declines for a file that a person does not edit.
+_save_file(doc::FileDocument)   =
+    (isempty(get_filename(doc)) || !is_editable_file_type(typeof(doc))) ? nothing : SaveFileOperation(doc)
 _reload_file(doc::FileDocument) =
     isempty(get_filename(doc)) ? nothing :
         CompoundOperation(Any[ReloadFileOperation(doc), ReplaceSelectionOperation(EmptyReference())])

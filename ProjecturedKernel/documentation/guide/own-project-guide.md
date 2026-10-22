@@ -20,10 +20,13 @@ A `using` line reaches only the packages that you added: a package that another 
 
 A contributor reaches the packages by path instead, the way this repository reaches its own packages.
 
-1. Clone ProjecturEd beside your project, and AutoIntegration beside it, because the umbrella names that folder:
+1. Clone ProjecturEd beside your project, and four packages of other repositories beside it, because the packages of ProjecturEd name their folders:
 
    ```sh
-   git clone https://github.com/projectured/AutoIntegration.jl auto-integration
+   git clone https://github.com/projectured/AutoIntegration.jl
+   git clone https://github.com/projectured/AgentClientProtocol.jl
+   git clone https://github.com/projectured/ClaudeCodeACP.jl
+   git clone https://github.com/projectured/ModelContextProtocol.jl
    git clone https://github.com/projectured/projectured-julia
    ```
 
@@ -110,7 +113,7 @@ using ProjecturedIntegrations, SimpleDirectMediaLayer, DataFrames
 
 `ProjecturedIntegrations` installs every integration and every package that it joins, and loads each one with a package extension when the package it joins is loaded. Use it when you want all of them and do not want to choose.
 
-The model adapters `ProjecturedOllama`, `ProjecturedAnthropic` and `ProjecturedOpenRouter` declare the trigger `Projectured` alone, with no third-party package to join: AutoIntegration loads each one that you installed when `Projectured` is loaded, and a loaded adapter does nothing until you ask for it by name (`assistant = :ollama`). The web backend loads only when you name it, because a loaded web backend becomes the default backend when SDL is absent.
+The model adapters `ProjecturedOllama`, `ProjecturedAnthropic` and `ProjecturedOpenRouter` declare the trigger `Projectured` alone, with no third-party package to join: AutoIntegration loads each one that you installed when `Projectured` is loaded, and a loaded adapter does nothing until you ask for it by name (`assistant = :ollama`). The language server adapter `ProjecturedLanguageServer` declares the same trigger, so a session opens a C or C++ file, and colours its names when `clangd` is installed. The web backend loads only when you name it, because a loaded web backend becomes the default backend when SDL is absent.
 
 An integration that AutoIntegration loads puts no name into `Main`; the names of the integration stay in it. To write `SdlBackend()` yourself, add `using ProjecturedSDL`.
 

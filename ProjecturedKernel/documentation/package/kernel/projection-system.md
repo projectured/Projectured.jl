@@ -98,12 +98,30 @@ The two extra arguments are essential:
   editor's document root to the *current* input, plus the range that the
   parent gives on each axis (`minimum_width`/`maximum_width`,
   `minimum_height`/`maximum_height`: exact, bounded or free) and an open
-  `properties` Dict. Each
+  `properties` Dict. The `reference` is a cell of the path, and a reader reads
+  it with `ctx.reference[]`. A fixed path is an `ImmutableCell`, computed at
+  once, and the child of a fixed path is fixed too, so it costs what a plain
+  path costs. The path of a place that can move after the print, such as a row
+  of a list counted from its head, is a computation, a `Cell`. A print that
+  keeps its context reads the path that holds when it reads: the fault barrier
+  keeps it for a retry and for the origin of a fault, and the dispatch by path
+  reads it in the computation of its choice. A printer that reads the path
+  during its print reads it with `peek(ctx.reference)` or in a computation of
+  its own, so the computation that runs the print does not depend on it. Each
   projection extends the reference before recursing into a child by calling
-  `make_child_context(ctx, step…)` (or `make_child_context(ctx, full_path)`), so every
-  projection's context carries where it sits in the original document. This is
+  `make_child_context(ctx, step…)` or `make_child_context(ctx, full_path)`, so every
+  projection's context carries where it sits in the original document.
+  `make_reference_cell(f, ctx)` makes a cell of `f` of the path of `ctx`: an
+  `ImmutableCell` when the path is fixed, else a computation.
+  `make_child_context(ctx, cell)` gives a child the cell as its path, and
+  `make_child_context(ctx, reference::Reference)` gives it a fixed path. This is
   what enables [ReferenceDispatchingProjection](../platform/projection/higher-order-projections.md) to
-  switch behaviour based on document-root-relative location. The top-level call
+  switch behaviour based on document-root-relative location. It chooses again
+  when its path moves, and it keeps the inner IO map when the choice is the same
+  projection. At a path that can move, the inner IO map reads only a cell of the
+  `objectid` of the choice, which is plain data, so a new path with the same
+  choice stops at the dispatch, and the readers of its output do not compute
+  again. The top-level call
   passes a fresh `PrinterContext()` (whose reference is
   `EmptyReference()`).
 
@@ -457,7 +475,10 @@ cells; an operation writes a cell and the change propagates through the existing
 IoMap with no re-print. This is
 [PAR-STABLE-IOMAP-IDENTITY](../../rule/architecture-invariants.md#par-stable-iomap-identity),
 and `make_reconciled_child_iomaps_cell` (iomap layer) is the shared way to keep
-child-IoMap identity across a structural edit. Note the split: `@iomap`/`@projection`
+child-IoMap identity across a structural edit. It keeps the IoMap of a child by
+the child itself, and gives the child a cell of its index, which follows the
+child when an insert or a delete before it moves it; a child at two places of
+the vector is not kept, and each of its prints has a fixed index. Note the split: `@iomap`/`@projection`
 give the transparent cell *fields*, but wiring those fields as **derivations** (a
 `Cell(@computation …)`, not an eagerly computed value) is what makes them reactive —
 `FocusingProjection` is the reference
@@ -471,14 +492,25 @@ rows are representative (every domain adds its own `*To*` projection).
 
 | Category | Members | Purpose |
 |---|---|---|
-| **Domain-to-domain** | `JsonToSyntax`, `SyntaxToText`, `TextToGraphics`, `WidgetToGraphics`, `PaneToWidget`, `XmlToSyntax`, `ObjectToSyntax`, `BookToSyntax`, `JuliaToSyntax`, `MathToSyntax`, `FileSystemToSyntax`, `PrimitiveToSyntax`, `CollectionToSyntax`, … | Translate between two distinct domains |
-| **Domain-preserving** | `WordWrapping`, `TextLineNumbering`, `TextHighlighting`, `TextFiltering`, `GraphicsCanvasToGraphicsImage`, `ScreenToScreen`, … | Same domain in and out (`ScreenToScreen` is the screen-domain projection — see [the screen pipeline](#the-screen-pipeline)) |
+| **Domain-to-domain** | `JsonToSyntax`, `SyntaxToText`, `TextToGraphics`, `WidgetToGraphics`, `PaneToWidget`, `XmlToSyntax`, `ObjectToSyntax`, `BookToSyntax`, `JuliaToSyntax`, `MathToSyntax`, `FileSystemToSyntax`, `PrimitiveToSyntax`, `CollectionToSyntax`, `HighlightedTextToText`, `FilteredTextToText`, … | Translate between two distinct domains |
+| **Domain-preserving** | `WordWrapping`, `TextLineNumbering`, `GraphicsCanvasToGraphicsImage`, `ScreenToScreen`, … | Same domain in and out (`ScreenToScreen` is the screen-domain projection — see [the screen pipeline](#the-screen-pipeline)) |
 | **Generic (domain-independent)** | `CopyingProjection`, `SortingProjection`, `ReversingProjection`, `FilteringProjection`, `SearchingProjection`, `FocusingProjection`, `IdentityProjection`, `ConstantProjection`, `ObjectToWidget` | Operate on any input domain *by structure, not by type* (8 in `generic/`, plus `ObjectToWidget` in `widget/`). Most also preserve the domain; `ObjectToWidget` is input-independent but produces widgets |
-| **Higher-order** | `ChainingProjection`, `TypeDispatchingProjection`, `PredicateDispatchingProjection`, `ReferenceDispatchingProjection`, `RecursiveProjection`, `SwitchingProjection`, `NestingProjection`, `WindowInputUnwrappingProjection`, `WindowManagingProjection`, `TooltipDecoratorProjection`, `DraggingProjection`, `ProjectionConfiguringProjection` | Compose other projections (8 in `higherorder/`; the other 4 sit beside the domain each one touches) |
+| **Higher-order** | `ChainingProjection`, `TypeDispatchingProjection`, `PredicateDispatchingProjection`, `ReferenceDispatchingProjection`, `RecursiveProjection`, `SwitchingProjection`, `NestingProjection`, `WindowInputUnwrappingProjection`, `WindowManagingProjection`, `TooltipDecoratorProjection`, `DraggingProjection` | Compose other projections (8 in `higherorder/`; the other 3 sit beside the domain each one touches) |
 | **Compound** | `ApplyAtProjection`, `SortingAtProjection` | Convenience combinators built from higher-order primitives |
 
 See [higher-order projections](../platform/projection/higher-order-projections.md) and
 [generic projections](../platform/projection/generic-projections.md) for details.
+
+## A print while a value is still to come
+
+A [provisional value](cell.md#a-provisional-value) must not make a drawing jump. `make_final_holding_cell(compute; is_usable)` ([ProvisionalOutput.jl](../../../source/kernel/projection/ProvisionalOutput.jl)) makes a cell that answers `compute()` when that value is final. While it is provisional, the cell answers the last final value, if `is_usable` accepts it. A value that was never final shows as it is. The cell is provisional while `compute()` is.
+
+```julia
+rows = make_final_holding_cell(() -> sortperm([key(item) for item in items]);
+                               is_usable = rows -> length(rows) == length(items))
+```
+
+A part uses it where its output must not jump, such as the order of a sort whose keys a task still reads. The picking stage of every filter and sort of a collection uses it, so a table keeps its last order until its sort is final. A label needs nothing: it shows the last answer of its background cell, or the default when no answer came.
 
 ## The forward and reverse paths
 
@@ -490,7 +522,7 @@ JsonString ──JsonStringToSyntaxLeaf──► SyntaxLeaf ──SyntaxLeafToTe
    └─────────────────── read_intent chain ◄──── KeyPress / MouseClick ─────────────────┘
 ```
 
-Forward, each step extends the `context`'s reference path (via
+Forward, each step extends the path of the `context` (via
 `make_child_context`) so child projections carry their position relative to the
 document root, and wires its output selection with `map_reference_forward`.
 Backward, each step's IoMap is visited in reverse, with each projection's
@@ -599,15 +631,17 @@ struct MyNodeProjection <: Projection end
 
 function print_document(p::MyNodeProjection, recursion, node::MyNode, ctx)
     # Step 1+2: project the children, and keep their IO maps in one cell.
-    # `make_reconciled_child_iomaps_cell` reuses the IoMap of each child that stays, so an
-    # edit prints again only a child that is new or moved. `print_child`
-    # re-enters the whole pipeline for each child, and `make_child_context`
-    # extends the reference path to child i, typed against `node`.
+    # `make_reconciled_child_iomaps_cell` keeps the IoMap of each child by the
+    # child itself, so an edit prints again only a child that is new. It gives
+    # each child the cell of its index. `print_child` re-enters the whole
+    # pipeline for each child, and `make_element_context` extends the reference
+    # path to the child at the index, typed against `node`, as a computation
+    # that follows the child when an insert or a delete before it moves it.
     child_iomaps = make_reconciled_child_iomaps_cell(
         () -> node.children,
-        (i, child) -> print_child(recursion, child,
-            make_child_context(ctx, node, FieldReferenceStep("children"),
-                               ElementReferenceStep(i))))
+        (index, child) -> print_child(recursion, child,
+            make_element_context(ctx, node, index,
+                i -> (FieldReferenceStep("children"), ElementReferenceStep(i)))))
 
     # Build the output children from the IO maps
     out_children = CellVector(@computation [m.output for m in child_iomaps[]])

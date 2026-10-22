@@ -26,6 +26,9 @@ function test_julia_expression()
         compared = 0
         for make in examples
             document = make()
+            # An example that shows Julia code in a widget, such as a scroll pane, is
+            # no Julia document of its own.
+            document isa JuliaDocument || continue
             text = print_natural_text(document)
             is_code(text) || continue
             @test _julia_expression_of(document) == _julia_expression_of(text)
@@ -46,7 +49,7 @@ function test_julia_expression()
     @testset "a pasted object stands as that very object" begin
         object = PrimitiveString("the object")
         call = parse_julia("f(x, y)")
-        call.arguments[2] = object
+        call.arguments[2] = JuliaObject(object)
         expression = make_julia_expression(call)
         # The object is in the expression itself, in a QuoteNode, and not a copy.
         quoted = only(argument for argument in _strip_julia_lines(expression).args[1].args
@@ -58,6 +61,25 @@ function test_julia_expression()
         @test Core.eval(scratch, expression) === object
         # A document that is not Julia at all is that object alone.
         @test Core.eval(scratch, make_julia_expression(object)) === object
+    end
+
+    @testset "a write of a document of another domain into Julia code makes a JuliaObject" begin
+        object = PrimitiveString("the object")
+        call = parse_julia("f(x, y)")
+        # The write of an operation, as a paste makes it, wraps the document.
+        written = convert_to_declared_type(call, JuliaDocument, object)
+        @test written isa JuliaObject && written.value === object
+        @test is_admitted_by_declared_type(call, JuliaDocument, object)
+        write = ReplaceReferencedValueOperation(nothing, @reference(call, arguments[2]), object)
+        evaluate_operation((document = call,), write)
+        @test call.arguments[2] isa JuliaObject && call.arguments[2].value === object
+        # A Julia node, and a place that takes any document, keep the value as it is.
+        @test convert_to_declared_type(call, JuliaDocument, call.callee) === call.callee
+        @test convert_to_declared_type(call, Document, object) === object
+        # Program code writes what it means, so a bare object is refused there.
+        @test_throws DeclaredTypeMismatchException (call.arguments[1] = object)
+        # A hole offers no JuliaObject, because a JuliaObject needs its value.
+        @test !insertable(JuliaObject)
     end
 
     @testset "a hole stands for the code typed into it" begin

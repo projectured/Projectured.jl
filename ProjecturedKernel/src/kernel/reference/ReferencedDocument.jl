@@ -36,43 +36,41 @@ replaces what the reference names.
     tree = ReferencedDocument(root, EmptyReference())
     first_child = tree.children[1]     # a referenced document at `.children[1]`
     first_child.name                   # the name, a plain string
+
+See also `get_document`, `get_reference` and `find_referenced_document`.
 """
 struct ReferencedDocument{T}
     document::T
     reference::Reference
 end
 
-"""
-    get_document(x) -> T
-
-The document that `x` references, as it was when it was found. Given any value
-that is not a referenced document, it answers that value, so code that unwraps
-works on a referenced document and on a plain one alike.
-
-Use it where code needs the document itself: to check its type, or to hand it to a
-function that has no method for a referenced document.
-"""
+# The document of a referenced document; the document layer answers any other
+# value as it is.
 get_document(x::ReferencedDocument) = getfield(x, :document)
-get_document(x) = x
 
 """
     get_reference(x::ReferencedDocument) -> Reference
 
 The complete reference to the document of `x`, from the root it was found from.
 
-Use it where code needs the place and not the document, such as a reference to
+Use it to get the place and not the document, such as a reference to
 extend, to compare, or to evaluate again.
+
+# Example
+
+    tab_1 = find_pane("items.json")
+    tab_reference_1 = get_reference(tab_1)   # from the root of the editor's document
+
+See also `get_document` and `find_pane_reference`.
 """
+function get_reference end
+
 get_reference(x::ReferencedDocument) = getfield(x, :reference)
 
 # A value that a read answers as a referenced document: a document or a collection.
 # Any other value is a leaf and is answered as it is.
 _is_referenced_value(value) =
     value isa Document || value isa AbstractVector || value isa AbstractDict || value isa Tuple
-
-# What a write stores: the document of a referenced document, so the tree never
-# holds a referenced document.
-_get_stored_value(value) = value isa ReferencedDocument ? get_document(value) : value
 
 # `value` as a referenced document one `step` below the document of `x`. The step
 # records the type of the node it stands on, and the reference ends on the type of
@@ -112,8 +110,11 @@ function Base.getproperty(x::ReferencedDocument, name::Symbol)
     _make_stepped_value(x, FieldReferenceStep(String(name)), value)
 end
 
+# A write through a referenced document stores the document of its value, so the
+# tree never holds a referenced document, also in a collection that is no
+# document of `@document`.
 Base.setproperty!(x::ReferencedDocument, name::Symbol, value) =
-    setproperty!(get_document(x), name, _get_stored_value(value))
+    setproperty!(get_document(x), name, get_document(value))
 
 Base.propertynames(x::ReferencedDocument, private::Bool = false) =
     propertynames(get_document(x), private)
@@ -127,12 +128,12 @@ Base.keys(x::ReferencedDocument) = keys(get_document(x))
 Base.haskey(x::ReferencedDocument, key) = haskey(get_document(x), key)
 
 Base.setindex!(x::ReferencedDocument, value, key) =
-    setindex!(get_document(x), _get_stored_value(value), key)
+    setindex!(get_document(x), get_document(value), key)
 
 Base.push!(x::ReferencedDocument, values...) =
-    (push!(get_document(x), map(_get_stored_value, values)...); x)
+    (push!(get_document(x), map(get_document, values)...); x)
 Base.insert!(x::ReferencedDocument, index::Integer, value) =
-    (insert!(get_document(x), index, _get_stored_value(value)); x)
+    (insert!(get_document(x), index, get_document(value)); x)
 Base.deleteat!(x::ReferencedDocument, index) = (deleteat!(get_document(x), index); x)
 
 # The step from a collection to the value at `key`: the entry of a dictionary, for
@@ -249,6 +250,8 @@ Use it to keep where a document is, and to find the document there again later.
 
     locator = DocumentLocator(root, get_reference(x))
     x = find_referenced_document(locator)
+
+See also `find_referenced_document` and `get_reference`.
 """
 struct DocumentLocator{S}
     start::S
@@ -268,7 +271,17 @@ reference that reached it; `nothing` when the reference no longer reaches a node
 Use it to find a document again after the tree changed, or to bring a
 `ReferencedDocument`, which holds the document as it was, up to date:
 `find_referenced_document(DocumentLocator(root, get_reference(x)))`.
+
+# Example
+
+    tab_1 = find_pane("items.json")
+    locator_1 = DocumentLocator(editor.document, get_reference(tab_1))
+    tab_2 = find_referenced_document(locator_1)   # the tab as it is now
+
+See also `DocumentLocator` and `get_reference`.
 """
+function find_referenced_document end
+
 function find_referenced_document(locator::DocumentLocator)
     document = try_evaluate_reference(locator.start, locator.reference, _NotReached())
     document isa _NotReached && return nothing
@@ -305,7 +318,11 @@ part, read fresh at the call.
 
     parent = Parent(Child(1))
     get_parent(parent, @reference(parent, child))   # parent itself
+
+See also `find_pane` and `get_reference`.
 """
+function get_parent end
+
 function get_parent(root, x::Union{Reference, ReferencedDocument})
     steps = get_reference_steps(strip_reference_types(convert(Reference, x)))
     while !isempty(steps)
@@ -341,7 +358,11 @@ without knowing which layers hold it.
 # Example
 
     data = get_edited_document(tab)      # the document the tab shows, through its layers
+
+See also `get_document` and `find_pane`.
 """
+function get_edited_document end
+
 function get_edited_document(x::ReferencedDocument)
     for _ in 1:_MAX_EDITED_LAYERS
         field = get_edited_field(get_document(x))

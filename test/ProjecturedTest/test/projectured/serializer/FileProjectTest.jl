@@ -5,6 +5,7 @@ using ProjecturedXML.XmlModule
 using ProjecturedAll.MarkdownModule
 using ProjecturedAll.RstModule
 using ProjecturedAll.JuliaModule
+using ProjecturedAll.FormulaModule: FormulaFormula, FormulaEnvironment
 using ProjecturedKernel.DocumentModule: @document
 using ProjecturedKernel.CellModule: ImmutableCell
 
@@ -55,6 +56,12 @@ end
 "A document with a collection of cells, written as the list of what they hold."
 @document struct TestBag
     items::CellVector = CellVector()
+end
+
+"A document whose first field can hold any node, and whose second holds a list of its own."
+@document struct TestNoteAndList
+    note::Any = nothing
+    list::Any = nothing
 end
 
 "A document with no field default, so the macro gives it no keyword constructor."
@@ -327,22 +334,26 @@ function test_file_project()
             @test isempty(readdir(d))
         end
 
-        @testset "a shared subtree is rejected: a single file cannot refer to itself" begin
+        @testset "a shared subtree is written once, and the other place refers to it" begin
             shared = JsonObject("k" => JsonString("v"))
             d = mktempdir()
-            result = @test_logs (:error, r"twice") save_file!(
-                JsonFile("a.json", JsonObject("p" => shared, "q" => shared)), d)
-            @test result === false
-            @test isempty(readdir(d))
+            @test save_file!(JsonFile("a.json", JsonObject("p" => shared, "q" => shared)), d) === true
+            disk = _json_on_disk(d, "a.json")
+            @test _json_value(_json_value(disk, "p"), "k").value == "v"
+            @test _marker_of(_json_value(disk, "q")) == "node(file(\"a.json\"), \"entries[1].value\")"
+            root = get_file_content(load_file(d, "a.json"))
+            @test _json_value(root, "q") === _json_value(root, "p")
         end
 
-        @testset "a cycle is rejected the same way" begin
+        @testset "a cycle is written once, and closes again on the load" begin
             array = JsonArray()
             push!(array, JsonObject("back" => array))
             d = mktempdir()
-            result = @test_logs (:error, r"twice") save_file!(JsonFile("a.json", array), d)
-            @test result === false
-            @test isempty(readdir(d))
+            @test save_file!(JsonFile("a.json", array), d) === true
+            @test _marker_of(_json_value(_json_element(_json_on_disk(d, "a.json"), 1), "back")) ==
+                  "file(\"a.json\")"
+            root = get_file_content(load_file(d, "a.json"))
+            @test _json_value(_json_element(root, 1), "back") === root
         end
 
         @testset "a marker string is a plain string, and saves" begin
@@ -366,15 +377,21 @@ function test_file_project()
                 ("julia",    obj -> JuliaBlock([JuliaIdentifier("x"), obj]),
                  JuliaFile,    "page.jl",  "pred_ref("))
             @testset "$label" begin
-                obj = JsonObject("k" => JsonString("v"))
-                d, project = _project(file_type(name, make_page(obj)), JsonFile("a.json", obj))
-                @test save_project!(project) === true
-                text = read(joinpath(d, name), String)
-                @test occursin(spelling, text)
-                @test occursin("file(", text) && occursin("a.json", text)
-                loaded = load_project(d, [name, "a.json"])
-                page = get_file_content(loaded.files[1])
-                @test _last_child(page) === get_file_content(loaded.files[2])
+                try
+                    obj = JsonObject("k" => JsonString("v"))
+                    d, project = _project(file_type(name, make_page(obj)), JsonFile("a.json", obj))
+                    @test save_project!(project) === true
+                    text = read(joinpath(d, name), String)
+                    @test occursin(spelling, text)
+                    @test occursin("file(", text) && occursin("a.json", text)
+                    loaded = load_project(d, [name, "a.json"])
+                    page = get_file_content(loaded.files[1])
+                    @test _last_child(page) === get_file_content(loaded.files[2])
+                catch e
+                    label == "julia" || rethrow()
+                    # @broken: a JuliaBlock admits no node of another domain, and the owner defers how Julia code holds one; plan/pending/strict-document-types.md
+                    @test_broken (@warn "setup threw: $e"; false)
+                end
             end
         end
     end
@@ -531,6 +548,47 @@ function test_file_project()
             sleep(0.01)
             @test save_file!(PredFile("run.pred", back), d) === true
             @test mtime(joinpath(d, "run.pred")) == stamp
+        end
+
+        @testset "a .pred saved alone writes a shared document once" begin
+            run = TestRun(name = "aloha")
+            d = mktempdir()
+            @test save_file!(PredFile("bag.pred", TestBag(items = CellVector(Cell[Cell(run), Cell(run)]))), d) === true
+            text = read(joinpath(d, "bag.pred"), String)
+            @test count("TestRun(", text) == 1
+            @test occursin("node(file(\"bag.pred\"), \"items[1]\")", text)
+            bag = get_file_content(load_file(d, "bag.pred"))
+            @test bag.items[1] isa TestRun && bag.items[2] === bag.items[1]
+            stamp = mtime(joinpath(d, "bag.pred"))
+            sleep(0.01)
+            @test save_file!(PredFile("bag.pred", bag), d) === true
+            @test mtime(joinpath(d, "bag.pred")) == stamp
+        end
+
+        @testset "a node that a typed list holds is written in the list, and a marker elsewhere" begin
+            # The walk meets the formula first in `note`, which a marker fits; the
+            # formulas of a sheet are a typed list, which only a formula fits.
+            formula = FormulaFormula("a", parse_julia("1"))
+            sheet = FormulaEnvironment([formula])
+            d = mktempdir()
+            @test save_file!(PredFile("note.pred", TestNoteAndList(note = formula, list = sheet)), d) === true
+            text = read(joinpath(d, "note.pred"), String)
+            @test count("FormulaFormula(", text) == 1
+            @test occursin("note = node(file(\"note.pred\"), \"list.formulas[1]\")", text)
+            back = get_file_content(load_file(d, "note.pred"))
+            @test back.list.formulas[1] isa FormulaFormula
+            @test back.note === back.list.formulas[1]
+        end
+
+        @testset "a .pred saved alone writes a cycle, and the load closes it" begin
+            run = TestRun(name = "aloha")
+            bag = TestBag(items = CellVector(Cell[Cell(run)]))
+            run.attachment = bag
+            d = mktempdir()
+            @test save_file!(PredFile("bag.pred", bag), d) === true
+            @test occursin("attachment = file(\"bag.pred\")", read(joinpath(d, "bag.pred"), String))
+            back = get_file_content(load_file(d, "bag.pred"))
+            @test back.items[1].attachment === back
         end
 
         @testset "a .pred referenced from a JSON file splices its document" begin

@@ -45,10 +45,22 @@ function test_navigator_gestures()
         @test _nav_is(opened.source, @reference(navigator, content.children[2]))
         (title, menu) = only(opened.layers)
         @test title == "Shelf"
-        @test _nav_item_labels(menu) == ["Open as a page", "Open in a new tab"]
+        @test _nav_item_labels(menu) == ["Open as a page", "Open in a new tab", "Add to explorer"]
         _nav_choose!(editor, opened, _nav_find_item(menu, "Open as a page"))
         @test get_navigator_page(navigator) === shelf
         @test length(navigator.back) == 1
+    end
+
+    @testset "the menu of a part adds it to the explorer of the editor" begin
+        shelf = _nav_make_shelf()
+        navigator = Navigator(_nav_make_linked_page(shelf))
+        editor, backend = _nav_editor(navigator)
+        opened = _nav_right_click(editor, backend, "Shelf")
+        (_, menu) = only(opened.layers)
+        _nav_choose!(editor, opened, _nav_find_item(menu, "Add to explorer"))
+        @test last(get_session_explorer_content(; editor).entries) === shelf
+        # The page stays where it was.
+        @test navigator.address isa EmptyReference
     end
 
     @testset "the menu of a part opens it in a new tab" begin
@@ -57,7 +69,10 @@ function test_navigator_gestures()
         navigator = Navigator(page)
         editor, backend = _nav_editor(navigator; tabs = true)
         opened = _nav_right_click(editor, backend, "Shelf")
-        (_, menu) = only(opened.layers)
+        # The menu of the part is the nearest layer. The tab around the
+        # navigator adds the layer of its own menu after it.
+        (title, menu) = first(opened.layers)
+        @test title == "Shelf"
         _nav_choose!(editor, opened, _nav_find_item(menu, "Open in a new tab"))
         tabs = _nav_tabs(editor)
         @test length(tabs) == 2
@@ -93,6 +108,21 @@ function test_navigator_gestures()
         for description in ("Go back", "Go forward", "Go to the parent page", "Open as a page")
             @test description in descriptions
         end
+    end
+
+    # A roster needs no link of its own: the menu that the navigator gives the part
+    # under the pointer opens the item of a row.
+    @testset "the menu of a row of a roster opens its item" begin
+        chapters = _nav_vector([NavigatorTestChapter("C1", nothing), NavigatorTestChapter("C2", nothing)])
+        roster = link_roster!(Roster(CollectionItems(chapters); columns = ["title"]), chapters)
+        navigator = Navigator(roster)
+        editor, backend = _nav_editor(navigator)
+        opened = _nav_right_click(editor, backend, "C2")
+        @test opened isa OpenContextMenuOperation
+        menus = [menu for (title, menu) in opened.layers if "Open as a page" in _nav_item_labels(menu)]
+        @test length(menus) == 1
+        _nav_choose!(editor, opened, _nav_find_item(only(menus), "Open as a page"))
+        @test get_navigator_page(navigator) === chapters[2]
     end
 end
 end

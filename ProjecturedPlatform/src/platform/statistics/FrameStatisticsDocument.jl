@@ -29,12 +29,16 @@ the value of each of these frames: one column for each row, in the order of the
 rows and in the unit of the row. A value is `NaN` where a frame did not measure
 the name.
 
-`paused` stops the flush, so the numbers stay while a person reads them. The
-other three fields are the view state of the table of the frames: `anchor` is
-the place of the row at the head of its list, counted from the newest frame,
-`top_row` is the row at the top of the table, counted from that head, and
-`scroll_position` is the offset of the table. The table shares the cells of
-`top_row` and `scroll_position`.
+`paused` stops the flush, so the numbers stay while a person reads them.
+`summary_statistic` is the field of a row that the table of the parts of a
+frame shows: `:mean`, `:minimum`, `:maximum`, `:standard_deviation` or `:total`.
+`frame_measure` is what the table of the frames shows for each part: a measure
+of `FRAME_PART_MEASURES`, such as `:time` or `:cell_reads`, or `:other` for the
+measurements that belong to no part. The other three fields are the view state
+of the table of the frames: `anchor` is the place of the row at the head of its
+list, counted from the newest frame, `top_row` is the row at the top of the
+table, counted from that head, and `scroll_position` is the offset of the
+table. The table shares the cells of `top_row` and `scroll_position`.
 """
 @document struct FrameStatistics
     rows::CellVector = CellVector()
@@ -42,6 +46,8 @@ the place of the row at the head of its list, counted from the newest frame,
     frames::Vector{Int} = Int[]
     columns::Vector{Vector{Float64}} = Vector{Float64}[]
     paused::Bool = false
+    summary_statistic::Symbol = :mean
+    frame_measure::Symbol = :time
     anchor::Int = 1
     top_row::Int = 1
     scroll_position::Point2D = Point2D(0, 0)
@@ -49,10 +55,11 @@ end
 
 # The name the tab calls itself, and the name a person types into an empty
 # tab to open one.
-get_document_title(::FrameStatistics) = "Statistics"
-get_insertion_aliases(::Type{FrameStatistics}) = ["statistics"]
+get_document_title(::FrameStatistics) = "Frame statistics"
+get_insertion_aliases(::Type{FrameStatistics}) = ["frame statistics", "statistics"]
 
-# Last session's numbers are not this one's: a load starts an empty table.
+# Last session's numbers are not this one's: a file keeps that it shows the
+# statistics of the session, and a load gives those of the session of its editor.
 pred_arguments(::FrameStatistics) = (), Pair{Symbol, Any}[]
 
 """
@@ -106,22 +113,24 @@ _write_changed_field!(document, field::Symbol, value) =
 
 # ── The session's statistics ─────────────────────────────────────────────────
 
-# One table for the session, the same way the session has one message log:
-# one program runs one editor a person watches.
-const _SESSION_FRAME_STATISTICS = FrameStatistics()
-
 """
-    get_session_frame_statistics() -> FrameStatistics
+    get_session_frame_statistics(; editor = find_evaluation_editor()) -> FrameStatistics
 
-The one statistics table of the session. Every statistics view a person
-opens is this document, so two of them show the same numbers.
+The statistics table of the session of `editor`: by default the editor of the
+evaluation, or of the loop that runs the calling code. Each editor has its own,
+which its statistics feed fills from the frames of that editor; with no editor,
+a new empty table, which nothing keeps and nothing fills. Every statistics view that a person opens in a
+window of the editor is this document, so two of them show the same numbers.
 """
-get_session_frame_statistics() = _SESSION_FRAME_STATISTICS
+get_session_frame_statistics(; editor = find_evaluation_editor()) =
+    editor isa Editor ? get_session_document!(FrameStatistics, editor, FrameStatistics) :
+                        FrameStatistics()
 
-# A person who types `statistics` into an empty tab gets the session's
-# table: a fresh one would never fill, because the feed flushes into the
-# table it was registered with.
+# A person who types `statistics` into an empty tab gets the table of the editor:
+# a fresh one would never fill, because the feed flushes into the table of the
+# session of its editor.
 make_insertion_document(::Type{FrameStatistics}) = get_session_frame_statistics()
+make_pred_document(::Type{<:FrameStatistics}, positional, keywords) = get_session_frame_statistics()
 
 # ── The frame time series ────────────────────────────────────────────────────
 
@@ -145,7 +154,8 @@ end
 get_document_title(::FrameTimeSeries) = "Frame times"
 get_insertion_aliases(::Type{FrameTimeSeries}) = ["frame times"]
 
-# Last session's frames are not this one's: a load starts an empty plot.
+# Last session's frames are not this one's: a file keeps that it shows the frame
+# times of the session, and a load gives those of the session of its editor.
 pred_arguments(::FrameTimeSeries) = (), Pair{Symbol, Any}[]
 
 """
@@ -179,17 +189,44 @@ function _get_frame_time_series_count(plot::FrameTimeSeries)
     isempty(frames) ? 0 : Int(last(frames))
 end
 
-# One plot for the session, for the same reason as the one table above.
-const _SESSION_FRAME_TIME_SERIES = FrameTimeSeries()
-
 """
-    get_session_frame_time_series() -> FrameTimeSeries
+    get_session_frame_time_series(; editor = find_evaluation_editor()) -> FrameTimeSeries
 
-The one frame time series of the session. Every view of it that a person opens
-is this document, so two of them show the same frames.
+The frame time series of the session of `editor`, as
+[`get_session_frame_statistics`](@ref) answers its table: one for each editor,
+and a new empty one that nothing keeps with no editor. Every view of it that a person opens
+in a window of the editor is this document, so two of them show the same frames.
 """
-get_session_frame_time_series() = _SESSION_FRAME_TIME_SERIES
+get_session_frame_time_series(; editor = find_evaluation_editor()) =
+    editor isa Editor ? get_session_document!(FrameTimeSeries, editor, FrameTimeSeries) :
+                        FrameTimeSeries()
 
 # A person who types `frame times` into an empty tab gets the session's series,
 # for the same reason as the table.
 make_insertion_document(::Type{FrameTimeSeries}) = get_session_frame_time_series()
+make_pred_document(::Type{<:FrameTimeSeries}, positional, keywords) = get_session_frame_time_series()
+
+# The recent frames of the session, as a roster reads them: one row for each frame
+# of the series, a named tuple of the number of the frame and of the time of each
+# measurement in seconds. The part reads the names of the series, which is what
+# tells its feed that a view shows it, so the series flushes while a roster
+# shows its frames, and only then.
+struct _SessionFrames end
+
+collect_roster_parts(::_SessionFrames, link) = Any[get_session_frame_time_series()]
+
+function collect_roster_items(::_SessionFrames, link, series)
+    names = Tuple(Symbol[:frame; Symbol.(series.names)])
+    frames = series.frames
+    columns = series.columns
+    RosterItem[RosterItem(NamedTuple{names}((Int(frames[k]), (column[k] for column in columns)...)))
+               for k in eachindex(frames)]
+end
+
+get_document_decoration(statistics::FrameStatistics) =
+    DocumentDecoration(; icon = :chart, tooltip = () -> TooltipNote(; title = "Frame statistics",
+        text = "How long the frames of this window take.",
+        facts = ["Frames" => string(statistics.frame_count), "Paused" => statistics.paused ? "yes" : "no"]))
+get_document_decoration(series::FrameTimeSeries) =
+    DocumentDecoration(; icon = :chart_line, tooltip = () -> TooltipNote(; title = "Frame times",
+        text = "The time of each recent frame.", facts = ["Frames" => string(length(series.frames))]))

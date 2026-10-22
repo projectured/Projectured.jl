@@ -20,6 +20,7 @@ translates one into a document mutation — typically removing the matching
 """
 module ScreenModule
 
+using ..AgentModule
 using ..BackendModule
 using ..CellModule
 using ..CollectionModule
@@ -55,12 +56,13 @@ export ChangeScreenPointerShapeOperation, make_screen_pointer_shape_operation
 export OpenWindowOperation, OpenPopupOperation, CloseWindowOperation,
        ResizeWindowOperation
 export WindowManagingProjection, WindowManagingIoMap
+export EscapeQuittingProjection, EscapeQuittingIoMap
 export ScreenToScreen, ScreenToScreenIoMap, ScreenWindowIoMap
 export make_window_scene, make_window_scene_projection, make_tracking_screen,
        show_document!
-export ScreenDocument, WindowDocument
-export find_part_place
-export show_window_layers, make_window_layer_bindings
+export ScreenDocument, WindowDocument, AUTOMATIC_WINDOW_PLACE, is_automatic_window_place
+export find_part_place, write_part_picture, write_window_picture
+export show_window_layers, make_window_layer_bindings, WINDOW_LAYER_MORE_KEY, WINDOW_LAYER_FEWER_KEY
 export RenderSettings
 
 
@@ -68,7 +70,9 @@ include("ScreenDocument.jl")
 include("WindowManaging.jl")
 include("ScreenToScreen.jl")
 include("WindowScene.jl")
+include("EscapeQuitting.jl")
 include("PartPlace.jl")
+include("PartPicture.jl")
 include("WindowLayers.jl")
 include("DocumentShow.jl")
 include("RenderSettings.jl")

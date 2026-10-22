@@ -24,9 +24,8 @@ The gesture that summons the help window: F1, with any modifiers. It is an ordin
 reified pattern, owned here rather than by the input vocabulary — an event carries no
 intent, so "F1 means help" is this projection's decision and no one else's.
 
-Lisp binds help to Ctrl-H; F1 is unambiguous here, where Ctrl-? would need
-`Ctrl+Shift+/` handling. A key chord would work too, once a chord table entry and a
-chord pattern exist.
+F1 is unambiguous, where Ctrl-? would need `Ctrl+Shift+/` handling. A key chord
+would work too, once a chord table entry and a chord pattern exist.
 """
 const HELP_GESTURE = KeyDownPattern(:f1)
 
@@ -176,9 +175,11 @@ clipboard, so the list names the gestures of the walk and of the clipboard too.
 function wrap_editor!(::Val{:gesture_help}, layer::Symbol, argument, parts::EditorParts)
     options = argument === true ? (;) : argument
     parts.projection = GestureHelpDecoratorProjection(inner = parts.projection, state = GestureHelpState())
-    push!(parts.opened_window_projections,
-          GestureMap => make_gesture_map_projection(get(options, :measure, FontFileMeasure());
-                                                    _get_gesture_help_themes(parts)...))
+    # First: the screen takes the first row whose type the content has, and a wrapper
+    # of a lower layer, such as the shell, ends its rows with one for any `Document`.
+    pushfirst!(parts.opened_window_projections,
+               GestureMap => make_gesture_map_projection(get(options, :measure, FontFileMeasure());
+                                                         _get_gesture_help_themes(parts)...))
     parts
 end
 

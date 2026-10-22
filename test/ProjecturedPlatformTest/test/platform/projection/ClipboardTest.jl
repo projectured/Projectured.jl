@@ -34,6 +34,18 @@ ProjecturedPlatform.ClipboardModule.find_clipboard_document(frame::_ClipboardFra
 end
 DomainModule.accepts_pasted_replacement(::_ClipboardKeeper, value) = value isa _ClipboardKeeper
 
+# A holder of parts: it takes a pasted document that is no plain text, at a text
+# cursor in its text, with an operation of its own.
+@document struct _ClipboardHolder <: Document
+    text::Any
+end
+struct _ClipboardTakeOperation <: Operation
+    holder::_ClipboardHolder
+    value::Any
+end
+DomainModule.make_pasted_document_operation(holder::_ClipboardHolder, path, value) =
+    _ClipboardTakeOperation(holder, value)
+
 function test_clipboard()
 
 # A reference path built from raw steps.
@@ -178,7 +190,7 @@ end
     @test op.operations[2] isa ReplaceSelectionOperation
 
     # Paste with no stored slice does not fire: it falls through to the content
-    # reader (matching Lisp's merge-commands). With no replace produced here, the
+    # reader. With no replace produced here, the
     # clipboard does not emit a paste compound.
     empty_slice = ClipboardSlice(PrimitiveString("x"))
     empty_slice.selection = cpath(FieldReferenceStep("content"))
@@ -315,11 +327,12 @@ end
     buf = Ref("")
     set_os_clipboard_backend!(read = () -> buf[], write = t -> (buf[] = String(t); true))
     try
-        # "world" = chars 6..11 (0-based boundaries) in span 1 of "hello world".
+        # "world" = chars 6..11 (0-based boundaries) in run 1 of line 1 of "hello world".
         trange = cpath(FieldReferenceStep("elements"), RangeReferenceStep(0, 1),
+                       FieldReferenceStep("elements"), RangeReferenceStep(0, 1),
                        FieldReferenceStep("content"), RangeReferenceStep(6, 11))
         mkslice(; stored=nothing) = begin
-            content = TextBlock(TextString("hello world"))
+            content = TextBlock(TextLine(TextString("hello world")))
             content.selection = trange
             s = ClipboardSlice(content, stored)
             s.selection = ConcreteReference(FieldReferenceStep("content"), trange)
@@ -370,12 +383,14 @@ end
         @test op.replacement == "OSPASTE"
 
         # An empty caret (no range) declines copy.
-        content = TextBlock(TextString("hello world"))
+        content = TextBlock(TextLine(TextString("hello world")))
         content.selection = cpath(FieldReferenceStep("elements"), RangeReferenceStep(0, 1),
+                                  FieldReferenceStep("elements"), RangeReferenceStep(0, 1),
                                   FieldReferenceStep("content"), RangeReferenceStep(3, 3))
         sc = ClipboardSlice(content)
         sc.selection = ConcreteReference(FieldReferenceStep("content"),
             cpath(FieldReferenceStep("elements"), RangeReferenceStep(0, 1),
+                  FieldReferenceStep("elements"), RangeReferenceStep(0, 1),
                   FieldReferenceStep("content"), RangeReferenceStep(3, 3)))
         iom = print_document(p, IdentityProjection(), sc, PrinterContext())
         # Declines (no range): no copy compound is produced — it falls through to the
@@ -656,6 +671,36 @@ end
         @test (read_intent(p, iomap, KeyDown(:v, ctrl; time = 0.0)) isa CompoundOperation) == taken
         # A cut writes an empty document, which this slot does not take either.
         @test !(read_intent(p, iomap, KeyDown(:x, ctrl; time = 0.0)) isa CompoundOperation)
+    end
+end
+
+@testset "a document on the path of a text cursor takes a pasted document that is no plain text" begin
+    buffer = Ref("system text")
+    set_os_clipboard_backend!(read = () -> buffer[], write = text -> (buffer[] = String(text); true))
+    try
+        cursor = cpath(FieldReferenceStep("content"), FieldReferenceStep("text"), FieldReferenceStep("value"),
+                       RangeReferenceStep(2, 2))
+        function paste(stored, modifiers)
+            holder = _ClipboardHolder(PrimitiveString("hello"))
+            slice = ClipboardSlice(holder, stored)
+            set_selection!(slice, cursor)
+            p = ClipboardSliceToAnyProjection()
+            iomap = print_document(p, IdentityProjection(), slice, PrinterContext())
+            (holder, read_intent(p, iomap, KeyDown(:v, modifiers; time = 0.0)))
+        end
+        stored = _ClipboardPair(PrimitiveString("a"), PrimitiveString("b"))
+        holder, taken = paste(stored, ctrl)
+        @test taken isa _ClipboardTakeOperation
+        @test taken.holder === holder && taken.value === stored
+        # Paste-copy gives the holder a fresh copy.
+        _, copied = paste(stored, ctrl_shift)
+        @test copied isa _ClipboardTakeOperation
+        @test copied.value isa _ClipboardPair && copied.value !== stored
+        # Plain text goes into the text, and the holder is not asked.
+        _, text = paste(PrimitiveString("x"), ctrl)
+        @test text isa ReplaceStringRangeOperation && text.replacement == "system text"
+    finally
+        reset_os_clipboard_backend!()
     end
 end
 

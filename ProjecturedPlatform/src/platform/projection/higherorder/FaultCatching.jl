@@ -7,11 +7,11 @@
 # stack of the read that fails, and a `try` around the print catches almost
 # nothing.
 #
-# So the barrier prints its part inside a fault scope (`run_in_fault_scope`).
+# So the barrier prints its part inside a fault scope (`run_in_cell_fault_scope`).
 # Each computation made there keeps the barrier, and the computation that throws
 # hands its fault to it, whatever read reached the cell. The barrier records the
 # fault and goes on the list of the editor. The exception goes on up the stack as
-# a `RecordedFaultException`, which no barrier above records again, and the frame
+# a `RecordedCellFaultException`, which no barrier above records again, and the frame
 # that read it loses that read.
 #
 # Between two frames the editor shows the mark of each barrier on its list
@@ -70,7 +70,7 @@ false, which is what `make_strict_fault_policy()` gives a test editor, so a brok
 projection fails its test. A context with no policy is the same as the strict
 policy, for the same reason. The barrier still wraps the IoMap of its part then,
 so a test sees the IO maps that a running editor has. It never catches an
-exception that `is_passthrough_exception` names, such as an interrupt or a
+exception that is not a fault (`is_fault_exception`), such as an interrupt or a
 request to quit.
 
 See also `FaultReport`, `FaultLog` and the kernel's `FaultStore`.
@@ -153,7 +153,7 @@ end
 
 # Whether the barrier takes `exception` rather than let it go on.
 _is_fault_caught(policy::FaultPolicy, exception) =
-    policy.is_barrier_enabled && !is_passthrough_exception(exception)
+    policy.is_barrier_enabled && is_fault_exception(exception)
 
 _get_inner_iomap(barrier::FaultCatchingIoMap) = getfield(barrier, :inner_iomap)
 
@@ -178,7 +178,7 @@ function print_document(p::FaultCatchingProjection, recursion, input, ctx)
                                  get_property(ctx, :fault_store, nothing),
                                  get_property(ctx, :fault_policy, make_strict_fault_policy()),
                                  get_property(ctx, :noted_barriers, nothing),
-                                 recursion, ctx, find_fault_scope(),
+                                 recursion, ctx, find_cell_fault_scope(),
                                  nothing, nothing, nothing, nothing, nothing, false, false, true)
     if barrier.policy.is_barrier_enabled
         printed = try
@@ -200,7 +200,7 @@ end
 # computation of its output, made in the same scope.
 function _print_in_scope(barrier::FaultCatchingIoMap)
     p = barrier.projection
-    run_in_fault_scope(barrier) do
+    run_in_cell_fault_scope(barrier) do
         inner = print_document(p.inner, barrier.recursion, barrier.input, barrier.context)
         (inner, Computation(() -> inner.output))
     end
@@ -218,7 +218,7 @@ function _show_part!(barrier::FaultCatchingIoMap, inner, computation)
 end
 
 # A fault in the print itself: the part has no IoMap, and the mark stands at once.
-# A `RecordedFaultException` is a fault that another barrier took while this print
+# A `RecordedCellFaultException` is a fault that another barrier took while this print
 # read its cell; that barrier shows it, and this one shows its own mark until the
 # parent prints the part again, with no second record. The mark is drawn here,
 # outside every `try`, so a substitute that throws goes on up as the fault of this
@@ -227,12 +227,12 @@ function _take_print_fault!(barrier::FaultCatchingIoMap, exception, traceback)
     barrier.inner_iomap = nothing
     barrier.computation = nothing
     barrier.failed_computation = nothing
-    barrier.fault = if exception isa RecordedFaultException
+    barrier.fault = if exception isa RecordedCellFaultException
         make_fault_record(:print; origin = barrier.projection.inner,
-                          reference = barrier.context.reference,
+                          reference = peek(barrier.context.reference),
                           exception = exception.exception)
     else
-        _take_fault(barrier.store, barrier.projection.inner, barrier.context.reference,
+        _take_fault(barrier.store, barrier.projection.inner, peek(barrier.context.reference),
                     exception, traceback)
     end
     _show_mark!(barrier)
@@ -289,7 +289,7 @@ end
 # this one. The cells of a part travel by reference through the stages after it,
 # so the stack of the read that fails can hold no other barrier. With no list,
 # nothing would show the mark, so the barrier lets the fault go on.
-function record_computation_fault!(barrier::FaultCatchingIoMap, computation, exception;
+function record_cell_fault!(barrier::FaultCatchingIoMap, computation, exception;
                                    traceback)
     barrier.is_retrying && return true
     barrier.noted === nothing && return false
@@ -297,7 +297,7 @@ function record_computation_fault!(barrier::FaultCatchingIoMap, computation, exc
         return _record_in_enclosing_scope!(barrier, computation, exception; traceback)
     barrier.is_noted && return true
     barrier.fault = _take_fault(barrier.store, _get_fault_origin(barrier),
-                              barrier.context.reference, exception, traceback)
+                              peek(barrier.context.reference), exception, traceback)
     barrier.failed_computation = computation
     _note_barrier!(barrier)
     true
@@ -307,7 +307,7 @@ function _record_in_enclosing_scope!(barrier::FaultCatchingIoMap, computation, e
                                      traceback)
     enclosing = barrier.enclosing
     enclosing === nothing && return false
-    record_computation_fault!(enclosing, computation, exception; traceback)
+    record_cell_fault!(enclosing, computation, exception; traceback)
 end
 
 # The substitute that draws the mark can throw too. Its fault is recorded, and the
@@ -396,7 +396,7 @@ end
 # a map reaches it.
 function _record_unrecorded_fault!(barrier::FaultCatchingIoMap, site::Symbol, origin,
                                    reference, exception, traceback)
-    exception isa RecordedFaultException && return nothing
+    exception isa RecordedCellFaultException && return nothing
     record_fault!(barrier.store, site; origin, reference, exception, traceback)
     nothing
 end

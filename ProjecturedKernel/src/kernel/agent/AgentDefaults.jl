@@ -14,6 +14,9 @@ function make_agent_server(::Val{K}, editor; kwargs...) where {K}
           "Load the opt-in package that provides :$(K).")
 end
 
+# A server whose calls run no background work has none to stop.
+stop_agent_server_work!(server) = nothing
+
 """
     get_agent_server_names() -> Vector{Symbol}
 
@@ -43,5 +46,7 @@ end
 _format_kinds(names) = isempty(names) ? "none" : join(map(name -> ":" * String(name), names), ", ")
 
 # A target that nothing runs a loop for has no other task to wait for.
-run_on_editor_task!(function_, target; wait::Bool = true) =
+run_on_editor_task!(function_, target; wait::Bool = true, description::AbstractString = "",
+                    timeout::Real = Inf, stop = nothing) =
     wait ? function_() : (function_(); nothing)
+is_editor_loop_running(target) = false

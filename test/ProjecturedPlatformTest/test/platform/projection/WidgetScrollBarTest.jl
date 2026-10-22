@@ -8,9 +8,9 @@
 
 A `WidgetScrollBar` with no authored size takes the extent that its parent
 offers along it and the thickness of its theme across it. Its thumb reads the
-value in cells, so a new value moves the thumb on the same canvas. Its track is
-transparent until the pointer is on the bar, and the pointer is an arrow over
-it. A click on the track moves the value one page toward the pointer, Shift and a
+value in cells, so a new value moves the thumb on the same canvas. Its track and
+its thumb are transparent until the pointer is on the bar, and the pointer is an
+arrow over it. A click on the track moves the value one page toward the pointer, Shift and a
 click or a press put the middle of the thumb under the pointer, and a press on
 the thumb starts a drag: each `DragMove` adds its distance to the value of the
 press, and `DragCancel` puts that value back.
@@ -19,7 +19,10 @@ function test_widget_scroll_bar()
 @testset "a scroll bar takes its length, and the pointer moves its thumb" begin
     projection = RecursiveProjection(TypeDispatchingProjection(
         WidgetToGraphics(StyleFont("Ubuntu Mono", 20); measure = FixedMeasure(10, 18, 6, 0)).dispatch))
-    offer = with_exact_size(PrinterContext(); height = Cell(Int32(300)))
+    bar_clock = Clock()
+    set_bar_time!(seconds) = ProjecturedKernel.ClockModule.set_clock_time!(bar_clock, seconds)
+    offer = ProjecturedKernel.ProjectionModule.with_clock(
+        with_exact_size(PrinterContext(); height = Cell(Int32(300))), bar_clock)
     bar = WidgetScrollBar(:vertical; value = 0.5, thumb_size = 0.2)
     iomap = print_document(projection, nothing, bar, offer)
     canvas = iomap.output
@@ -33,15 +36,26 @@ function test_widget_scroll_bar()
     @test canvas.elements[end - 1] === thumb
     getfield(bar, :value)[] = 0.5
 
-    @testset "the track shows while the pointer is on the bar" begin
+    @testset "the bar shows nothing at rest, shows while the pointer is on it, and fades out" begin
         p = iomap.projection
+        set_bar_time!(10.0)
         @test track.color == color_transparent
-        @test thumb.color == p.thumb_color
+        @test thumb.color == color_transparent
         getfield(bar, :mouse_target)[] = EmptyReference()
         @test track.color == p.track_hovered_color
         @test thumb.color == p.thumb_hovered_color
         getfield(bar, :mouse_target)[] = nothing
         @test track.color == color_transparent
+        # The thumb fades out: half its alpha at half the fade, and then nothing.
+        @test thumb.color == p.thumb_scrolled_color
+        set_bar_time!(10.0 + p.fade_duration / 2)
+        @test (thumb.color.red, thumb.color.green, thumb.color.blue) ==
+              (p.thumb_scrolled_color.red, p.thumb_scrolled_color.green, p.thumb_scrolled_color.blue)
+        @test thumb.color.alpha ≈ p.thumb_scrolled_color.alpha / 2
+        @test has_dependent_cells(getfield(bar_clock, :time))
+        set_bar_time!(10.0 + p.fade_duration + 0.01)
+        @test thumb.color == color_transparent
+        @test !has_dependent_cells(getfield(bar_clock, :time))
         @test shape isa GraphicsPointerShape && shape.shape === :arrow
         @test (Int(shape.w), Int(shape.h)) == (10, 300)
     end
@@ -137,5 +151,41 @@ function test_widget_scroll_bar()
     sized = print_document(projection, nothing,
                            WidgetScrollBar(:vertical; size = Point2D(20, 100)), offer)
     @test (Int(sized.output.w), Int(sized.output.h)) == (20, 100)
+
+    @testset "the thumb shows for a while after a scroll, and not after a change of size" begin
+        clock = Clock()
+        set_time!(seconds) = ProjecturedKernel.ClockModule.set_clock_time!(clock, seconds)
+        set_time!(10.0)
+        timed = ProjecturedKernel.ProjectionModule.with_clock(offer, clock)
+        scrolled = WidgetScrollBar(:vertical; value = 0.5, thumb_size = 0.2)
+        timed_iomap = print_document(projection, nothing, scrolled, timed)
+        p = timed_iomap.projection
+        thumb = timed_iomap.output.elements[end - 1]
+        reads_clock() = has_dependent_cells(getfield(clock, :time))
+        # A new bar shows nothing.
+        @test thumb.color == color_transparent
+        # A change of the value and of the thumb size is a change of the content.
+        getfield(scrolled, :value)[] = 0.4
+        getfield(scrolled, :thumb_size)[] = 0.3
+        @test thumb.color == color_transparent
+        @test !reads_clock()
+        # A change of the value alone is a scroll: the thumb shows for one second.
+        getfield(scrolled, :value)[] = 0.6
+        @test thumb.color == p.thumb_scrolled_color
+        @test reads_clock()
+        set_time!(10.9)
+        @test thumb.color == p.thumb_scrolled_color
+        # The pointer on the bar wins.
+        getfield(scrolled, :mouse_target)[] = EmptyReference()
+        @test thumb.color == p.thumb_hovered_color
+        getfield(scrolled, :mouse_target)[] = nothing
+        @test thumb.color == p.thumb_scrolled_color
+        # After the second the thumb fades out, and then nothing reads the clock.
+        set_time!(11.1)
+        @test thumb.color == p.thumb_scrolled_color
+        set_time!(11.1 + p.fade_duration + 0.01)
+        @test thumb.color == color_transparent
+        @test !reads_clock()
+    end
 end
 end

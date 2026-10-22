@@ -25,8 +25,8 @@ default theme.
     "The body: the compact reference and the human-readable narrative."
     font::StyleFont = StyleFont("Ubuntu Mono", 14)
     "The \"Compact\" and \"Human-readable\" section headers."
-    header_font::FontRole = FontRole(family = "Liberation Sans", weight = 700, relative_size = 1.5)
+    header_font::ThemeFont = FontRole(family = "Liberation Sans", weight = 700, relative_size = 1.5)
     "The \"Compact\" and \"Human-readable\" section headers."
-    header_color::StyleColor = ColorRole(:heading)
+    header_color::ThemeColor = ColorRole(:heading)
 end
 

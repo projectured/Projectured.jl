@@ -28,6 +28,7 @@ const EDITOR_TOOL_GUIDE = "Use `execute_julia_code` to inspect and modify the ed
                                   "- `search_references(editor.document, query)` returns paths to matching document nodes.\n" *
                                   "- `search_documents(editor.document, query)` returns the matching document nodes themselves (each once).\n" *
                                   "  `query` is a predicate `node -> Bool`, or a `String`/`Regex` matching leaf text (which folds to its enclosing document; pass `raw=true` for the exact matched value).\n" *
+                                  "  Both answer at most 100 matches by default, and the first line of the answer says when a limit stopped the search: pass `limit = nothing` to find every match.\n" *
                                   "- `evaluate_reference(editor.document, path)` resolves a path back to its node.\n" *
                                   "- Build an `Operation` and apply it with `evaluate_operation(editor, op)` — e.g. " *
                                   "`ReplaceSelectionOperation(path)` to select. This is the one way to change the document.\n" *
@@ -45,6 +46,13 @@ const EDITOR_TOOL_GUIDE = "Use `execute_julia_code` to inspect and modify the ed
                                   "The person edits the window between your turns too: a key, an undo or a click can\n" *
                                   "change what a variable of an earlier turn shows. Read a document again before you\n" *
                                   "tell the person what it holds.\n\n" *
+                                  "LONG WORK RUNS IN THE BACKGROUND: code that does not need the documents of the\n" *
+                                  "editor, such as a long computation or a wait for a process, runs with the\n" *
+                                  "`background` argument of `execute_julia_code` set to true, so the person can use\n" *
+                                  "the editor while it runs. Code can also start its long part with\n" *
+                                  "`start_background_work(f)`, which answers at once, and read its value with\n" *
+                                  "`fetch(work)` in a later call. Code in the background reaches a document only\n" *
+                                  "through the verbs, never through the fields of a document.\n\n" *
                                   "TO FIND A SPECIFIC API OR GUIDE — do this BEFORE writing code:\n" *
                                   "- Call the `search_api` tool to find the right module, struct, or function.\n" *
                                   "- Call the `search_guides` tool to find the relevant guide section.\n" *
@@ -129,7 +137,22 @@ the agent gave its session, empty until it gives one, and the tab of the
 assistant shows it. `agent_usage` is how much of its context window the
 session uses, an `AgentUsageUpdate`, or `nothing`. `agent_commands` are the
 commands that the agent offers, as `/name` at the start of a prompt. They are no
-data either.
+data either. `agent_work` is the work of the session of the agent, an
+[`AgentWork`](@ref): its subagents, its plans, its background tasks, its notices
+and its processes. It is the live state of the session, so it is no data either:
+a file does not keep it, and a duplicate and a new session start with an empty
+one.
+
+`workflow` is the node of a workflow that the conversation records its work in,
+or `nothing`. It is data that the person chose, so a `.pred` file keeps it; the
+platform names no domain, so the field holds any document.
+
+`description` and `comment` are what the person writes about the conversation:
+what it is about, and a note. Each is a `PrimitiveString`, as `input` is, so the
+text-edit projections route keys to it. `work_state` is the state of the work
+that the person sets, one of [`ASSISTANT_WORK_STATES`](@ref); only the person
+changes it. The three are data that the person wrote, so a `.pred` file keeps
+them for every backend, and a fork copies them.
 
 `turn_control` is the live control of the turn that runs, an
 `AssistantTurnControl`, and `nothing` between turns. A stop sets its flag. It is
@@ -167,7 +190,21 @@ behaviour pass an explicit `llm` (a `FakeLlm`/`ScriptedLlm` from
     agent_title::String
     agent_usage::Union{Nothing,AgentUsageUpdate}
     agent_commands::Vector{AgentCommand}
+    agent_work::AgentWork
+    workflow::Any
+    description::PrimitiveString
+    comment::PrimitiveString
+    work_state::Symbol
 end
+
+"""
+    ASSISTANT_WORK_STATES
+
+The states of the work of a conversation that a person sets on an `Assistant`
+(`work_state`): `:pending`, `:in_progress`, `:complete` and `:abandoned`. A new
+assistant is `:pending`.
+"""
+const ASSISTANT_WORK_STATES = (:pending, :in_progress, :complete, :abandoned)
 
 # The command of the external agent that an assistant starts when nobody names
 # another: empty, which starts the built-in agent of `ProjecturedACP`.
@@ -214,7 +251,13 @@ function Assistant(; conversation::ConversationConversation = ConversationConver
                               agent_options::AbstractVector = AgentOption[],
                               agent_title::AbstractString = "",
                               agent_usage::Union{Nothing,AgentUsageUpdate} = nothing,
-                              agent_commands::AbstractVector = AgentCommand[])
+                              agent_commands::AbstractVector = AgentCommand[],
+                              workflow = nothing,
+                              description::Union{AbstractString,PrimitiveString} = "",
+                              comment::Union{AbstractString,PrimitiveString} = "",
+                              work_state::Symbol = :pending)
+    work_state in ASSISTANT_WORK_STATES ||
+        throw(ArgumentError("the work state of an assistant is one of $(ASSISTANT_WORK_STATES), not $(repr(work_state))"))
     a = Assistant(Cell(conversation), Cell(input), Cell(draft),
                            Cell(backend), Cell(String(model)), Cell(String(system)),
                            Cell(String(api_key)), Cell(Int(context)), Cell(status),
@@ -223,15 +266,21 @@ function Assistant(; conversation::ConversationConversation = ConversationConver
                            Cell(String(agent_command)), Cell(String(agent_session_meta)),
                            Cell(agent_session), Cell(String(agent_session_id)),
                            Cell(String(agent_session_directory)), Cell(Int(agent_session_turn_count)),
-                           Cell(collect(AgentOption, agent_options)),
+                           Cell(CellVector{AgentOption}(collect(AgentOption, agent_options))),
                            Cell(String(agent_title)), Cell(agent_usage),
-                           Cell(collect(AgentCommand, agent_commands)),
+                           Cell(CellVector{AgentCommand}(collect(AgentCommand, agent_commands))),
+                           Cell(AgentWork("")), Cell(workflow),
+                           Cell(_make_primitive_string(description)),
+                           Cell(_make_primitive_string(comment)), Cell(work_state),
                            Cell(nothing))
     # Back-link the draft to its owning assistant so the composer's ENTER can be
     # turned into a submit (push into the conversation + stream a reply).
     draft.assistant = a
     a
 end
+
+_make_primitive_string(text::PrimitiveString) = text
+_make_primitive_string(text::AbstractString) = PrimitiveString(String(text))
 
 set_cell_computation!(a::Assistant, f::Function) = (set_cell_computation!(getfield(a, :conversation), f); a)
 
@@ -241,7 +290,8 @@ set_cell_computation!(a::Assistant, f::Function) = (set_cell_computation!(getfie
 # it at the next message, and a `.pred` file runs no code. So `agent_command` and
 # `agent_session_meta` come from the settings of the application, never from a
 # file. A live connection is not data either: `llm`
-# is a fake or a running client, `agent_session` is a running agent, `status` is what a turn is doing right now,
+# is a fake or a running client, `agent_session` is a running agent, `agent_work`
+# is the work of its session, `status` is what a turn is doing right now,
 # and `conversation`/`input`/`draft` are this session's exchange, not the
 # next one's — so a save keeps only the settings that describe an assistant
 # rather than a moment of one, and a load starts a fresh, empty conversation.
@@ -259,6 +309,14 @@ function pred_arguments(a::Assistant)
         :context           => a.context,
         :collapse_thinking => a.collapse_thinking,
     ]
+    # The workflow that the conversation records its work in is data that the
+    # person chose, so the file keeps the link.
+    a.workflow === nothing || push!(keywords, :workflow => a.workflow)
+    # What the person wrote about the conversation is data too, so the file keeps
+    # it for every backend.
+    isempty(a.description.value) || push!(keywords, :description => a.description.value)
+    isempty(a.comment.value) || push!(keywords, :comment => a.comment.value)
+    a.work_state === :pending || push!(keywords, :work_state => a.work_state)
     if a.backend === :acp && !isempty(a.agent_session_id)
         append!(keywords, Pair{Symbol,Any}[
             :conversation             => a.conversation,
@@ -272,11 +330,12 @@ function pred_arguments(a::Assistant)
 end
 
 # The name the tab calls itself: the title that an external agent gave its
-# session, else the name of the assistant. A tab with an empty name asks at each
-# draw, so the tab follows the title. No alias: `get_insertion_names` already
+# session, else the first line of its first prompt, else the name of the
+# assistant. A tab with an empty name asks at each draw, so the tab follows the
+# title. No alias: `get_insertion_names` already
 # derives one from the type name, so a person types "assistant" without a
 # hand-written method.
-get_document_title(a::Assistant) = isempty(a.agent_title) ? ASSISTANT_TITLE : a.agent_title
+get_document_title(a::Assistant) = compute_assistant_overview_title(a)
 
 # ── The duplicate ─────────────────────────────────────────────────────────────
 #
@@ -300,7 +359,8 @@ function copy_document(policy::DuplicatePolicy, assistant::Assistant)
                                 agent_session_directory = "", agent_session_turn_count = 0,
                                 agent_options = AgentOption[],
                                 agent_title = "", agent_usage = nothing,
-                                agent_commands = AgentCommand[])
+                                agent_commands = AgentCommand[],
+                                agent_work = AgentWork(""))
     draft.assistant = fork
     turns = fork.conversation.turns
     if assistant.status === :streaming && !isempty(turns) &&

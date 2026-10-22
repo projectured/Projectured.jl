@@ -1,4 +1,5 @@
-# `take_from_devices!` collapses a run of pointer motion into its newest sample.
+# `take_from_devices!` collapses a run of pointer motion into its newest sample,
+# and a run of wheel turns into their sum.
 # The events are pushed onto the real SDL queue, so what is tested is the path
 # the editor actually runs, not a stand-in for it.
 
@@ -49,11 +50,12 @@ _push_window_event!(kind) =
                                           Int32(0), Int32(0)))
 
 # A wheel turn of `dy` steps, as SDL reports it: a positive `dy` is a turn away from
-# the user. The fields of the event differ between the versions of the SDL bindings,
-# so each field that the turn does not name is 0.
-function _push_wheel!(dy)
+# the user. `precise` is the turn with its fraction, which a touchpad gives, and 0
+# leaves it out. The fields of the event differ between the versions of the SDL
+# bindings, so each field that the turn does not name is 0.
+function _push_wheel!(dy; precise = 0)
     T = _SDL.SDL_MouseWheelEvent
-    values = Dict(:type => _SDL_MOUSEWHEEL, :y => dy)
+    values = Dict(:type => _SDL_MOUSEWHEEL, :y => dy, :preciseY => precise)
     fields = (fieldtype(T, name)(get(values, name, 0)) for name in fieldnames(T))
     _push_sdl_event!(T(fields...))
 end
@@ -65,6 +67,16 @@ _push_ctrl_key!(type, mod) =
                                             UInt8(0), UInt8(0), UInt8(0),
                                             _SDL.SDL_Keysym(_SDL.SDL_SCANCODE_LCTRL,
                                                             _SDLK_LCTRL, UInt16(mod),
+                                                            UInt32(0))))
+
+# A key event of the Return key, with the modifier mask `mod`; `repeat` marks a
+# key-down that the operating system repeats while the key is held.
+_push_return_key!(type, mod; repeat::Bool = false) =
+    _push_sdl_event!(_SDL.SDL_KeyboardEvent(type, UInt32(0), UInt32(0),
+                                            type == _SDL_KEYDOWN ? UInt8(1) : UInt8(0),
+                                            UInt8(repeat), UInt8(0), UInt8(0),
+                                            _SDL.SDL_Keysym(_SDL.SDL_SCANCODE_RETURN,
+                                                            Int32(13), UInt16(mod),
                                                             UInt32(0))))
 
 # Start from an empty queue and an expired rate limit, so each case sees only
@@ -182,6 +194,50 @@ function test_input_coalescing()
         _reset_input!(backend)
     end
 
+    @testset "a run of wheel turns answers with their sum" begin
+        _reset_input!(backend)
+        for _ in 1:3
+            _push_wheel!(-1)
+        end
+        scroll = take_from_devices!(backend, Device[]).event
+        @test scroll isa MouseScroll && scroll.dy == -3
+        @test take_from_devices!(backend, Device[]) === nothing
+    end
+
+    @testset "a turn of a touchpad keeps its fraction" begin
+        _reset_input!(backend)
+        _push_wheel!(0; precise = -0.25)
+        _push_wheel!(-1; precise = -1.25)
+        scroll = take_from_devices!(backend, Device[]).event
+        @test scroll.dy == -1
+        @test scroll.precise_dy ≈ -1.5
+        # A wheel that gives no fraction holds its whole notches.
+        _reset_input!(backend)
+        _push_wheel!(-2)
+        @test take_from_devices!(backend, Device[]).event.precise_dy == -2.0
+    end
+
+    @testset "an event behind a run of turns does not overtake it" begin
+        _reset_input!(backend)
+        _push_wheel!(1)
+        _push_wheel!(1)
+        _push_button_down!(7, 9)
+        _push_wheel!(1)
+        first_input = take_from_devices!(backend, Device[]).event
+        @test first_input isa MouseScroll && first_input.dy == 2
+        @test take_from_devices!(backend, Device[]).event isa MouseDown
+        last_input = take_from_devices!(backend, Device[]).event
+        @test last_input isa MouseScroll && last_input.dy == 1
+        # A move after a turn comes after it.
+        _reset_input!(backend)
+        _push_wheel!(1)
+        _push_motion!(20, 20)
+        @test take_from_devices!(backend, Device[]).event isa MouseScroll
+        moved = take_from_devices!(backend, Device[]).event
+        @test moved isa MouseMove && (moved.x, moved.y) == (_logical(20), _logical(20))
+        @test take_from_devices!(backend, Device[]) === nothing
+    end
+
     @testset "a press holds the modifiers of its own place in the queue" begin
         # Ctrl goes down, the button goes down, and Ctrl goes up, all before the
         # poll. The press holds Ctrl, because Ctrl was down when it happened.
@@ -196,6 +252,25 @@ function test_input_coalescing()
         up = take_from_devices!(backend, Device[]).event
         @test up isa KeyUp
         @test !up.modifiers.ctrl
+        @test take_from_devices!(backend, Device[]) === nothing
+    end
+
+    @testset "Return gives its KeyPress after each KeyDown, behind a held motion too" begin
+        # SDL gives no text input for Return, so the backend owes the KeyPress of
+        # '\n' after the KeyDown, at the first down and at each repeat, with the
+        # modifiers of the key. A motion before the key is answered first.
+        _reset_input!(backend)
+        _push_motion!(20, 20)
+        _push_return_key!(_SDL_KEYDOWN, _KMOD_LCTRL)
+        _push_return_key!(_SDL_KEYDOWN, 0x0000; repeat = true)
+        _push_return_key!(_SDL_KEYUP, 0x0000)
+        @test take_from_devices!(backend, Device[]).event isa MouseMove
+        events = [take_from_devices!(backend, Device[]).event for _ in 1:5]
+        @test events[1] isa KeyDown && events[1].key === :return && events[1].modifiers.ctrl
+        @test events[2] isa KeyPress && events[2].char == '\n' && events[2].modifiers.ctrl
+        @test events[3] isa KeyDown && events[3].repeat
+        @test events[4] isa KeyPress && events[4].char == '\n' && !events[4].modifiers.ctrl
+        @test events[5] isa KeyUp && events[5].key === :return
         @test take_from_devices!(backend, Device[]) === nothing
     end
 

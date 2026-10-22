@@ -1,0 +1,242 @@
+"""
+    test_assistant_list()
+
+The list of the open assistants: the read of the tabs of a pane tree, the rows
+that follow the tabs and not the edits inside them, each way a tab comes and
+goes, the list of the session of an editor, the pane that draws it, and the detail of
+the assistant that a person picks.
+"""
+function test_assistant_list()
+    @testset "the list of the open assistants" begin
+        @testset "the read of the tabs" begin
+            one, two = Assistant(), Assistant()
+            notes = PrimitiveString("notes")
+            left = PaneGroup([PaneTab("One", one), PaneTab("Notes", notes)])
+            right = PaneGroup([PaneTab("Two", UndoBuffer(two))])
+            tree = PaneTree(PaneSplit(:vertical, [left, right]))
+            # An assistant inside a history counts; a text inside an assistant does not.
+            @test _is_same_list(collect_pane_tab_contents(tree, Assistant), [one, two])
+            @test _is_same_list(collect_pane_tab_contents(tree, PrimitiveString), [notes])
+            @test isempty(collect_pane_tab_contents(PaneTree(PaneGroup(PaneTab[])), Assistant))
+        end
+
+        @testset "the rows follow the tabs, not the edits inside them" begin
+            one = Assistant()
+            group = PaneGroup([PaneTab("One", one)])
+            tree = PaneTree(group)
+            list = AssistantList()
+            @test isempty(list.assistants)
+            reads = Ref(0)
+            set_assistant_list_source!(list, () -> (reads[] += 1; collect_pane_tab_contents(tree, Assistant)))
+            @test _is_same_list(list.assistants, [one])
+            @test reads[] == 1
+            one.description.value = "Fix the table"
+            push!(one.conversation.turns, ConversationTurn(:user, [ConversationPart("Hello")]))
+            @test _is_same_list(list.assistants, [one])
+            @test reads[] == 1
+            set_assistant_list_source!(list, nothing)
+            @test isempty(list.assistants)
+        end
+
+        @testset "each way a tab comes and goes" begin
+            one, two = Assistant(), Assistant()
+            group = PaneGroup([PaneTab("One", one), PaneTab("Two", two)])
+            tree = PaneTree(group)
+            editor = _AssistantListMockEditor(tree)
+            list = AssistantList()
+            set_assistant_list_source!(list, () -> collect_pane_tab_contents(tree, Assistant))
+            @test _is_same_list(list.assistants, [one, two])
+            # A close takes the row out, and the undo of the close brings it back.
+            inverse = evaluate_invertible_operation!(editor, make_pane_close_tab_operation(tree, group, 1))
+            @test _is_same_list(list.assistants, [two])
+            evaluate_operation(editor, inverse)
+            @test _is_same_list(list.assistants, [one, two])
+            # An empty assistant opens in a tab.
+            three = Assistant()
+            evaluate_operation(editor, make_pane_open_tab_operation(tree, group, PaneTab("Three", three)))
+            @test _is_same_list(list.assistants, [one, two, three])
+            # The duplicate of a tab is a fork, which is an assistant of its own.
+            evaluate_operation(editor, make_pane_duplicate_tab_operation(tree, group, 2))
+            @test length(list.assistants) == 4
+            @test all(a -> list.assistants[3] !== a, (one, two, three))
+            # An assistant that an empty tab takes counts at once.
+            evaluate_operation(editor, make_pane_open_tab_operation(tree, group, default_new_pane_tab()))
+            @test length(list.assistants) == 4
+            four = Assistant()
+            group.tabs[length(group.tabs)].content = four
+            @test list.assistants[end] === four
+        end
+
+        @testset "the list of the session of an editor" begin
+            editor = Editor(PrimitiveString("x"), NaturalToGraphics(; measure = FixedMeasure(8, 12, 4, 0));
+                            backend = HeadlessBackend(), devices = Device[])
+            session = get_session_assistant_list(; editor)
+            @test session isa AssistantList
+            @test get_session_assistant_list(; editor) === session
+            @test run_with_evaluation_editor(() -> make_insertion_document(AssistantList), editor) === session
+            @test get_document_title(session) == "Assistants"
+            # With no editor, a new list that nothing keeps.
+            @test get_session_assistant_list() !== session
+            # A file keeps that a tab shows the list, and a load in the editor gives
+            # the list of its session.
+            tree = PaneTree(PaneGroup([PaneTab("Assistants", session), PaneTab("One", Assistant())]))
+            loaded = run_with_evaluation_editor(() -> parse_pred_text(print_pred_text(tree)), editor)
+            @test loaded.root.tabs[1].content === session
+            @test length(collect_pane_tab_contents(loaded, Assistant)) == 1
+            # The walk of the documents reaches an assistant through its tab, not through the list.
+            one = Assistant()
+            list = AssistantList()
+            tree = PaneTree(PaneGroup([PaneTab("Assistants", list), PaneTab("One", one)]))
+            set_assistant_list_source!(list, () -> collect_pane_tab_contents(tree, Assistant))
+            @test _is_same_list(list.assistants, [one])
+            found = search_references(tree, node -> node isa Assistant)
+            @test length(found) == 1
+            @test evaluate_reference(tree, only(found)) === one
+        end
+
+        @testset "the Assistants pane" begin
+            list = AssistantList()
+            projection, iomap = _print_assistant_list(list)
+            @test "No assistant is open in this window." in _collect_assistant_list_words(iomap)
+            first_assistant = Assistant(; llm = FakeLlm("ok"), work_state = :in_progress)
+            second_assistant = Assistant()
+            tree = PaneTree(PaneGroup([PaneTab("A", first_assistant), PaneTab("B", second_assistant)]))
+            shown = Any[]
+            set_assistant_list_source!(list, () -> collect_pane_tab_contents(tree, Assistant))
+            set_assistant_list_opener!(list, (editor, assistant) -> push!(shown, assistant))
+            first_assistant.input.value = "Fix the table"
+            evaluate_operation((document = first_assistant, tools = register_default_tools!(ToolSet())),
+                               SubmitProseOperation(first_assistant))
+            @test timedwait(() -> first_assistant.status !== :streaming, 10.0; pollint = 0.01) === :ok
+            # The drawn pane follows the list and each assistant.
+            words = _collect_assistant_list_words(iomap)
+            @test "2 conversations · 0 running" in words
+            @test all(in(words), ("title", "work", "turn", "activity", "prompts", "context", "started", "elapsed"))
+            @test "Fix the table" in words && "Assistant" in words
+            @test "in progress" in words && "pending" in words
+            @test count(==("you"), words) == 2
+            @test count(==("Show"), words) == 2
+            # A turn that runs: the row says whose turn it is and what the turn does.
+            second_assistant.status = :streaming
+            push!(second_assistant.conversation.turns, ConversationTurn(:assistant; start_time = time()))
+            words = _collect_assistant_list_words(iomap)
+            @test "2 conversations · 1 running" in words
+            @test "assistant" in words && "starts" in words
+            second_assistant.status = :idle
+            words = _collect_assistant_list_words(iomap)
+            @test count(==("you"), words) == 2 && !("starts" in words)
+            # Show gives the opener the assistant of its row.
+            texts = _collect_assistant_list_texts(iomap.output)
+            show = first(sort([t for t in texts if t[3] == "Show"]; by = t -> t[2]))
+            operation = read_intent(projection, iomap,
+                MouseClick(:left, show[1] + 2, show[2] + 2, ModifierKeys(); time = 0.0))
+            @test operation isa InvokeActionOperation
+            operation.action.callback(nothing)
+            @test length(shown) == 1 && only(shown) === first_assistant
+            # The pick button and the work badge say what they do.
+            pane = print_document(AssistantListToWidgetPane(), nothing, list, PrinterContext()).output
+            buttons = ProjecturedPlatformTest._find_widgets_below(pane, WidgetButton)
+            pick = first(button for button in buttons if button.action.label == "›")
+            pick_note = ProjecturedPlatformTest._read_widget_note(pick)
+            @test pick_note.text == "Show this assistant below."
+            badges = ProjecturedPlatformTest._find_widgets_below(pane, WidgetBadge)
+            work_notes = [ProjecturedPlatformTest._read_widget_note(badge) for badge in badges]
+            @test any(note -> note isa TooltipNote && note.title == "Work" && occursin("under way", note.text),
+                      work_notes)
+        end
+
+        @testset "the detail of an assistant" begin
+            list = AssistantList()
+            first_assistant = Assistant(; description = "Fix the table", comment = "Ask about the colors.")
+            second_assistant = Assistant()
+            tree = PaneTree(PaneGroup([PaneTab("A", first_assistant), PaneTab("B", second_assistant)]))
+            set_assistant_list_source!(list, () -> collect_pane_tab_contents(tree, Assistant))
+            projection, iomap = _print_assistant_list(list)
+            @test "Press › on a row to see its conversation here." in _collect_assistant_list_words(iomap)
+            # The › of the first row picks its assistant, and the detail shows it.
+            texts = _collect_assistant_list_texts(iomap.output)
+            pick = first(sort([t for t in texts if t[3] == "›"]; by = t -> t[2]))
+            operation = read_intent(projection, iomap,
+                MouseClick(:left, pick[1] + 2, pick[2] + 2, ModifierKeys(); time = 0.0))
+            @test operation isa InvokeActionOperation
+            operation.action.callback(nothing)
+            @test list.selected === first_assistant
+            words = _collect_assistant_list_words(iomap)
+            @test all(in(words), ("Description", "Comment", "Fix the table", "Ask about the colors.",
+                                  "complete", "abandoned", "First prompt: none", "Last prompt: none"))
+            # A press on a toggle writes the state of the work.
+            texts = _collect_assistant_list_texts(iomap.output)
+            complete = only(t for t in texts if t[3] == "complete")
+            operation = read_intent(projection, iomap,
+                MouseClick(:left, complete[1] + 2, complete[2] + 2, ModifierKeys(); time = 0.0))
+            evaluate_operation(nothing, operation)
+            @test first_assistant.work_state === :complete
+            # A path into the description of the shown row goes to its card in the
+            # detail, and back.
+            pane = AssistantListToWidgetPane()
+            pane_iomap = print_document(pane, nothing, list, PrinterContext())
+            path = ConcreteReference(FieldReferenceStep("assistants"),
+                                     ConcreteReference(RangeReferenceStep(0, 1),
+                                                       ConcreteReference(FieldReferenceStep("description"),
+                                                                         ConcreteReference(FieldReferenceStep("value"),
+                                                                                           EmptyReference()))))
+            forward = map_reference_forward(pane, pane_iomap, path)
+            card_path = ".children[2].child.elements[2].child.children[3].child.content.value"
+            @test repr(strip_reference_types(forward)) == card_path
+            @test evaluate_reference(get_iomap_output(pane_iomap), forward) == "Fix the table"
+            back = map_reference_backward(pane, pane_iomap, strip_reference_types(forward))
+            @test repr(strip_reference_types(back)) == repr(strip_reference_types(path))
+            # A pick of another row takes a caret in the card out of the detail: it
+            # does not move into the card of the next assistant.
+            select_assistant!(list, second_assistant)
+            moved = map_reference_forward(pane, pane_iomap, path)
+            @test moved === nothing || repr(strip_reference_types(moved)) != card_path
+            select_assistant!(list, first_assistant)
+            # A closed assistant shows no detail.
+            close_group = tree.root
+            deleteat!(close_group.tabs, 1)
+            @test "Press › on a row to see its conversation here." in _collect_assistant_list_words(iomap)
+        end
+    end
+end
+
+# The editor that a pane operation is evaluated against.
+mutable struct _AssistantListMockEditor
+    document::Any
+end
+
+_is_same_list(found, expected) =
+    length(found) == length(expected) && all(map(===, collect(found), expected))
+
+# The pane as a tab draws it: the natural renderer, which draws the list with the
+# row that the slice registers, at the size of a window.
+function _print_assistant_list(list; width = 1400, height = 600)
+    projection = NaturalToGraphics(measure = FixedMeasure(10, 18, 6, 0), appearance = Appearance())
+    context = with_exact_size(PrinterContext(); width = Cell(Int32(width)), height = Cell(Int32(height)))
+    (projection, print_document(projection, nothing, list, context))
+end
+
+# Each text of a drawn pane with its place on the canvas.
+function _collect_assistant_list_texts(node, x = 0, y = 0, found = Tuple{Int,Int,String}[])
+    if node isa GraphicsCanvas
+        elements = node.elements
+        if elements isa ListNode
+            link = elements
+            while link !== nothing
+                _collect_assistant_list_texts(link.value, x + Int(node.x), y + Int(node.y), found)
+                link = link.next
+            end
+        else
+            for element in elements
+                _collect_assistant_list_texts(element, x + Int(node.x), y + Int(node.y), found)
+            end
+        end
+    elseif node isa GraphicsViewport
+        _collect_assistant_list_texts(node.content, x + Int(node.x), y + Int(node.y), found)
+    elseif node isa GraphicsText
+        push!(found, (x + Int(node.x), y + Int(node.y), String(node.text)))
+    end
+    found
+end
+
+_collect_assistant_list_words(iomap) = [text for (_, _, text) in _collect_assistant_list_texts(iomap.output)]

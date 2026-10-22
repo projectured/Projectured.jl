@@ -271,8 +271,8 @@ end
 function print_document(p::PaneSplitToWidgetSplitPane, recursion, split::PaneSplit, ctx)
     element_iomaps = make_reconciled_child_iomaps_cell(
         () -> split.elements,
-        (i, element) -> _recurse(recursion, element,
-            make_child_context(ctx, split, (@reference_step elements), (@reference_step [i]))))
+        (index, element) -> _recurse(recursion, element,
+            make_element_context(ctx, split, index, i -> ((@reference_step elements), (@reference_step [i])))))
 
     axis = get_pane_split_axis(split)
     # `axis` is what the widget calls its orientation: a vertical split lays its
@@ -284,12 +284,14 @@ function print_document(p::PaneSplitToWidgetSplitPane, recursion, split::PaneSpl
     # so the slots keep their intrinsic sizes.
     preferred = available === nothing ? nothing : 0
 
+    # The slots follow the elements and nothing else. The weight of a slot is a cell
+    # of its constraint, so a drag of a divider of the tree changes the shares and
+    # the split pane prints no slot again: the view state of each group, such as the
+    # place of a divider inside it, stays.
     pane = WidgetSplitPane(axis, Any[])
     set_cell_computation!(pane, () -> begin
         iomaps = element_iomaps[]
-        weights = get_pane_normalized_weights(get_pane_weights(split))
-        Any[_constrain(iomaps[i].output, horizontal,
-                       i <= length(weights) ? weights[i] : 1.0, preferred)
+        Any[_constrain(iomaps[i].output, horizontal, () -> _get_pane_slot_weight(split, i), preferred)
             for i in eachindex(iomaps)]
     end)
 
@@ -298,9 +300,20 @@ function print_document(p::PaneSplitToWidgetSplitPane, recursion, split::PaneSpl
     iomap
 end
 
-_constrain(child, horizontal::Bool, weight::Float64, preferred) =
-    horizontal ? LayoutConstraint(child; weight_width = weight, preferred_width = preferred) :
-                 LayoutConstraint(child; weight_height = weight, preferred_height = preferred)
+# The share of the element `index` of `split`.
+function _get_pane_slot_weight(split::PaneSplit, index::Int)
+    weights = get_pane_normalized_weights(get_pane_weights(split))
+    index <= length(weights) ? weights[index] : 1.0
+end
+
+# `child` in a constraint whose weight on the axis of the split `weight` computes.
+# The weight is not read here, so the list of slots does not read the weights.
+function _constrain(child, horizontal::Bool, weight::Function, preferred)
+    constraint = horizontal ? LayoutConstraint(child; preferred_width = preferred) :
+                              LayoutConstraint(child; preferred_height = preferred)
+    set_cell_computation!(getfield(constraint, horizontal ? :weight_width : :weight_height), weight)
+    constraint
+end
 
 function map_reference_forward(::PaneSplitToWidgetSplitPane,
                                iomap::PaneSplitToWidgetSplitPaneIoMap, reference)
@@ -349,10 +362,10 @@ function print_document(p::PaneGroupToWidgetTabbedPane, recursion, group::PaneGr
     # a composer, would scroll as one block.
     content_iomaps = make_reconciled_child_iomaps_cell(
         () -> Any[tab.content for tab in group.tabs],
-        (i, content) -> begin
+        (index, content) -> begin
             child = _recurse(recursion, content,
-                make_child_context(ctx, group, (@reference_step tabs), (@reference_step [i]),
-                                   (@reference_step content)))
+                make_element_context(ctx, group, index,
+                                     i -> ((@reference_step tabs), (@reference_step [i]), (@reference_step content))))
             (iomap = child, pane = child.output)
         end)
 
@@ -375,12 +388,13 @@ function print_document(p::PaneGroupToWidgetTabbedPane, recursion, group::PaneGr
 end
 
 # The label of a tab in the strip: its name, and the icon, the role of the icon,
-# the badges and the tooltip of its title. The four are cells of their own that
+# the badges and the tooltip of its title. The five are cells of their own that
 # read the title, so a title that follows a state redraws the strip and does not
-# rebuild the pages.
+# rebuild the pages. A title with no name shows the title of its document, which
+# can follow a state too, such as the page of a navigator.
 function _make_tab_label(tab::PaneTab)
     title = tab.title
-    WidgetTabLabel(get_pane_tab_title_string(tab);
+    WidgetTabLabel(() -> get_pane_tab_title_string(tab);
                    icon = () -> title.icon, icon_role = () -> title.icon_role,
                    badges = () -> title.badges, tooltip = () -> title.tooltip)
 end
@@ -622,10 +636,18 @@ read_intent(::PaneTreeToWidget, ::PaneTreeToWidgetIoMap,
 function read_intent(p::PaneTreeToWidget, recursion, change::Intent,
                      iomap::PaneTreeToWidgetIoMap)
     tree = iomap.input
+    # An operation that code made at a node of the tree, such as an item of the
+    # menu of a tab: this reader holds the place, so the operation comes back
+    # rerooted by the route, as an operation from the tree.
+    change.route isa ConcreteReference && change.operation !== nothing && change.gesture === nothing &&
+        return Intent(nothing, reroot_operation(change.operation, Tuple(get_reference_steps(change.route))),
+                      change.description, change.domain)
     state = getfield(tree, :drag)[]
     gesture = change.gesture
     state !== nothing && gesture isa Union{DragMove, DragEnd, DragCancel} &&
         return Intent(gesture, _read_tab_drag(iomap, state, gesture))
+    state === nothing && is_outward_gesture(gesture) &&
+        return Intent(gesture, _read_pane_outward(p, iomap, change))
     payload = change.operation === nothing ? gesture : change.operation
     answer = read_intent(p, iomap, payload)
     payload isa DragTabOperation && gesture isa MouseDown &&
@@ -641,6 +663,41 @@ function read_intent(p::PaneTreeToWidget, recursion, change::Intent,
     answer === nothing && press isa MouseClick && press.button === :left &&
         (answer = _focus_from_press(iomap, press))
     Intent(change.gesture, answer)
+end
+
+# A right click and a dwell go out from the part under the pointer. The stage
+# below reads the documents of the content of a tab, and the pane documents on
+# the path to the part, such as the tab, its group and the tree, read the gesture
+# here by the rule of `read_gesture_outward`. The path is the mouse target of the
+# tree.
+function _read_pane_outward(p::PaneTreeToWidget, iomap::PaneTreeToWidgetIoMap, change::Intent)
+    tree = iomap.input
+    answer = change.operation === nothing ? nothing : read_intent(p, iomap, change.operation)
+    (steps, tab) = _walk_pane_path(tree, get_mouse_target(tree))
+    read_gesture_outward(answer, change.gesture, tree; steps, with_part = tab === nothing)
+end
+
+# The steps of `path`, a path from the tree, that stay in the pane tree, and the
+# tab whose content the last of them goes into, or `nothing` when the part at
+# their end belongs to the pane tree. The content of a tab is the one place where
+# a document of another domain enters the tree, and the stage below reads it.
+function _walk_pane_path(tree::PaneTree, path)
+    steps = ReferenceStep[]
+    path isa ConcreteReference || return (steps, nothing)
+    node = tree
+    for step in get_reference_steps(path)
+        parent = node
+        node = try
+            evaluate_reference_step(step, node)
+        catch exception
+            is_fault_exception(exception) || rethrow()
+            break
+        end
+        push!(steps, step)
+        parent isa PaneTab && step isa FieldReferenceStep && step.name == "content" &&
+            return (steps, parent)
+    end
+    (steps, nothing)
 end
 
 function _focus_from_press(iomap::PaneTreeToWidgetIoMap, press)

@@ -186,6 +186,21 @@ insertion's alias; anything else is a hand-written method.
 """
 get_insertion_aliases(::Type) = String[]
 
+# ── Text at the write of an operation ─────────────────────────────────────────
+
+# Rule 3 of the seam `convert_to_declared_type`: text that an operation writes into
+# a place that the text does not fit becomes the insertion of the domain of the
+# document that owns the place, to be parsed later, when the declared type of the
+# place admits that insertion. A document of no domain owns `DocumentInsertion`.
+function DocumentModule.convert_to_declared_type(owner::Document, declared_type::Type,
+                                                 value::AbstractString; name = nothing)
+    value isa declared_type && return value
+    insertion = something(Base.invokelatest(get_domain_insertion, typeof(owner)), DocumentInsertion)
+    insertion <: declared_type && return insertion(String(value))
+    invoke(DocumentModule.convert_to_declared_type, Tuple{Any, Type, Any},
+           owner, declared_type, value; name)
+end
+
 # ── Construction (dispatch, not factory tables) ───────────────────────────────
 
 """
@@ -294,7 +309,7 @@ end
 # `WidgetInsertion`, …) stay out of the list without per-type opt-outs.
 function _is_domain_entry(T::Type)
     endswith(String(nameof(T)), "Insertion") || return true
-    get_domain_insertion(get_insertion_root(T)) === T
+    Base.invokelatest(get_domain_insertion, get_insertion_root(T)) === T
 end
 
 # A native mutable-layout struct (`MFoo`) is the same document as its stem (`Foo`)
@@ -322,7 +337,7 @@ function get_insertion_candidates(root::Type)
     world = Base.get_world_counter()
     cached = get(_CANDIDATE_CACHE, root, nothing)
     cached !== nothing && cached[1] == world && return cached[2]
-    own = get_domain_insertion(root)
+    own = Base.invokelatest(get_domain_insertion, root)
     # `insertable` goes last: it probes the constructor and compiles a method for
     # each type, and a layout variant or a stray insertion cursor needs neither.
     result = filter(T -> T !== own && !_is_layout_variant(T) && _is_domain_entry(T) && insertable(T),
@@ -364,10 +379,11 @@ end
 # lowercase typed text. No stripping: the typed buffer is matched verbatim, so
 # a trailing space participates ("json " matches "json string" but not
 # "JsonString").
-function _matching(root::Type, typed::AbstractString)
+function _matching(root::Type, typed::AbstractString; place::Type = Any)
     key = lowercase(typed)
     matches = Tuple{Type, Vector{String}}[]
     for T in get_insertion_candidates(root)
+        T <: place || continue
         ns = [n for n in get_insertion_names(T; root) if startswith(lowercase(n), key)]
         isempty(ns) || push!(matches, (T, ns))
     end
@@ -393,9 +409,10 @@ function _common_continuation(names::Vector{String}, k::Int)
 end
 
 """
-    complete_insertion(root, typed) -> (; state, continuation, matches)
+    complete_insertion(root, typed; place = Any) -> (; state, continuation, matches)
 
-Classify the typed buffer against `root`'s candidates:
+Classify the typed buffer against `root`'s candidates that the place of the
+insertion admits, `place` being its declared type:
 
 - `:empty` — blank buffer; neutral.
 - `:invalid` — no candidate name starts with `typed`; render the buffer red.
@@ -408,9 +425,9 @@ Classify the typed buffer against `root`'s candidates:
 `matches` is the candidate types (deduped — one candidate may match through
 several of its names).
 """
-function complete_insertion(root::Type, typed::AbstractString)
+function complete_insertion(root::Type, typed::AbstractString; place::Type = Any)
     isempty(strip(typed)) && return (state = :empty, continuation = "", matches = Type[])
-    ms = _matching(root, typed)
+    ms = _matching(root, typed; place)
     isempty(ms) && return (state = :invalid, continuation = "", matches = Type[])
     allnames = String[n for (_, ns) in ms for n in ns]
     continuation = _common_continuation(allnames, length(typed))
@@ -420,10 +437,11 @@ function complete_insertion(root::Type, typed::AbstractString)
 end
 
 """
-    name_completion(insertion) -> (; state, hint, extension)
+    name_completion(insertion, place = Any) -> (; state, hint, extension)
 
 The default completion policy for an insertion buffer: name completion over the
-reflected candidates of the insertion's own domain.
+reflected candidates of the insertion's own domain that its place admits,
+`place` being the declared type of the place.
 
 - `state` — `:empty` / `:invalid` / `:ambiguous` / `:unambiguous`, which a
   projection paints the buffer with.
@@ -436,30 +454,65 @@ It is the reading of [`complete_insertion`](@ref) that a projection wants, and i
 belongs beside it: nothing in it is about syntax, and a composer that draws its
 own chooser needs it without needing a syntax tree.
 """
-function name_completion(insertion)
+function name_completion(insertion, place::Type = Any)
     c = complete_insertion(get_insertion_root(typeof(insertion)),
-                           something(insertion.value, ""))
+                           something(insertion.value, ""); place)
     (state = c.state,
      hint = c.state === :unambiguous ? c.continuation : "",
      extension = c.continuation)
 end
 
 """
-    resolve_insertion(root, typed) -> Type | Nothing
+    resolve_insertion(root, typed; place = Any) -> Type | Nothing
 
-The committable candidate for the typed buffer: an **exact** name/alias match
+The committable candidate for the typed buffer, among the candidates that the
+place admits, `place` being its declared type: an **exact** name/alias match
 wins (so the alias `"julia"` commits `JuliaInsertion` even while it is also a
 prefix of other names); otherwise the single candidate of an `:unambiguous`
 prefix; otherwise `nothing`.
 """
-function resolve_insertion(root::Type, typed::AbstractString)
+function resolve_insertion(root::Type, typed::AbstractString; place::Type = Any)
     key = lowercase(strip(typed))
     isempty(key) && return nothing
     for T in get_insertion_candidates(root)
+        T <: place || continue
         any(lowercase(n) == key for n in get_insertion_names(T; root)) && return T
     end
-    c = complete_insertion(root, typed)
+    c = complete_insertion(root, typed; place)
     c.state === :unambiguous ? c.matches[1] : nothing
+end
+
+"""
+    find_declared_place_type(reference) -> Type | Nothing
+
+The declared type of the place that `reference` ends at: the declared type of
+the field that its last step names, or the element type of the list whose
+element its last step names. `nothing` when the reference does not record the
+type of the document that holds the place, or when the place declares no type.
+
+Use it where a printer knows its place only by the reference of its context, as
+an insertion does to offer only the candidates that its place admits.
+"""
+function find_declared_place_type(reference)
+    holder = nothing      # the type that the last field step reads
+    field = nothing       # the name of that field
+    is_element = false    # whether one element step follows that field step
+    while reference isa ConcreteReference
+        step = reference.head
+        if step isa FieldReferenceStep
+            holder, field, is_element = reference.type, Symbol(step.name), false
+        elseif step isa RangeReferenceStep && step.stop == step.start + 1 && field !== nothing &&
+               !is_element
+            is_element = true
+        else
+            holder, field = nothing, nothing
+        end
+        reference = reference.tail
+    end
+    (holder isa Type && field !== nothing) || return nothing
+    declared = find_declared_field_type(holder, field)
+    declared isa Type || return nothing
+    is_element ? eltype(declared) : declared
 end
 
 # ── Insert-key gesture (shared by @domain and DocumentNothing) ────────────────
@@ -491,8 +544,21 @@ so it normalizes to ∅ (see [`normalize_named_node_reference`](@ref)). `replace
 own cursor, so nothing else needs placing.
 """
 replace_selected_document(document, replacement) =
-    make_replace_document_operation(
-        normalize_named_node_reference(get_selection(document)), replacement)
+    make_replace_document_operation(_find_named_document_path(document), replacement)
+
+# The path of the document that the caret of `document` names. A caret in the text of
+# a value, such as `value{2}` in a bool or a number, names the document that holds
+# the value: the longest part of the path that reaches a document.
+function _find_named_document_path(document)
+    reference = normalize_named_node_reference(get_selection(document))
+    reference isa ConcreteReference || return reference
+    steps = get_reference_steps(strip_reference_types(reference))
+    for n in length(steps):-1:1
+        path = Reference(steps[1:n]...)
+        try_evaluate_reference(document, path, missing) isa Document && return path
+    end
+    EmptyReference()
+end
 
 """
     append_insertion_operation(document, field::Symbol, T::Type) -> Operation

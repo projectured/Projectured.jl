@@ -11,6 +11,38 @@ function _panel_wait_idle!(a; timeout_seconds = 3.0)
     a.status
 end
 
+# Every text a window drew, with its place, also inside a pane that scrolled.
+function _panel_texts(node, ox = 0, oy = 0, found = Tuple{Int,Int,String}[])
+    node isa Cell && return _panel_texts(node[], ox, oy, found)
+    if node isa GraphicsCanvas
+        for element in node.elements
+            _panel_texts(element, ox + Int(node.x), oy + Int(node.y), found)
+        end
+    elseif node isa GraphicsViewport
+        _panel_texts(node.content, ox + Int(node.x) + round(Int, node.transform.e),
+                     oy + Int(node.y) + round(Int, node.transform.f), found)
+    elseif node isa GraphicsText
+        push!(found, (ox + Int(node.x), oy + Int(node.y), node.text))
+    end
+    found
+end
+
+# The chain a page draws an assistant with: the card, and the natural renderer for
+# what it holds, as the omnet catalog builds it.
+function _make_panel_card_projection()
+    measure = FontFileMeasure()
+    base = Pair{Type,Any}[PrimitiveDocument => ChainingProjection(
+        RecursiveProjection(PrimitiveToText()), TextToGraphics(measure = measure))]
+    natural(extra) = NaturalToGraphics(measure = measure,
+                                       font = StyleFont("Ubuntu Mono", 20), extra = extra)
+    chat = Pair{Type,Any}[
+        ConversationDraft => ChainingProjection(
+            RecursiveProjection(ConversationComposerToWidget()), natural(base)),
+        ConversationDocument => ChainingProjection(
+            RecursiveProjection(ConversationToWidget()), natural(base))]
+    ChainingProjection(RecursiveProjection(AssistantToWidgetCard()), natural(vcat(chat, base)))
+end
+
 function test_assistant_composer_panel()
     @testset "Assistant composer panel (Stage 6)" begin
         @testset "panel renders, and a key goes to the draft where the selection points" begin
@@ -27,7 +59,7 @@ function test_assistant_composer_panel()
             @test op.replacement == "h"
             @test first(get_reference_steps(strip_reference_types(op.reference))) ==
                   FieldReferenceStep("draft")
-            @test read_intent(proj, iom, KeyDown(:return, ModifierKeys(); time = 0.0)) isa SubmitDraftTurnOperation
+            @test read_intent(proj, iom, KeyPress('\n'; time = 0.0)) isa SubmitDraftTurnOperation
         end
 
         @testset "submit pushes the draft, resets it, and streams a reply" begin
@@ -60,21 +92,7 @@ function test_assistant_composer_panel()
 
         @testset "an assistant card takes the keys where its selection points" begin
             a = Assistant(; llm = FakeLlm("ok"))
-            # The chain a page draws an assistant with: the card, and the natural
-            # renderer for what it holds, as the omnet catalog builds it.
-            measure = FontFileMeasure()
-            base = Pair{Type,Any}[PrimitiveDocument => ChainingProjection(
-                RecursiveProjection(PrimitiveToText()), TextToGraphics(measure = measure))]
-            natural(extra) = NaturalToGraphics(measure = measure,
-                                               font = StyleFont("Ubuntu Mono", 20), extra = extra)
-            chat = Pair{Type,Any}[
-                ConversationDraft => ChainingProjection(
-                    RecursiveProjection(ConversationComposerToWidget()), natural(base)),
-                ConversationDocument => ChainingProjection(
-                    RecursiveProjection(ConversationToWidget()), natural(base))]
-            card = ChainingProjection(RecursiveProjection(AssistantToWidgetCard()),
-                                      natural(vcat(chat, base)))
-            (editor, backend) = _tr_editor(a, card)
+            (editor, backend) = _tr_editor(a, _make_panel_card_projection())
             press(event) = _tr_press!(editor, backend, event)
             none = ModifierKeys()
             # The card selected as a whole takes no key.
@@ -87,7 +105,7 @@ function test_assistant_composer_panel()
             @test a.draft.parts[end].content.value == "hi"
             steps = get_reference_steps(strip_reference_types(editor.document.selection))
             @test (last(steps).start, last(steps).stop) == (2, 2)
-            press(KeyDown(:return, none; time = 0.0))
+            press(KeyPress('\n'; time = 0.0))
             @test length(a.conversation.turns) >= 1
             @test something(a.draft.parts[end].content.value, "") == ""
             _panel_wait_idle!(a)
@@ -122,7 +140,7 @@ function test_assistant_composer_panel()
             at("hellXo", (3, 5))
             press(KeyDown(:backspace, none; time = 0.0))
             at("helo", (3, 3))
-            press(KeyDown(:return, ModifierKeys(shift = true); time = 0.0))
+            press(KeyPress('\n', ModifierKeys(shift = true); time = 0.0))
             at("hel\no", (4, 4))
 
             # A click inside the text lands where it was aimed.
@@ -133,14 +151,14 @@ function test_assistant_composer_panel()
             at("hel\no", (1, 1))
 
             # Return submits, and the fresh draft holds the selection.
-            press(KeyDown(:return, none; time = 0.0))
+            press(KeyPress('\n'; time = 0.0))
             @test length(a.conversation.turns) >= 1
             at("", (0, 0))
             press(KeyPress('q'; time = 0.0))
             at("q", (1, 1))
 
             # A structured part: the kind chooser takes the selection.
-            press(KeyDown(:tab, none; time = 0.0))
+            press(KeyPress('\t'; time = 0.0))
             @test active() isa DocumentInsertion
             at("", (0, 0))
             foreach(c -> press(KeyPress(c; time = 0.0)), "jul")
@@ -154,6 +172,89 @@ function test_assistant_composer_panel()
             press(KeyDown(:end, ModifierKeys(ctrl = true); time = 0.0))
             press(KeyDown(:right, ModifierKeys(shift = true); time = 0.0))
             at("jul", (3, 3))
+            _panel_wait_idle!(a)
+        end
+
+        # The transcript is read, but the terminal of a sign-in is a place where a
+        # person works: a press there puts the caret in its input line, the keys
+        # type there, and Return sends the line to the program.
+        @testset "a person types the code of a sign-in into its terminal in the transcript" begin
+            script = raw"""printf 'Code > '; read code; test "$code" = right"""
+            method = AgentSignInMethod("code", "Sign in with a code", "", `sh -c $script`)
+            connection = ScriptedAgentConnection(Any[]; is_signed_in = false, sign_in_methods = [method])
+            a = Assistant(; backend = :acp, agent_session = ExternalAgentSession(connection))
+            (editor, backend) = _tr_editor(a, _make_panel_card_projection())
+            press(event) = _tr_press!(editor, backend, event)
+            none = ModifierKeys()
+            frames_until(condition) =
+                timedwait(() -> (run_frame!(editor); condition()), 10.0; pollint = 0.02) === :ok
+            requests() = [part.content for turn in collect(a.conversation.turns) for part in collect(turn.parts)
+                          if part.content isa ConversationSignInRequest]
+            drawn() = _panel_texts(_tr_window(backend))
+            find_drawn(text) = (found = [entry for entry in drawn() if entry[3] == text]; isempty(found) ? nothing : first(found))
+            evaluate_operation(editor, StartExternalAgentOperation(a))
+            @test frames_until(() -> length(requests()) == 1)
+            request = only(requests())
+            # The button of the method starts the sign-in, in the card.
+            @test frames_until(() -> find_drawn("Sign in with a code") !== nothing)
+            (x, y, _) = find_drawn("Sign in with a code")
+            press(MouseClick(:left, x + 4, y + 6, none; time = 0.0))
+            @test request.terminal isa TerminalDocument
+            @test frames_until(() -> find_drawn("Code > ") !== nothing)
+            # A press in the terminal puts the caret in its input line.
+            (x, y, _) = find_drawn("Code > ")
+            press(MouseClick(:left, x + 4, y + 6, none; time = 0.0))
+            steps = get_reference_steps(strip_reference_types(editor.document.selection))
+            @test any(step -> step == FieldReferenceStep("terminal"), steps)
+            foreach(c -> press(KeyPress(c; time = 0.0)), "right")
+            @test request.terminal.input.value == "right"
+            connection.is_signed_in = true
+            press(KeyPress('\n'; time = 0.0))
+            @test frames_until(() -> request.state == "Signed in.")
+            @test "right" in [line.text for line in request.terminal.lines]
+            @test frames_until(() -> length(connection.sessions) == 1)
+        end
+
+        # The form of a question is a place where a person works too: a press on
+        # an option, a press on a choice, the keys in a number field, and Send.
+        @testset "a person answers a question of the agent in its form in the transcript" begin
+            fields = [AgentQuestionField("question_1", "Colour", "Which colour?", :choice,
+                                         [AgentOptionValue("Red", "Red", "warm"), AgentOptionValue("Blue", "Blue", "")], true),
+                      AgentQuestionField("parts", "Parts", "", :choices,
+                                         [AgentOptionValue("a", "Apple", ""), AgentOptionValue("b", "Banana", "")], false),
+                      AgentQuestionField("size", "Size", "", :integer, AgentOptionValue[], false)]
+            connection = ScriptedAgentConnection([Any[make_scripted_question_step("Answer, please.", fields),
+                                                      LlmTextStart(), LlmTextDelta("Thanks."), LlmTextStop()]])
+            a = Assistant(; backend = :acp, agent_session = ExternalAgentSession(connection))
+            (editor, backend) = _tr_editor(a, _make_panel_card_projection())
+            press(event) = _tr_press!(editor, backend, event)
+            none = ModifierKeys()
+            frames_until(condition) =
+                timedwait(() -> (run_frame!(editor); condition()), 10.0; pollint = 0.02) === :ok
+            requests() = [part.content for turn in collect(a.conversation.turns) for part in collect(turn.parts)
+                          if part.content isa ConversationQuestionRequest]
+            drawn() = _panel_texts(_tr_window(backend))
+            find_drawn(text) = (found = [entry for entry in drawn() if entry[3] == text]; isempty(found) ? nothing : last(found))
+            click(text) = ((x, y, _) = find_drawn(text); press(MouseClick(:left, x + 4, y + 6, none; time = 0.0)))
+            a.input.value = "Ask me"
+            evaluate_operation(editor, SubmitProseOperation(a))
+            @test frames_until(() -> length(requests()) == 1 && find_drawn("Red") !== nothing)
+            request = only(requests())
+            values = collect(request.form.values)
+            click("Red")
+            @test values[1].value == "Red"
+            click("Apple")
+            @test values[2].value == "a"
+            @test frames_until(() -> find_drawn("✓ Apple") !== nothing)
+            # The number field is below its title; a press there puts the caret in it.
+            (x, y, _) = find_drawn("Size")
+            press(MouseClick(:left, x + 10, y + 28, none; time = 0.0))
+            press(KeyPress('3'; time = 0.0))
+            @test values[3].value == "3"
+            click("Send")
+            @test frames_until(() -> length(connection.answers) == 1)
+            @test only(connection.answers) == Dict{String,Any}("question_1" => "Red", "parts" => ["a"], "size" => 3)
+            @test frames_until(() -> request.answer == "Answered: Colour: Red; Parts: Apple; Size: 3")
             _panel_wait_idle!(a)
         end
     end

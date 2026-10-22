@@ -51,28 +51,35 @@ const _CATALOG_EDIT_BROKEN = (
     #   a parent (how they are always used in anger) the recursion exists and they
     #   are fine — which is exactly why a bare atom was worth adding.
     "layout/", "widget/composite/", "widget/reference_inspector/", "graph/layout/",
+    # @catalog-broken the views of a text that hold a document, a highlight and a
+    #   filter of a text and the gutter of a line: the same cause, no `recursion`
+    #   for the text or the marks that they hold.
+    "text/highlighted/", "text/filtered/", "text/gutter/",
     # @catalog-broken bare text spans: `WordWrapping` is block-level and has no
-    #   method for a lone `TextString`/`TextNewline`/`TextLine`.
-    "text/bare_string/", "text/bare_newline/", "text/bare_line/",
+    #   method for a lone `TextString`/`TextLine`.
+    "text/bare_string/", "text/bare_line/", "text/bare_spacing/", "text/bare_graphics/",
 )
 _catalog_edit_broken(name) =
     any(p -> occursin(p, name), _CATALOG_EDIT_BROKEN) ?
         ((ev, msg) -> occursin("FieldError", msg) || occursin("MethodError", msg) ||
-                      occursin("TypeError", msg) || occursin("under-typed", msg)) : nothing
+                      occursin("TypeError", msg) || occursin("under-typed", msg) ||
+                      occursin("needs a recursion", msg)) : nothing
 
 # Entries whose position-navigation still fails — the seed can't produce a caret, or the walk
 # throws (an under-typed @reference / a TypeError in a node's backward map / selection maps).
 # @catalog-broken yaml/sequence: graphics Ctrl+Home seed returns nothing (0 states).
 # @catalog-broken filesystem/directory: under-typed @reference on the walk.
 # @catalog-broken sql/where_filter_condition: TypeError (SyntaxNavigation) on the walk.
+# @catalog-broken inspector/selection, projection/fault_report: a view that a person
+#   reads and does not edit, so Ctrl+Home finds no caret to seed (0 states).
 # @catalog-broken julia/empty: renders to nothing, so there is no caret to seed (0 states).
 #   Arguably not a bug — `JuliaEmpty` is the absent return type of a function that
 #   declares none, and absent is what it should draw. It is marked rather than
 #   skipped because the atom still has to be printed and read like any other, and
 #   because "a document that renders empty" is a case the caret motion may one
 #   day want an answer for.
-# @catalog-broken the layouts, the widget composite, the bare text spans and the
-#   embed stub: same three causes as the edit set above (no recursion standalone,
+# @catalog-broken the layouts, the widget composite, the views of a text that hold
+#   a document, the bare text spans and the embed stub: same three causes as the edit set above (no recursion standalone,
 #   no block for the wrapper to wrap, no selection field), which leave the walk
 #   with no caret to seed.
 const _CATALOG_NAV_BROKEN = ("yaml/sequence/", "filesystem/directory/",
@@ -80,23 +87,27 @@ const _CATALOG_NAV_BROKEN = ("yaml/sequence/", "filesystem/directory/",
                              "julia/empty/",
                              "layout/", "widget/composite/",
                              "widget/reference_inspector/", "graph/layout/",
-                             "text/bare_string/", "text/bare_newline/",
-                             "text/bare_line/")
+                             "text/bare_string/", "text/bare_line/",
+                             "text/bare_spacing/", "text/bare_graphics/",
+                             "text/highlighted/", "text/filtered/", "text/gutter/",
+                             "inspector/selection/", "projection/fault_report/")
 # Entries whose PRINTER cannot force its own output. Distinct from the edit set:
 # these fail before any gesture, when the walk reads the cells the printer built.
-# @catalog-broken layouts / widget composite / graph layout: no `recursion` in a
-#   single-step projection, so a child has no `print_document` method.
+# @catalog-broken layouts / widget composite / graph layout / the views of a text
+#   that hold a document: no `recursion` in a single-step projection, so a child
+#   has no `print_document` method.
 # @catalog-broken text/bare_*: `WordWrapping` is block-level and has no method for
 #   a lone span, so the derived `:graphics` variant cannot be forced. The `:text`
 #   variant — the one these atoms exist for — prints fine.
 const _CATALOG_PRINT_BROKEN = ("layout/", "widget/composite/",
                                "widget/reference_inspector/", "graph/layout/",
-                               "text/bare_string/", "text/bare_newline/",
-                               "text/bare_line/")
+                               "text/bare_string/", "text/bare_line/",
+                               "text/bare_spacing/", "text/bare_graphics/",
+                               "text/highlighted/", "text/filtered/", "text/gutter/")
 _catalog_print_broken(name) =
     any(p -> occursin(p, name), _CATALOG_PRINT_BROKEN) ?
         (msg -> occursin("MethodError", msg) || occursin("FieldError", msg) ||
-                occursin("TypeError", msg)) : nothing
+                occursin("TypeError", msg) || occursin("needs a recursion", msg)) : nothing
 
 _catalog_seed_broken(name)   = any(p -> occursin(p, name), _CATALOG_NAV_BROKEN) ? (_errs -> true) : nothing
 _catalog_throws_broken(name) = any(p -> occursin(p, name), _CATALOG_NAV_BROKEN) ? (_msg -> true) : nothing

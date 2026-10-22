@@ -6,6 +6,33 @@ base registers onto the kernel's `OperationModule` generic is validated by the
 kernel operation-layer test through the default fieldnames-walk.
 """
 
+# A schema with typed list fields: the native layout holds a plain vector, and the
+# cell layout holds the list of the field. A list of a schema holds its family.
+@document [M, C] struct TypedListEntry
+    label::String
+end
+
+@document [M, C] struct TypedListHolder
+    names::Vector{String} = String[]
+    entries::Vector{TypedListEntry} = TypedListEntry[]
+end
+
+# A field that names a kind that is not reactive keeps its plain vector in the cell
+# layout, as a scratch buffer does.
+@document [M, C] struct BufferHolder
+    buffer::MutableCell{Vector{String}}
+end
+
+# A field that names the reactive kind holds a list, as a field that names no kind does.
+@document struct ReactiveListHolder
+    offsets::ReactiveCell{Vector{Int}} = Int[]
+end
+
+# A field declared `CollectionDocument` takes a plain vector as the list of it.
+@document struct CollectionHolder
+    elements::CollectionDocument = CellVector()
+end
+
 function test_collection()
 @testset "ReactiveCollection" begin
 
@@ -130,7 +157,7 @@ counted = lazy_integers_from(1)
 @test count_computed_nodes(counted) == 5
 # The count computes nothing: the `next` of the fifth link is still not run.
 fifth = counted.next.next.next.next
-@test !is_cell_up_to_date(getfield(fifth, :next))
+@test !is_cell_valid(getfield(fifth, :next))
 @test count_computed_nodes(counted) == 5
 # A link that holds its neighbour as a value counts too, in either direction:
 # the fifth link counts itself and the one link back that it holds.
@@ -350,6 +377,86 @@ end
     end
 end
 
+@testset "a lazy link builds its neighbour when first read, and the neighbour links back" begin
+    built = Ref(0)
+    node = ListNode(1)
+    set_lazy_link!(node, :next, () -> (built[] += 1; ListNode(2)))
+    set_lazy_link!(node, :prev, () -> nothing)
+    @test built[] == 0
+    @test node.next.value == 2
+    @test node.next.prev === node
+    @test node.next === node.next && built[] == 1
+    @test node.prev === nothing
+    @test_throws ArgumentError set_lazy_link!(node, :up, () -> nothing)
+end
+
+@testset "a mapped list mirrors a list, with the count and the neighbour of each node" begin
+    words = make_index_list(4, 2, i -> ("one", "two", "three", "four")[i])
+    seen = Tuple{String,Int,Any,Any}[]
+    mapped = make_mapped_list(words) do node, k, before, after
+        push!(seen, (node.value, k, before === nothing ? nothing : before.value,
+                     after === nothing ? nothing : after.value))
+        length(node.value)
+    end
+    @test mapped.value == 3                               # "two", the head of `words`
+    @test mapped.next.value == 5 && mapped.next.prev === mapped
+    @test mapped.prev.value == 3 && mapped.prev.next === mapped
+    @test mapped.next.next.value == 4 && mapped.next.next.next === nothing
+    @test mapped.prev.prev === nothing
+    @test seen[1] == ("two", 1, nothing, nothing)
+    @test ("three", 2, 3, nothing) in seen                # reached from the node before it
+    @test ("one", 0, nothing, 3) in seen                  # reached from the node after it
+    @test make_mapped_list((node, k, _, _) -> k, words; at = 7).next.value == 8
+
+    @testset "a computed value follows the cells that it reads" begin
+        factor = Cell(2)
+        doubled = make_mapped_list((node, _, _, _) -> length(node.value) * factor[], words; computed = true)
+        @test doubled.value == 6
+        factor[] = 3
+        @test doubled.value == 9
+    end
+end
+
+@testset "the kept prints of a list follow an element to its new count" begin
+    a, b, c, d = Any["a"], Any["b"], Any["c"], Any["d"]
+    list_of(values) = make_index_list(length(values), 1, i -> values[i])
+    head = Cell(list_of([a, b, c, d]))
+    keep = make_kept_list_prints(() -> head[])
+    # The first head: each element prints, with the count of its link.
+    function link!(element, k)
+        kept = take_kept_list_print!(keep, element, k, _ -> true)
+        fresh = kept === nothing
+        if fresh
+            count, linked = make_kept_list_count(keep, element, k)
+            kept = record_kept_list_print!(keep, element, KeptListPrint("print of $(element[1])", count, linked))
+        end
+        note_kept_list_link!(keep, k)
+        (kept, fresh)
+    end
+    start_kept_list_head!(keep)
+    first = Dict(element => link!(element, k)[1] for (k, element) in enumerate([a, b, c, d]))
+    @test all(p -> p.count[] == findfirst(==(p.value), ["print of a", "print of b", "print of c", "print of d"]),
+              values(first))
+    # A new head without b: a, c and d keep their prints, at their new counts.
+    head[] = list_of([a, c, d])
+    start_kept_list_head!(keep)
+    taken = [link!(element, k) for (k, element) in enumerate([a, c, d])]
+    @test all(t -> !t[2], taken)
+    @test [t[1] for t in taken] == [first[a], first[c], first[d]]
+    @test [first[x].count[] for x in (a, c, d)] == [1, 2, 3]
+    @test haskey(keep.before, b)
+    # b waits for one head and then goes.
+    head[] = list_of([a, c, d])
+    start_kept_list_head!(keep)
+    foreach(((k, element),) -> link!(element, k), enumerate([a, c, d]))
+    @test !haskey(keep.before, b) && !haskey(keep.current, b)
+    # An element at two places is kept at neither, and each print takes its link.
+    head[] = list_of([a, c, a])
+    start_kept_list_head!(keep)
+    @test link!(a, 1)[2] && link!(a, 3)[2]
+    @test !haskey(keep.current, a)
+end
+
 @testset "an index list builds a node when a walk reaches it, and stops at both ends" begin
     built = Int[]
     head = make_index_list(5, 3, i -> (push!(built, i); i * 10))
@@ -454,6 +561,58 @@ end # @testset "ReactiveCollection"
         operation_module.evaluate_operation(editor, inverse)
         @test collect(v) == ["a", "b"]
         @test get_cell_at(v, 2) === slot
+    end
+
+    @testset "a kinded copy of a native layout holds the list of the field" begin
+        native = TypedListHolder(; names = ["a", "b"], entries = [TypedListEntry("x")])
+        @test getfield(native, :names) isa Vector{String}
+        @test getfield(native, :entries) isa Vector{MTypedListEntry}
+        for kind in (ReactiveCell, MutableCell, ImmutableCell)
+            copied = copy_document(kind, native)
+            @test getfield(copied, :names)[] isa CellVector{String}
+            @test collect(copied.names) == ["a", "b"]
+            @test getfield(copied, :entries)[] isa CellVector{ATypedListEntry}
+            @test only(collect(copied.entries)) isa ACTypedListEntry
+            @test only(collect(copied.entries)).label == "x"
+        end
+    end
+
+    @testset "a native layout takes the list of a cell layout as a vector" begin
+        shadow = copy_document(ReactiveCell, TypedListHolder(; names = ["a", "b"]))
+        native = TypedListHolder(; names = shadow.names)
+        @test getfield(native, :names) isa Vector{String}
+        @test getfield(native, :names) == ["a", "b"]
+        @test convert(Vector{String}, CellVector(Any["x"])) == ["x"]
+    end
+
+    @testset "a field that names a kind that is not reactive holds a plain vector" begin
+        buffer = Vector{String}(undef, 2)
+        shadow = ACBufferHolder(buffer, nothing)
+        @test getfield(shadow, :buffer) isa MutableCell{Vector{String}}
+        @test shadow.buffer === buffer
+        shadow.buffer = ["a"]
+        @test shadow.buffer isa Vector{String}
+        @test shadow.buffer == ["a"]
+    end
+
+    @testset "a field that names the reactive kind holds a list" begin
+        holder = ReactiveListHolder()
+        @test holder.offsets isa CellVector{Int}
+        holder.offsets = [3, 7]
+        @test holder.offsets isa CellVector{Int} && holder.offsets == [3, 7]
+    end
+
+    @testset "a plain vector in a field declared CollectionDocument becomes a list" begin
+        holder = CollectionHolder(; elements = Any["a", "b"])
+        @test holder.elements isa CellVector
+        @test collect(holder.elements) == ["a", "b"]
+    end
+
+    @testset "a list finds an element by its index" begin
+        list = CellVector(["a", "b", "b"])
+        @test findfirst(==("b"), list) == 2
+        @test findall(==("b"), list) == [2, 3]
+        @test collect(keys(list)) == [1, 2, 3]
     end
 
 end # @testset "CellVector protocol"

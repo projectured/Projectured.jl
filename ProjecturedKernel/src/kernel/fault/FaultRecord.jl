@@ -22,7 +22,7 @@ shows.
 
 # Example
 
-    record = make_fault_record(:print; origin = JsonToSyntax, reference,
+    record = make_fault_record(:print; origin = p.inner, reference,
                                exception, traceback)
 
 See also [`record_fault!`](@ref), which is what a barrier calls.
@@ -58,7 +58,7 @@ index 7 carry different messages and the same bug.
 
 # Example
 
-    key = _compute_fault_key(:print, :JsonToSyntax, :BoundsError)
+    key = _compute_fault_key(:print, :Printer, :BoundsError)
 
 See also [`FaultRecord`](@ref).
 """
@@ -79,7 +79,7 @@ function _format_fault_message(exception; maximum_length::Integer = 400)
     text = try
         sprint(showerror, exception)
     catch failure
-        is_passthrough_exception(failure) && rethrow()
+        is_fault_exception(failure) || rethrow()
         string(nameof(typeof(exception)))
     end
     text = replace(text, '\n' => ' ')
@@ -101,7 +101,7 @@ function _format_fault_traceback(exception, traceback; maximum_lines::Integer = 
     text = try
         sprint(showerror, exception, traceback)
     catch failure
-        is_passthrough_exception(failure) && rethrow()
+        is_fault_exception(failure) || rethrow()
         return ""
     end
     lines = split(text, '\n')

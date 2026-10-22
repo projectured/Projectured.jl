@@ -19,7 +19,7 @@ docstring for the `pred_ref(...)` marker convention.
 """
 @document struct JuliaFile <: FileDocument
     filename::String
-    content::JuliaDocument = JuliaNothing()
+    content::Document = JuliaNothing()
 end
 
 emit_text(f::JuliaFile) = print_natural_text(get_file_content(f))
@@ -38,7 +38,7 @@ end
 # not: a `pred_ref("…")` call with the marker as its one string argument.
 get_file_domain(::Type{<:JuliaFile}) = JuliaDocument
 make_reference_leaf(::JuliaFile, marker::AbstractString) =
-    JuliaCall(JuliaIdentifier(PRED_REF_FUNCTION_NAME), CellVector([JuliaString(make_marker_text(marker))]))
+    JuliaCall(JuliaIdentifier(PRED_REF_FUNCTION_NAME), JuliaDocument[JuliaString(make_marker_text(marker))])
 function find_reference_marker(node::JuliaCall)
     _is_marker_call(node) || return nothing
     args = getfield(node, :arguments)[]
@@ -59,8 +59,8 @@ parse_file_content(::Type{<:JuliaFile}, text::AbstractString) = parse_julia(text
 The name a top-level Julia definition introduces, or `nothing` for a
 statement that introduces none (a `using`, a bare call, …).
 
-A docstring is named by what it documents, and a macro call by its
-first argument — so `@document struct Foo … end` is found under
+A docstring is named by what it documents, an end-of-line comment by its
+statement, and a macro call by its first argument — so `@document struct Foo … end` is found under
 `"Foo"`, and asking for a documented definition yields the docstring
 with it rather than the bare definition.
 
@@ -76,6 +76,7 @@ get_julia_definition_name(n::JuliaAbstractType) = _julia_header_name(n.header)
 get_julia_definition_name(n::JuliaAssignment)   = _julia_header_name(n.target)
 get_julia_definition_name(n::JuliaConst)        = get_julia_definition_name(n.assignment)
 get_julia_definition_name(n::JuliaDocstring)    = get_julia_definition_name(n.subject)
+get_julia_definition_name(n::JuliaEndOfLineComment) = get_julia_definition_name(n.subject)
 
 function get_julia_definition_name(n::JuliaMacroCall)
     args = getfield(n, :arguments)[]
@@ -130,3 +131,30 @@ _julia_toplevel_statements(doc::JuliaDocument) = Any[doc]
 _julia_definition_names(doc) =
     String[n for n in (get_julia_definition_name(s) for s in _julia_toplevel_statements(doc))
              if n !== nothing]
+
+# ── What the pointer is on ──────────────────────────────────────────────────
+
+# The file says what a call is, for a call that no node says anything of: the note
+# of the function of the same name in the file, its signature and, when it has
+# one, its docstring. With no pointer on the file, it says the selected call.
+function _make_julia_call_note(file::JuliaFile)
+    found = find_pointed_part(file)
+    found === nothing && return nothing
+    place = findlast(document -> document isa JuliaCall, found.documents)
+    place === nothing && return nothing
+    callee = found.documents[place].callee
+    callee isa JuliaIdentifier || return nothing
+    documented = search_documents(file, node -> node isa JuliaDocstring && node.subject isa JuliaFunction &&
+                                                _julia_signature_name(node.subject.name) == callee.name;
+                                  limit = nothing)
+    isempty(documented) || return _make_julia_docstring_note(first(documented))
+    defined = search_documents(file, node -> node isa JuliaFunction && _julia_signature_name(node.name) == callee.name;
+                               limit = nothing)
+    isempty(defined) ? nothing : _make_julia_function_note(first(defined))
+end
+
+# The table of the file: a dwell answers the note of the call under the pointer.
+const _JULIA_FILE_BINDINGS = GestureBinding[
+    make_tooltip_binding(_make_julia_call_note; description = "Show the function that is called")]
+
+get_document_gesture_bindings_own(::Type{JuliaFile}) = _JULIA_FILE_BINDINGS

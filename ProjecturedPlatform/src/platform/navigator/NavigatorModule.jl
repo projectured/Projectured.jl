@@ -16,6 +16,7 @@ module NavigatorModule
 using ..CellModule
 using ..CollectionModule
 using ..DocumentModule
+using ..DomainModule
 using ..EventModule
 using ..FileSystemModule
 using ..GestureBindingModule
@@ -26,6 +27,8 @@ using ..LayoutModule
 using ..NaturalModule
 using ..OperationModule
 using ..PaneModule
+using ..AgentModule
+using ..ToolModule
 using ..PrimitiveModule
 using ..ProjectionAlgebraModule
 using ..ProjectionModule
@@ -36,35 +39,36 @@ using ..SerializationModule
 using ..StyleModule
 using ..SyntaxModule
 using ..TextModule
+using ..TooltipModule
 using ..WidgetModule
 
 # Imported to extend: this module adds a method to each of these.
-import ..DocumentModule: get_document_title, get_edited_field, has_document_duplicate, is_walk_opaque
+import ..DocumentModule: get_document_title, get_edited_field, has_document_duplicate, is_walk_opaque, copy_document
 import ..PaneModule: make_pane_tab_title
 import ..SerializationModule: pred_arguments, make_pred_document
 import ..ProjectionModule: print_document, read_intent, map_reference_forward, map_reference_backward
 import ..OperationModule: evaluate_operation
+import ..DomainModule: acquire_document!, release_document!, get_document_decoration
 
-export Navigator, NavigatorVisit, NavigatorAddress, NavigatorChoiceList, ReferenceInsertion
-export get_navigator_page_address, get_navigator_page, get_navigator_address_steps,
-       find_navigator_parent_address,
-       find_navigator_selected_address, is_navigator_stop
-export make_navigator_open_operation, make_navigator_back_operation,
+export NavigatorViewSlot, NavigatorVisit, ReferenceInsertion, NavigatorAddress, NavigatorChoiceList, Navigator
+export get_navigator_page_address, get_navigator_address_steps, get_navigator_page, get_navigator_page_view,
+       find_navigator_parent_address, is_navigator_stop, find_navigator_selected_address,
+       make_navigator_open_operation, make_navigator_back_operation,
        make_navigator_forward_operation, make_navigator_parent_operation
 export find_navigator_choices, make_navigator_choice_operation
 export make_navigator_address_edit_operation, make_navigator_address_commit_operation,
        make_navigator_address_reset_operation, is_navigator_address_selected
+export find_navigator_target, find_navigator_address, open_page!
+export make_navigator_address_projection, ReferenceStepToSyntaxLeaf
 export NavigatorToWidget, make_navigator_projection
 export NavigatorChoiceListToWidget, make_navigator_choice_list_projection
-export ReferenceStepToSyntaxLeaf, make_navigator_address_projection
-export OpenPageOperation, find_navigator_target
 
 include("NavigatorDocument.jl")
 include("NavigatorVisits.jl")
 include("NavigatorChoices.jl")
 include("NavigatorAddressEdits.jl")
 include("NavigatorGestures.jl")
-include("OpenPageOperation.jl")
+include("NavigatorPageOpen.jl")
 include("NavigatorAddressToSyntax.jl")
 include("NavigatorToWidget.jl")
 include("NavigatorChoiceListToWidget.jl")

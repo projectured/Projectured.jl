@@ -52,3 +52,4 @@ function make_shell_document(document; title="untitled", width=nothing, height=n
                 menu_bar=menu_bar, toolbar=toolbar, status_bar=status_bar,
                 size=size)
 end
+

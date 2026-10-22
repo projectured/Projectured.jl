@@ -25,11 +25,11 @@ end
 get_document_title(::MessageLog) = "Log"
 get_insertion_aliases(::Type{MessageLog}) = ["log"]
 
-# Last session's log is not this one's: `entries` and `count` are what a
-# session captured, not a setting of the log, and `entries` holds
-# `MessageLogEntry` values the notation cannot write in any case. Only
-# `capacity` describes the log itself, so a load starts empty at the same size.
-pred_arguments(log::MessageLog) = (), Pair{Symbol,Any}[:capacity => log.capacity]
+# A file keeps that it shows the log of the session, and not what the log held:
+# the entries of one session say nothing about the next, and only the log of the
+# session fills. A load gives the log of the session of its editor, and a load with
+# no editor a new log.
+pred_arguments(::MessageLog) = (), Pair{Symbol,Any}[]
 
 # ── Record ─────────────────────────────────────────────────────────────────
 
@@ -64,22 +64,58 @@ end
 
 # ── The session's log ────────────────────────────────────────────────────────
 
-# One log for the session, because there is one editor and one program logging
-# into it. `MessageLog()` still builds an empty one, which a test wants.
-const _SESSION_MESSAGE_LOG = MessageLog()
-
 """
-    get_session_message_log() -> MessageLog
+    get_session_message_log(; editor = find_evaluation_editor()) -> MessageLog
 
-The one log of the session.
+The message log of the session of `editor`: by default the editor of the
+evaluation, or of the loop that runs the calling code. Each editor has its own,
+which its [`MessageLogFeed`](@ref) fills, so no log is shared by two editors.
+With no editor, a new empty log, which nothing keeps and nothing fills.
 
-Every message log a person opens is this document, so two of them show the
-same messages rather than two halves of them. A view that shows only part of
-the history is a filter over this log, not a log of its own.
+Every message log that a person opens in a window of the editor is this
+document, so two of them show the same messages rather than two halves of them.
+A view that shows only part of the history is a filter over this log, not a log
+of its own.
+
+Use it to read the messages of the window, such as a warning of a file that
+could not be read: `print_natural_text` prints one line for each message, with
+its level.
+
+# Example
+
+    println(print_natural_text(get_session_message_log()))
+
+See also `get_session_fault_log`, `get_session_gesture_log`.
 """
-get_session_message_log() = _SESSION_MESSAGE_LOG
+function get_session_message_log end
 
-# A person who types `log` into an empty tab gets the session's log, not a
-# fresh empty one. A fresh one would never fill: what captures is a logger
-# installed for the session, and it writes into the log it holds.
+get_session_message_log(; editor = find_evaluation_editor()) =
+    editor isa Editor ? get_session_document!(MessageLog, editor, MessageLog) : MessageLog()
+
+# A person who types `log` into an empty tab gets the log of the editor, not a
+# fresh empty one. A fresh one would never fill: the feed of the editor fills
+# the log of its session.
 make_insertion_document(::Type{MessageLog}) = get_session_message_log()
+make_pred_document(::Type{<:MessageLog}, positional, keywords) = get_session_message_log()
+
+# A log counts the warnings and the errors that it holds.
+function get_document_decoration(log::MessageLog)
+    levels = [lowercase(entry.level) for entry in log.entries]
+    errors = count(level -> startswith(level, "error"), levels)
+    warnings = count(level -> startswith(level, "warn"), levels)
+    counts = DocumentCount[]
+    errors > 0 && push!(counts, DocumentCount(string(errors, errors == 1 ? " error" : " errors"); role = :error))
+    warnings > 0 && push!(counts, DocumentCount(string(warnings, warnings == 1 ? " warning" : " warnings"); role = :warning))
+    DocumentDecoration(; icon = :scroll_text, counts, tooltip = () -> _make_message_log_note(log))
+end
+
+# What a row of the log says when the pointer rests on it: what it holds, and how
+# many entries it kept and recorded, and how many are errors and warnings.
+function _make_message_log_note(log::MessageLog)
+    levels = [lowercase(entry.level) for entry in log.entries]
+    facts = Pair{String,Any}["Kept" => string(length(log.entries)), "Capacity" => string(log.capacity),
+                             "Recorded" => string(log.count),
+                             "Errors" => string(count(level -> startswith(level, "error"), levels)),
+                             "Warnings" => string(count(level -> startswith(level, "warn"), levels))]
+    TooltipNote(; title = "Log", text = "What the program said in this session.", facts)
+end

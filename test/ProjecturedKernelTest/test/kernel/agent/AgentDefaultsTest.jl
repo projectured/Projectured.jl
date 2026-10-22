@@ -61,5 +61,27 @@ function test_agent_defaults()
         @test update.title === nothing && update.input === nothing && update.output === nothing
     end
 
+    @testset "a connection that does not say how to sign out can not" begin
+        @test !has_agent_sign_out(make_agent_connection(:toy))
+        @test !sign_out_agent!(make_agent_connection(:toy))
+    end
+
+    @testset "a connection that does not say how to steer a turn can not" begin
+        @test !has_agent_steering(make_agent_connection(:toy))
+        @test !steer_agent_prompt!(make_agent_connection(:toy), "s", Any[])
+    end
+
+    @testset "a connection that does not say how to stop the work of an agent can not" begin
+        @test cancel_agent_subagent!(make_agent_connection(:toy), "s", "subagent") === nothing
+        @test stop_agent_background_task!(make_agent_connection(:toy), "s", "task") === false
+    end
+
+    @testset "a sign-in exception shows its message" begin
+        method = AgentSignInMethod("login", "Log in", "Run the login.", `agent --login`)
+        exception = AgentSignInException("Toy Agent", [method], "Toy Agent needs a sign-in.")
+        @test sprint(showerror, exception) == "Toy Agent needs a sign-in."
+        @test only(exception.methods).command == `agent --login`
+    end
+
 end
 end # test_agent_defaults

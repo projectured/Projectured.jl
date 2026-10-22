@@ -9,6 +9,17 @@
 # recording carries every tool a person sitting at the window has.
 # ═══════════════════════════════════════════════════════════════════════════
 
+# The selection on the content of the first file tab of the main group of the
+# window `tree`, as a press on that tab gives it.
+function _focus_first_file_tab!(tree)
+    panes = ProjecturedPlatform.PaneModule
+    references = ProjecturedKernel.ReferenceModule
+    tab = panes.get_pane_tab_reference(tree, first(panes.get_pane_groups(tree)), 2)
+    ProjecturedKernel.SelectionModule.set_selection!(tree, references.extend_reference(
+        tab, references.FieldReferenceStep("content"), references.FieldReferenceStep("content")))
+    tree
+end
+
 """
     record_application_video(paths, timeline, filename; width=1280, height=720,
                              fps=30, assistant=:none, model="", context=0,
@@ -64,7 +75,7 @@ files of the computer that records it.
 
 `prepare` is called with the document of the application, its pane tree,
 before the editor is made, so a take starts from the layout it wants, such as a
-pane with the session's gesture log below a file. The wrappers carry the
+pane with a gesture log below a file, which the window then records into. The wrappers carry the
 selection that it sets.
 
 `llm` is the model of the assistant when it is given, as
@@ -76,11 +87,14 @@ the same `ffmpeg` call [`record_video`](@ref) uses
 (`ProjecturedVideo.encode_frames_to_video!`), then discarded.
 """
 # The wrappers of the application, with the panel of the newest gestures over the
-# content when the take asks for it.
-_with_gesture_overlay(wrappers, gesture_overlay, measure) =
-    gesture_overlay === false ? wrappers :
-    merge(wrappers, (; gesture_log = merge((; overlay = true, measure),
+# content when the take asks for it. The panel keeps the options that the
+# application gave, such as the log of a tab that `prepare` opened.
+function _with_gesture_overlay(wrappers, gesture_overlay, measure)
+    gesture_overlay === false && return wrappers
+    given = wrappers.gesture_log === true ? (;) : wrappers.gesture_log
+    merge(wrappers, (; gesture_log = merge(given, (; overlay = true, measure),
                                            gesture_overlay === true ? (;) : gesture_overlay)))
+end
 
 function record_application_video(paths::AbstractVector, timeline::AbstractVector,
                                   filename::AbstractString;
@@ -97,13 +111,19 @@ function record_application_video(paths::AbstractVector, timeline::AbstractVecto
                                   measure = FontFileMeasure(), prepare = document -> nothing)
     lowercase(splitext(filename)[2]) == ".mp4" ||
         error("record_application_video: only .mp4 output is supported (got \"$filename\")")
-    chat = make_application_assistant(assistant; model = model, context = context, llm = llm)
+    # A video with no assistant shows no assistant pane, so a take shows only what
+    # its timeline acts on.
+    chat = assistant === :none ? nothing : make_application_assistant(assistant; model = model, context = context,
+                                                                       llm = llm)
     # One `Settings` for the histories of the window and for the editor. The take
     # names its render values on its backend, so the settings read them there.
     settings = make_settings()
     settings.is_read_from_targets = true
     document = make_application_document(collect(String, paths); root, assistant = chat,
                                          settings)
+    # A take with files opens on its first file, as its timeline is written for it;
+    # the application window opens on the Explorer.
+    isempty(paths) || _focus_first_file_tab!(document)
     prepare(document)
     title = "ProjecturEd"
     backend = VideoBackend(timeline, Symbol(title); width = width, height = height,
@@ -127,7 +147,7 @@ function record_application_video(paths::AbstractVector, timeline::AbstractVecto
                                             make_application_content_projections(; measure, appearance)),
                               _with_gesture_overlay(make_application_wrappers(; root, assistant = chat,
                                                                               status_bar, measure,
-                                                                              appearance),
+                                                                              appearance, document),
                                                     gesture_overlay, measure)...)
         backend.editor = editor
         start_application!(editor; assistant, model)

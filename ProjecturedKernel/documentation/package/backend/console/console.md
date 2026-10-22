@@ -26,14 +26,14 @@ For any other output, `write_to_devices!` raises an error that says to drop the 
 
 The backend has no text measure: a console pipeline ends in `TextBlock` and never reaches `TextToGraphics`, so no projection of a console pipeline measures text.
 
-`render_console` writes the spans of the block into one buffer:
+`render_console` writes the runs of the block into one buffer:
 
-- A `TextLine` ends the line before it and prints its indentation.
+- A `TextLine` ends the line before it and prints its indentation. This is the only newline.
 - A `TextString` prints its content with its font colour and its fill colour as 24-bit SGR codes.
-- `TextNewline` prints a newline, and `TextSpacing` prints one space.
-- `TextGraphics` and any other span print nothing.
+- `TextSpacing` prints one space.
+- `TextGraphics` and any other run print nothing.
 
-`color_default` gets no code, so an empty marker span takes the foreground colour of the terminal and is not black on a dark background. With `ansi = false` the backend writes plain text, and with `clear = true` it clears the screen before each frame. The editor loop writes on every tick, so the backend compares the buffer with the last frame and writes nothing when the two are equal. Without that, the terminal would flicker.
+`color_default` gets no code, so a run that names no colour takes the foreground colour of the terminal and is not black on a dark background. With `ansi = false` the backend writes plain text, and with `clear = true` it clears the screen before each frame. The editor loop writes on every tick, so the backend compares the buffer with the last frame and writes nothing when the two are equal. Without that, the terminal would flicker.
 
 ### Events in
 
@@ -47,13 +47,13 @@ The backend has no text measure: a console pipeline ends in `TextBlock` and neve
 | `ESC [ 2 ~`, `3 ~`, `5 ~`, `6 ~` | `KeyDown` of `:insert`, `:delete`, `:page_up`, `:page_down` |
 | `ESC [ P` to `S`, `ESC [ 11 ~` to `ESC [ 24 ~` | `KeyDown` of `:f1` to `:f12` |
 | `ESC O` and a letter of the rows above | the same key as `ESC [` and that letter |
-| `ESC [ Z` | `KeyDown(:tab)` with Shift |
+| `ESC [ Z` | `KeyPress('\t')` with Shift |
 | `ESC [ 1 ; m X`, `ESC [ n ; m ~` | the key of `X` or of `n`, with the modifiers of `m` |
 | a lone ESC | `KeyDown(:escape)` |
 | ESC and another key | that key with Alt |
-| CR, LF | `KeyDown(:return)` |
+| CR, LF | `KeyPress('\n')` |
 | DEL, BS | `KeyDown(:backspace)` |
-| TAB | `KeyDown(:tab)` |
+| TAB | `KeyPress('\t')` |
 | NUL | `KeyDown(:space)` with Ctrl |
 | Ctrl+C | `WindowQuit()` |
 | another byte of Ctrl+A to Ctrl+Z, 0x01 to 0x1A | `KeyDown` of `:a` to `:z` with Ctrl |
@@ -63,7 +63,7 @@ The parameter `m` is 1 plus the sum of 1 for Shift, 2 for Alt, 4 for Ctrl and 8 
 
 A lone ESC is Escape, and ESC followed by a key is that key with Alt. The two differ only in the time between the bytes. A terminal writes a whole escape sequence at once, so its bytes normally arrive in one read. When the bytes end in the start of a sequence, `take_from_devices!` waits at most 50 ms for more. When no byte arrives in that time, the bytes are the keys that the user typed: a lone ESC is Escape, and `ESC [` is Alt+`[`. When more bytes arrive, the parser reads the sequence that they complete.
 
-Ctrl+C gives `WindowQuit`, and the editor quits. Escape reaches the readers as a key, as [devices-and-backends.md](../../kernel/devices-and-backends.md) requires, and the editor loop quits on an Escape that no reader handled.
+Ctrl+C gives `WindowQuit`, and the editor quits. Escape reaches the readers as a key, as [devices-and-backends.md](../../kernel/devices-and-backends.md) requires, and `run_console_example` puts an `EscapeQuittingProjection` around its projection, so there an Escape that no reader handled quits.
 
 Every event is wrapped as `WindowInput(:console, event)`, because the console has no window. Home selects the root because the console has no mouse to make a first selection.
 

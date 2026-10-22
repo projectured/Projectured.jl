@@ -18,7 +18,8 @@
 #           SyntaxLeaf(bound(:name)),
 #           SyntaxLeaf(open='"', close='"', bound(:value)),
 #         ]) end),
-#       SyntaxNode(collection(:children); indentation=1),  ← recursive child body
+#       SyntaxNode(collection(:children); open="\n", sep="\n", close="\n",
+#                  indentation=1),                      ← recursive child body
 #       SyntaxLeaf(open="</", close=">", value=tag),        ← closing-tag leaf (display-only)
 #     ])
 #
@@ -38,7 +39,7 @@ end
 # The text is entity-escaped on the way out, as an attribute value already is,
 # and the parser unescapes it on the way in: a `<` in a text node round-trips.
 @projection_template XmlTextToSyntaxLeaf XmlText (p, t) ->
-    SyntaxLeaf(bound(:content, String, TextString(() -> _xml_text_escape(t.content), p.style)))
+    SyntaxLeaf(bound(:content, String, make_text_block(() -> _xml_text_escape(t.content), p.style)))
 
 # ── XmlInsertionToSyntaxLeaf ────────────────────────────────────────────────
 #
@@ -91,7 +92,7 @@ end
                             close=TextString(">", p.delim),
                             sep=TextString(" ", p.delim.font))
 
-    body_node = SyntaxNode(collection(:children); indentation=1)
+    body_node = SyntaxNode(collection(:children); open="\n", sep="\n", close="\n", indentation=1)
 
     close_leaf = SyntaxLeaf(TextString(() -> e.tag, p.tag);
                             open=TextString("</", p.delim),
@@ -119,6 +120,11 @@ function XmlToSyntax(; theme = nothing, syntax_theme = nothing)
                                                   delim = get_style(:delimiter_text)),
         XmlInsertion => XmlInsertionToSyntaxLeaf(; theme = syntax_theme),
         XmlNothing   => InsertionNothingToSyntaxLeaf(; theme = syntax_theme),
+        # The children and the attributes of an element admit any document, so they
+        # admit the insertion and the nothing of every domain, which Insert makes of an
+        # XML insertion there.
+        DocumentInsertion => DocumentInsertionToSyntaxLeaf(; theme = syntax_theme),
+        DocumentNothing   => InsertionNothingToSyntaxLeaf(; theme = syntax_theme),
     )
 end
 

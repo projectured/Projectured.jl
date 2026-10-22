@@ -10,6 +10,14 @@ import ProjecturedKernel.DeviceModule: Device, Keyboard, Mouse, Display
 _nav_natural() = NaturalToGraphics(; measure = FixedMeasure(8, 12, 4, 0))
 
 # An editor whose document is `document`, after its first frame.
+# The event that a key gives its meaning by: the KeyPress of the character it
+# types, or its KeyDown.
+function _nav_widget_key_event(key, modifiers)
+    character = find_typed_character(key)
+    character === nothing ? KeyDown(key, modifiers; time = 0.0) :
+                            KeyPress(character, modifiers; time = 0.0)
+end
+
 function _nav_editor(document; tabs = false, keywords...)
     backend = HeadlessBackend()
     editor = build_editor(document, _nav_natural(); backend,
@@ -26,6 +34,8 @@ function _nav_drawn(canvas, ox = 0, oy = 0, found = Tuple{String,Int,Int}[])
     y = oy + Int(canvas.y)
     for element in canvas.elements
         element = element isa Cell ? element[] : element
+        # A list yields its nodes, and a node holds its graphic.
+        element isa ListNode && (element = element.value)
         if element isa GraphicsText
             push!(found, (String(element.text), x + Int(element.x), y + Int(element.y)))
         elseif element isa GraphicsCanvas
@@ -58,7 +68,7 @@ const _NAV_PARENT = string(Char(0xe04a))
 _nav_press!(editor, backend, events...) =
     (foreach(event -> push_event!(backend, event), events); run_frame!(editor))
 
-_nav_key(key) = KeyDown(key, ModifierKeys(ctrl = true); time = 0.0)
+_nav_key(key) = _nav_widget_key_event(key, ModifierKeys(ctrl = true))
 
 # A click on the first text `text` that the frame draws.
 function _nav_click(backend, text)
@@ -117,6 +127,42 @@ function test_navigator_to_widget()
         navigator.address = @reference(shelf, books[2])
         @test _nav_is(backward(@reference(iomap.output, children[2].children[1].title)),
                       @reference(navigator, content.books[2].title))
+    end
+
+    @testset "a view of the page draws in its place, and the maps go through the field that holds the page" begin
+        runs = NavigatorTestRuns("R", nothing)
+        shelf = NavigatorTestShelf("Shelf", _nav_vector([NavigatorTestBook("A", _nav_vector([runs]), nothing)]), nothing)
+        navigator = Navigator(shelf, @reference(shelf, books[1].chapters[1]))
+        view = follow_content_selection!(NavigatorTestRunsView(runs))
+        navigator.page_view = NavigatorViewSlot(view)
+        p = make_navigator_projection()
+        iomap = print_document(p, nothing, navigator, nothing)
+        forward(path) = map_reference_forward(p, iomap, path)
+        backward(path) = map_reference_backward(p, iomap, path)
+        @test iomap.output.children[2].children[1] === view
+        page_title = @reference(navigator, content.books[1].chapters[1].title)
+        @test _nav_is(forward(page_title), @reference(iomap.output, children[2].children[1].page.title))
+        @test is_fully_typed_reference(forward(page_title))
+        @test _nav_is(backward(forward(page_title)), page_title)
+        # The view itself is the page; a field that only the view keeps names nothing.
+        @test _nav_is(backward(@reference(iomap.output, children[2].children[1])),
+                      @reference(navigator, content.books[1].chapters[1]))
+        @test backward(@reference(iomap.output, children[2].children[1].anchor)) === nothing
+        # A part that the view introduced, such as a link, keeps its path after the
+        # page, with no field.
+        introduced = make_introduced_reference(IdentityProjection(), view, EmptyReference())
+        drawn = concat_references(@reference(iomap.output, children[2].children[1]), introduced)
+        found = backward(drawn)
+        page_steps = get_reference_steps(strip_reference_types(@reference(navigator, content.books[1].chapters[1])))
+        steps = get_reference_steps(strip_reference_types(found))
+        @test steps[1:length(page_steps)] == page_steps && steps[length(page_steps) + 1] isa ProjectionReferenceStep
+        again = get_reference_steps(strip_reference_types(forward(found)))
+        @test again[5] isa ProjectionReferenceStep
+        # A page with no view of its own draws as itself again.
+        navigator.address = @reference(shelf, books[1])
+        @test iomap.output.children[2].children[1] === shelf.books[1]
+        @test _nav_is(forward(@reference(navigator, content.books[1].title)),
+                      @reference(iomap.output, children[2].children[1].title))
     end
 
     @testset "an editor: keys, buttons and the address" begin

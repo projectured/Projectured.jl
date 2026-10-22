@@ -46,7 +46,7 @@ import ..GestureBindingModule: get_instance_gesture_bindings, get_document_gestu
 import ..GraphicsModule: map_operation_position, find_first_baseline
 import ..OperationModule: evaluate_operation, is_self_contained_operation,
                           is_collecting_operation, join_collected_operations,
-                          operation_reference, retarget_operation
+                          operation_reference, retarget_operation, describe_operation
 import ..ProjectionModule: print_document, read_intent, map_reference_forward, map_reference_backward
 import ..SelectionModule: has_dormant_selection
 
@@ -85,20 +85,28 @@ export WidgetInsertionToGraphicsCanvas, WidgetLabelToGraphicsCanvas, WidgetTextT
        WidgetListToGraphicsCanvas, WidgetListToGraphicsCanvasIoMap,
        WidgetOptionToGraphicsCanvas,
        register_icon!, make_glyph_icon, make_image_icon, find_icon_character
+export make_decoration_icon, make_decoration_badges, make_decoration_note, make_fault_report_note
 export ObjectToWidget, ObjectToWidgetIoMap
 export ObjectFieldToWidget, ObjectFieldToWidgetIoMap
+export ObjectFieldToValue, WidgetValueIoMap, make_slot_store_operation,
+       make_object_field_widget_dispatch, make_object_field_widget
 export CellTableToWidgetTable
 export WidgetTableListIoMap, make_widget_table_row
 export compute_scroll_bar_value, compute_scroll_bar_top_row, read_scroll_bar_drag, make_owned_scroll_bar_drag
 export make_embed_card, make_embed_card_path, find_embed_card_path_inside
-export ProjectionConfiguringProjection, ProjectionConfiguringIoMap
-export OpenContextMenuOperation, EditMenuPartOperation, make_context_menu_operation, make_context_menu_binding
+export FindBarViewToWidget, make_find_bar_show_operation, make_find_bar_hide_operation,
+       make_find_bar_placement_operation
+export OpenContextMenuOperation, find_menu_item_part, EditMenuPartOperation, make_context_menu_operation,
+       make_context_menu_binding
+export OpenPageOperation
+export OpenFileOperation
+export AddExplorerEntryOperation
 export ContextMenuWindowProjection, ContextMenuWindowIoMap,
        make_context_menu_window_document, make_context_menu_window_projection,
        wrap_context_menu_window
 export make_value_document, make_graphics_projection, collect_graphics_projection_types,
        refresh_document!
-export WidgetInsertion, WidgetLabel, WidgetText, WidgetCheckbox, WidgetButton, WidgetTooltip, WidgetContextMenu, WidgetDialog, WidgetMenu, WidgetMenuItem, WidgetToolbarItem, WidgetComposite, WidgetShell, WidgetTitlePane, WidgetSplitPane, WidgetTabbedPane, WidgetTabPage, WidgetTabLabel, WidgetHighlight, WidgetScrollPane, WidgetTransformPane, WidgetToolbar, WidgetStatusBar, WidgetScrollBar, WidgetBadge, WidgetSeparator, WidgetCard, WidgetSwitch, WidgetProgressBar, WidgetProgressRing, WidgetSlider, WidgetRadioGroup, WidgetAvatar, WidgetAlert, WidgetSkeleton, WidgetSwatch, WidgetToggle, WidgetToggleGroup, WidgetSelect, WidgetOption, WidgetTextarea, WidgetAccordion, WidgetSpinBox, WidgetList, WidgetTable, WidgetTableRows, WidgetTableRow, WidgetTableColumns, WidgetTableColumn, WidgetTree, Action, compute_code_pieces
+export WidgetInsertion, WidgetLabel, WidgetText, WidgetCheckbox, WidgetButton, WidgetTooltip, WidgetContextMenu, WidgetDialog, WidgetMenu, WidgetMenuItem, WidgetToolbarItem, WidgetComposite, WidgetShell, WidgetTitlePane, WidgetSplitPane, WidgetTabbedPane, WidgetTabPage, WidgetTabLabel, WidgetHighlight, WidgetScrollPane, WidgetTransformPane, WidgetToolbar, WidgetStatusBar, WidgetScrollBar, WidgetBadge, WidgetIconMark, WidgetIcon, WidgetSeparator, WidgetCard, WidgetSwitch, WidgetProgressBar, WidgetProgressRing, WidgetSlider, WidgetRadioGroup, WidgetAvatar, WidgetAlert, WidgetSkeleton, WidgetSwatch, WidgetToggle, WidgetToggleGroup, WidgetSelect, WidgetOption, WidgetTextarea, WidgetAccordion, WidgetSpinBox, WidgetList, WidgetTable, WidgetTableRows, WidgetTableRow, WidgetTableColumns, WidgetTableColumn, WidgetTree, Action, compute_code_pieces
 export WidgetStyle, WidgetCheckboxStyle, WidgetDialogStyle, WidgetTitlePaneStyle, WidgetSplitPaneStyle,
        WidgetTabbedPaneStyle, WidgetScrollBarStyle, WidgetBadgeStyle, WidgetSeparatorStyle, WidgetCardStyle,
        WidgetAlertStyle, WidgetHighlightStyle, WidgetSwitchStyle, WidgetProgressStyle, WidgetSliderStyle,
@@ -108,18 +116,25 @@ export FaultToWidget
 
 
 include("WidgetDocument.jl")
+include("WidgetValueSlot.jl")
 include("WidgetStyle.jl")
 include("WidgetTheme.jl")
 include("WidgetToGraphics.jl")
+include("WidgetDecoration.jl")
 include("FaultToWidget.jl")
 include("WidgetTableParts.jl")
 include("WidgetTableHeaderLevels.jl")
 include("WidgetEmbedCard.jl")
 include("ObjectToWidget.jl")
 include("ObjectFieldToWidget.jl")
+include("ObjectFieldToValue.jl")
+include("FindBarViewGestures.jl")
+include("FindBarViewToWidget.jl")
 include("CellTableToWidgetTable.jl")
-include("ProjectionConfiguring.jl")
 include("ContextMenuOperation.jl")
+include("OpenPageOperation.jl")
+include("OpenFileOperation.jl")
+include("AddExplorerEntryOperation.jl")
 include("ContextMenuWindow.jl")
 include("DocumentComposition.jl")
 

@@ -30,7 +30,7 @@ A document graph can also be saved as text files that a version control system c
 2. Each file copies its content until it reaches a node that another file owns. There it writes a reference leaf in its own notation.
 3. `emit_text` prints the copy, and the file is written only when its bytes change.
 
-`save_project!(project)` writes every file. If a node is an orphan, it logs the reason, writes nothing and returns `false`. `save_file!(file, base_dir)` writes one file with no project, so its content must be a tree of its own domain with no cut.
+`save_project!(project)` writes every file. If a node is an orphan, it logs the reason, writes nothing and returns `false`. `save_file!(file, base_dir)` writes one file with no project, so its content must be of its own domain, with no node of another file. A node that the file holds at two places, and a cycle, are written once, and each other place holds a marker into the file itself; `load_file(base_dir, filename)` loads the file as a set of one and splices those markers. `cut_file_text(file, base_dir)` answers the text that `save_file!` writes, and writes nothing.
 
 `load_project(base_dir, filenames)` parses every file with its own format first; a reference leaf is then an ordinary leaf, such as a `JsonString` that holds a marker. It then walks each tree and replaces each reference leaf with the node that the marker names. Every tree exists before the first replacement, so two markers of one node get the same object and a cycle across files becomes a cycle in memory. A marker that names a file outside the set stays a leaf, so one file can be opened alone and saved back unchanged. `follow = true` also opens the files that the set names, and `tolerant = true` logs a file that does not open and keeps its markers as text.
 
@@ -68,6 +68,11 @@ Two more have a default that fits most formats:
 | --- | --- | --- |
 | `is_file_domain_node(file, node)` | `node isa get_file_domain(typeof(file))` | the domain of the file is not one type |
 | `is_written_in_file(file, node, name)` | `true` | the notation writes only part of a node, so the save must not walk the other fields |
+| `is_editable_file_type(::Type{T})` | `true` | a program writes the file and a person only reads it, such as a result file of a simulation |
+| `read_file_content(::Type{T}, path)` | the text of the file through `parse_file_content` | the type does not edit, and its file is too large to read whole, so it reads only what it needs |
+
+A file of a type that a person does not edit is read through `read_file_content`
+when it opens and when it is read again, and a save writes nothing of it.
 
 The JSON file type is the smallest full example:
 
@@ -85,7 +90,7 @@ emit_text(f::JsonFile) = print_natural_text(get_file_content(f))
 
 `parse_marker_text` returns `nothing` for a string that is not a marker, so an ordinary string stays a string. Each format spells a reference with its own opaque unit: a JSON string, an XML `pred:ref` element, a Markdown fence, an RST directive. A file whose node is itself the content returns `true` from `is_own_content`, defines `get_file_content(f) = f` and builds itself in `make_file`.
 
-`register_file_document_type!(extension, T)` connects an extension to a file type, and `get_file_document_type(path)` finds it, without regard to case.
+`register_file_document_type!(extension, T)` connects an extension to a file type, and `get_file_document_type(path)` finds it, without regard to case. `find_file_extension(document)` answers the extension of the file type whose domain holds a node, such as `".json"` for a JSON object, or `nothing` for a node that only a `.pred` file writes.
 
 ### The `.pred` format
 

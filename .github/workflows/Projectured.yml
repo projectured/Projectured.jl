@@ -28,6 +28,7 @@ on:
       - 'ProjecturedJSON/**'
       - 'ProjecturedJulia/**'
       - 'ProjecturedKernel/**'
+      - 'ProjecturedLanguageServer/**'
       - 'ProjecturedMCP/**'
       - 'ProjecturedMarkdown/**'
       - 'ProjecturedMath/**'
@@ -38,12 +39,14 @@ on:
       - 'ProjecturedPlatform/**'
       - 'ProjecturedProcess/**'
       - 'ProjecturedRST/**'
+      - 'ProjecturedResearch/**'
       - 'ProjecturedSDL/**'
       - 'ProjecturedSQL/**'
       - 'ProjecturedSequenceChart/**'
       - 'ProjecturedTulip/**'
       - 'ProjecturedVideo/**'
       - 'ProjecturedWeb/**'
+      - 'ProjecturedWorkflow/**'
       - 'ProjecturedXML/**'
       - 'ProjecturedYAML/**'
       - 'example/ProjecturedBookExample/**'
@@ -65,9 +68,11 @@ on:
       - 'example/ProjecturedPlatformExample/**'
       - 'example/ProjecturedProcessExample/**'
       - 'example/ProjecturedRSTExample/**'
+      - 'example/ProjecturedResearchExample/**'
       - 'example/ProjecturedSDLExample/**'
       - 'example/ProjecturedSQLExample/**'
       - 'example/ProjecturedSequenceChartExample/**'
+      - 'example/ProjecturedWorkflowExample/**'
       - 'example/ProjecturedXMLExample/**'
       - 'example/ProjecturedYAMLExample/**'
       - 'test/ProjecturedACPTest/**'
@@ -84,6 +89,7 @@ on:
       - 'test/ProjecturedJSONTest/**'
       - 'test/ProjecturedJuliaTest/**'
       - 'test/ProjecturedKernelTest/**'
+      - 'test/ProjecturedLanguageServerTest/**'
       - 'test/ProjecturedMCPTest/**'
       - 'test/ProjecturedMarkdownTest/**'
       - 'test/ProjecturedMathTest/**'
@@ -94,6 +100,7 @@ on:
       - 'test/ProjecturedPlatformTest/**'
       - 'test/ProjecturedProcessTest/**'
       - 'test/ProjecturedRSTTest/**'
+      - 'test/ProjecturedResearchTest/**'
       - 'test/ProjecturedSDLTest/**'
       - 'test/ProjecturedSQLTest/**'
       - 'test/ProjecturedSequenceChartTest/**'
@@ -101,6 +108,7 @@ on:
       - 'test/ProjecturedTulipTest/**'
       - 'test/ProjecturedVideoTest/**'
       - 'test/ProjecturedWebTest/**'
+      - 'test/ProjecturedWorkflowTest/**'
       - 'test/ProjecturedXMLTest/**'
       - 'test/ProjecturedYAMLTest/**'
   pull_request:
@@ -122,6 +130,7 @@ on:
       - 'ProjecturedJSON/**'
       - 'ProjecturedJulia/**'
       - 'ProjecturedKernel/**'
+      - 'ProjecturedLanguageServer/**'
       - 'ProjecturedMCP/**'
       - 'ProjecturedMarkdown/**'
       - 'ProjecturedMath/**'
@@ -132,12 +141,14 @@ on:
       - 'ProjecturedPlatform/**'
       - 'ProjecturedProcess/**'
       - 'ProjecturedRST/**'
+      - 'ProjecturedResearch/**'
       - 'ProjecturedSDL/**'
       - 'ProjecturedSQL/**'
       - 'ProjecturedSequenceChart/**'
       - 'ProjecturedTulip/**'
       - 'ProjecturedVideo/**'
       - 'ProjecturedWeb/**'
+      - 'ProjecturedWorkflow/**'
       - 'ProjecturedXML/**'
       - 'ProjecturedYAML/**'
       - 'example/ProjecturedBookExample/**'
@@ -159,9 +170,11 @@ on:
       - 'example/ProjecturedPlatformExample/**'
       - 'example/ProjecturedProcessExample/**'
       - 'example/ProjecturedRSTExample/**'
+      - 'example/ProjecturedResearchExample/**'
       - 'example/ProjecturedSDLExample/**'
       - 'example/ProjecturedSQLExample/**'
       - 'example/ProjecturedSequenceChartExample/**'
+      - 'example/ProjecturedWorkflowExample/**'
       - 'example/ProjecturedXMLExample/**'
       - 'example/ProjecturedYAMLExample/**'
       - 'test/ProjecturedACPTest/**'
@@ -178,6 +191,7 @@ on:
       - 'test/ProjecturedJSONTest/**'
       - 'test/ProjecturedJuliaTest/**'
       - 'test/ProjecturedKernelTest/**'
+      - 'test/ProjecturedLanguageServerTest/**'
       - 'test/ProjecturedMCPTest/**'
       - 'test/ProjecturedMarkdownTest/**'
       - 'test/ProjecturedMathTest/**'
@@ -188,6 +202,7 @@ on:
       - 'test/ProjecturedPlatformTest/**'
       - 'test/ProjecturedProcessTest/**'
       - 'test/ProjecturedRSTTest/**'
+      - 'test/ProjecturedResearchTest/**'
       - 'test/ProjecturedSDLTest/**'
       - 'test/ProjecturedSQLTest/**'
       - 'test/ProjecturedSequenceChartTest/**'
@@ -195,6 +210,7 @@ on:
       - 'test/ProjecturedTulipTest/**'
       - 'test/ProjecturedVideoTest/**'
       - 'test/ProjecturedWebTest/**'
+      - 'test/ProjecturedWorkflowTest/**'
       - 'test/ProjecturedXMLTest/**'
       - 'test/ProjecturedYAMLTest/**'
   workflow_dispatch:
@@ -221,7 +237,7 @@ jobs:
         package:
           - Projectured
         include:
-          - {package: Projectured, develop: 'ProjecturedKernel ProjecturedPlatform Projectured ProjecturedACP example/ProjecturedKernelExample test/ProjecturedKernelTest test/ProjecturedACPTest ProjecturedBook ProjecturedChart ProjecturedConsole ProjecturedSQL ProjecturedDBCatalog ProjecturedDatabase ProjecturedGraph ProjecturedJulia ProjecturedFSM ProjecturedMath ProjecturedFormula ProjecturedJSON ProjecturedMarkdown ProjecturedPDF ProjecturedPivot ProjecturedProcess ProjecturedRST ProjecturedSequenceChart ProjecturedXML ProjecturedYAML ProjecturedAll ProjecturedAnthropic test/ProjecturedAnthropicTest example/ProjecturedPlatformExample example/ProjecturedBookExample test/ProjecturedPlatformTest test/ProjecturedBookTest example/ProjecturedChartExample test/ProjecturedChartTest example/ProjecturedJSONExample test/ProjecturedConsoleTest example/ProjecturedJuliaExample example/ProjecturedMarkdownExample example/ProjecturedXMLExample example/ProjecturedYAMLExample example/ProjecturedConversationExample example/ProjecturedDBCatalogExample test/ProjecturedDBCatalogTest ProjecturedDataFrames example/ProjecturedDataFramesExample test/ProjecturedDataFramesTest example/ProjecturedDatabaseExample test/ProjecturedDatabaseTest example/ProjecturedFSMExample example/ProjecturedFormulaExample example/ProjecturedGraphExample example/ProjecturedMathExample ProjecturedOllama example/ProjecturedPivotExample example/ProjecturedProcessExample example/ProjecturedRSTExample example/ProjecturedSQLExample example/ProjecturedSequenceChartExample example/ProjecturedExample test/ProjecturedFSMTest test/ProjecturedFormulaTest test/ProjecturedGraphTest ProjecturedMCP ProjecturedODBC ProjecturedSDL ProjecturedTulip ProjecturedVideo test/ProjecturedJSONTest test/ProjecturedJuliaTest test/ProjecturedMCPTest test/ProjecturedMarkdownTest test/ProjecturedMathTest test/ProjecturedODBCTest test/ProjecturedOllamaTest test/ProjecturedPDFTest test/ProjecturedPivotTest test/ProjecturedProcessTest test/ProjecturedRSTTest example/ProjecturedSDLExample test/ProjecturedSDLTest test/ProjecturedSQLTest test/ProjecturedSequenceChartTest test/ProjecturedTulipTest test/ProjecturedVideoTest ProjecturedWeb test/ProjecturedWebTest test/ProjecturedXMLTest test/ProjecturedYAMLTest test/ProjecturedTest', coverage: 'Projectured/src'}
+          - {package: Projectured, develop: 'ProjecturedKernel ProjecturedPlatform Projectured ProjecturedACP example/ProjecturedKernelExample test/ProjecturedKernelTest test/ProjecturedACPTest ProjecturedBook ProjecturedChart ProjecturedConsole ProjecturedSQL ProjecturedDBCatalog ProjecturedDatabase ProjecturedGraph ProjecturedJulia ProjecturedFSM ProjecturedMath ProjecturedFormula ProjecturedJSON ProjecturedMarkdown ProjecturedPDF ProjecturedPivot ProjecturedProcess ProjecturedRST ProjecturedResearch ProjecturedSequenceChart ProjecturedWorkflow ProjecturedXML ProjecturedYAML ProjecturedAll ProjecturedAnthropic test/ProjecturedAnthropicTest example/ProjecturedPlatformExample example/ProjecturedBookExample test/ProjecturedPlatformTest test/ProjecturedBookTest example/ProjecturedChartExample test/ProjecturedChartTest example/ProjecturedJSONExample test/ProjecturedConsoleTest example/ProjecturedJuliaExample example/ProjecturedMarkdownExample example/ProjecturedXMLExample example/ProjecturedYAMLExample example/ProjecturedConversationExample example/ProjecturedDBCatalogExample test/ProjecturedDBCatalogTest ProjecturedDataFrames example/ProjecturedDataFramesExample test/ProjecturedDataFramesTest example/ProjecturedDatabaseExample test/ProjecturedDatabaseTest example/ProjecturedFSMExample example/ProjecturedFormulaExample example/ProjecturedGraphExample example/ProjecturedMathExample ProjecturedOllama example/ProjecturedPivotExample example/ProjecturedProcessExample example/ProjecturedRSTExample example/ProjecturedResearchExample example/ProjecturedSQLExample example/ProjecturedSequenceChartExample example/ProjecturedWorkflowExample example/ProjecturedExample test/ProjecturedFSMTest test/ProjecturedFormulaTest test/ProjecturedGraphTest ProjecturedMCP ProjecturedODBC ProjecturedSDL ProjecturedTulip ProjecturedVideo test/ProjecturedJSONTest test/ProjecturedJuliaTest ProjecturedLanguageServer test/ProjecturedLanguageServerTest test/ProjecturedMCPTest test/ProjecturedMarkdownTest test/ProjecturedMathTest test/ProjecturedODBCTest test/ProjecturedOllamaTest test/ProjecturedPDFTest test/ProjecturedPivotTest test/ProjecturedProcessTest test/ProjecturedRSTTest test/ProjecturedResearchTest example/ProjecturedSDLExample test/ProjecturedSDLTest test/ProjecturedSQLTest test/ProjecturedSequenceChartTest test/ProjecturedTulipTest test/ProjecturedVideoTest ProjecturedWeb test/ProjecturedWebTest test/ProjecturedWorkflowTest test/ProjecturedXMLTest test/ProjecturedYAMLTest test/ProjecturedTest', coverage: 'Projectured/src'}
     env:
       SDL_VIDEODRIVER: offscreen      # SDL draws into memory; the runner has no display
       JULIA_PKG_PRECOMPILE_AUTO: '0'  # the test compiles what it loads
@@ -238,9 +254,10 @@ jobs:
           # longer than a key may be.
           include-matrix: false
           cache-name: julia-cache;package=${{ matrix.package }};julia=${{ matrix.julia }}
-      # AutoIntegration, AgentClientProtocol and ClaudeCodeACP are packages of
-      # other repositories, which no job develops. They come from
-      # ProjecturedRegistry, which the job adds beside General.
+      # AutoIntegration, AgentClientProtocol, ClaudeCodeACP and the fork of
+      # ModelContextProtocol are packages of other repositories, which no job
+      # develops. They come from ProjecturedRegistry, which the job adds
+      # beside General.
       - name: Add the registries
         run: >-
           julia --project="$RUNNER_TEMP/environment"

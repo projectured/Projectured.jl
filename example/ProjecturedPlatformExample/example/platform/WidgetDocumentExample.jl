@@ -183,7 +183,7 @@ make_widget_label_document_example() =
 # backward). Click to place the cursor, then type / backspace to edit. Render
 # with make_widget_text_projection_example.
 function make_widget_text_document_example()
-    content = TextBlock(TextString("edit me", StyleFont("Ubuntu Mono", 20), color_default))
+    content = TextBlock(TextLine(TextString("edit me", StyleFont("Ubuntu Mono", 20), color_default)))
     WidgetText(content;
                position = Point2D(40, 40), border=Inset(1, 1, 1, 1),
                padding=Inset(8, 8, 12, 12))
@@ -258,6 +258,18 @@ make_widget_toolbar_item_document_example() =
                       WidgetToolbarItem("Stop"; icon = :stop, enabled = false),
                       WidgetToolbarItem("Log")])
 
+# WidgetToolbarItem — a single button, as the item itself and not in a toolbar.
+make_widget_toolbar_item_atom_document_example() =
+    WidgetToolbarItem("Run"; icon = :play)
+
+# WidgetHighlight — a single area called out.
+make_widget_highlight_document_example() =
+    WidgetHighlight(; position = Point2D(40, 40), width = 160, height = 60)
+
+# ContextMenuWindowState — the state of the context menu window around a menu, with no menu open.
+make_context_menu_window_state_document_example() =
+    ContextMenuWindowState(; content = make_widget_menu_document_example())
+
 # WidgetComposite — a positioned container of child widgets.
 make_widget_composite_document_example() =
     WidgetComposite(Any[
@@ -322,10 +334,13 @@ function make_widget_offered_document_example(; width=760, height=420)
     WidgetShell(split; size=Point2D(width, height))
 end
 
-# WidgetScrollBar — a single scroll bar with a thumb.
-make_widget_scroll_bar_document_example() =
-    WidgetScrollBar(:vertical; value=0.4, thumb_size=0.3,
-                    position=Point2D(40, 40), size=Point2D(20, 300))
+# WidgetScrollBar — a single scroll bar with a thumb. A bar shows nothing at
+# rest, so the pointer is on this one.
+function make_widget_scroll_bar_document_example()
+    bar = WidgetScrollBar(:vertical; value=0.4, thumb_size=0.3,
+                          position=Point2D(40, 40), size=Point2D(20, 300))
+    replace_mouse_target!(bar, EmptyReference())
+end
 
 # WidgetScrollPane — a scrollable viewport over an over-tall composite.
 function make_widget_scroll_pane_document_example(; width=400, height=300, line_height=40)
@@ -703,6 +718,10 @@ make_graphics_canvas_document_example() =
         GraphicsRect(0, 60, 120, 40; color = color_solarized_gray),
     ]; w=120, h=100)
 
+# GraphicsRect — one rounded rect on its own, as a canvas holds it.
+make_graphics_rect_document_example() =
+    GraphicsRect(0, 0, 120, 24; color = color_solarized_blue, radius = 4)
+
 function make_screen_document_document_example()
     content = WidgetLabel("A window on screen"; position = Point2D(40, 40))
     ScreenDocument([WindowDocument(; id=:screen_example, title="Example window",
@@ -723,6 +742,16 @@ make_widget_alert_atom_document_example() =
 # above (which stacks all four variants).
 make_widget_badge_atom_document_example() =
     WidgetBadge("Default"; position = Point2D(40, 40))
+
+# WidgetProgressBar — a single 60% bar, distinct from
+# `make_widget_progress_bar_document_example` above (which stacks a bar with no value).
+make_widget_progress_bar_atom_document_example() =
+    WidgetProgressBar(0.6; position = Point2D(40, 40), width=260)
+
+# WidgetProgressRing — a single 60% ring, distinct from
+# `make_widget_progress_ring_document_example` above (which shows five and a table).
+make_widget_progress_ring_atom_document_example() =
+    WidgetProgressRing(0.6; position = Point2D(40, 40))
 
 # WidgetSeparator — a single rule, distinct from `make_widget_separator_document_example`
 # above (which frames it between two labels).

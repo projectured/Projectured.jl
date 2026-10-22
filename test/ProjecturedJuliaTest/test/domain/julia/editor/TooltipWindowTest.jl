@@ -15,6 +15,10 @@ _tw_labels(; group = nothing) = WidgetComposite(Any[
 
 _tw_measure() = FixedMeasure(10, 18, 6, 0)
 
+# A view: a projection that makes the parts it prints, so a point on one of them
+# maps back to an introduced reference.
+struct _TwMakingView <: Projection end
+
 # The window `W` at (100, 100) holds `document`, drawn with `projection`, and the
 # window `V`, when asked for, holds `other` at (600, 100).
 function _tw_editor(document = _tw_labels(); other = nothing,
@@ -77,6 +81,36 @@ function _tw_drawn_tooltip(editor)
     _tw_drawn_strings(windows[length(windows)].content)
 end
 
+# Every string of a printed window with the place where it stands in the window,
+# and every rectangle with its place, its fill, the width of its border and the
+# color of its border: the offsets of the canvases around a graphic add up to its
+# place.
+function _tw_drawn_places(node, x = 0, y = 0, found = Any[])
+    node = _tw_force(node)
+    node === nothing && return found
+    if hasproperty(node, :elements)
+        nx = hasproperty(node, :x) ? x + Int(_tw_force(node.x)) : x
+        ny = hasproperty(node, :y) ? y + Int(_tw_force(node.y)) : y
+        for element in node.elements
+            _tw_drawn_places(element, nx, ny, found)
+        end
+    elseif hasproperty(node, :text) && _tw_force(node.text) isa AbstractString
+        push!(found, (String(_tw_force(node.text)), x + Int(_tw_force(node.x)), y + Int(_tw_force(node.y))))
+    elseif node isa GraphicsRect
+        push!(found, (:rect, x + Int(_tw_force(node.x)), y + Int(_tw_force(node.y)), _tw_force(node.color),
+                      Int(_tw_force(node.border_width)), _tw_force(node.border_color)))
+    elseif hasproperty(node, :content)
+        _tw_drawn_places(node.content, x, y, found)
+    end
+    found
+end
+
+function _tw_drawn_tooltip_places(editor)
+    output = _tw_force(get_iomap_output(editor.iomap))
+    windows = _tw_force(output.windows)
+    _tw_drawn_places(windows[length(windows)].content)
+end
+
 function test_tooltip_window()
 @testset "the tooltip window" begin
 
@@ -100,7 +134,7 @@ end
     @test tip.content.shown == 1
     title, content = only(tip.content.layers)
     @test title == "WidgetLabel"
-    @test content.value == "what this label is for"
+    @test content.text == "what this label is for"
     # It says its bounds rather than a size: it is printed at the maximum, and the
     # backend gives it the extent of what it printed, never below the minimum.
     @test tip.minimum_size == (120, 32)
@@ -117,6 +151,25 @@ end
     @test any(text -> occursin("what this label is for", text), _tw_drawn_tooltip(editor))
 end
 
+@testset "the window draws a frame: the line, and the padding inside it" begin
+    editor, backend, scene = _tw_editor()
+    _tw_rest!(editor, backend, 20, 10, 1.0)
+    places = _tw_drawn_tooltip_places(editor)
+    # The window stands on the surface of the theme, with its line around it, from
+    # the corner of the window.
+    theme = get_scaled_theme!(Appearance(), TooltipTheme)
+    style(name) = unwrap_cell(get_tooltip_style(theme, name))
+    @test any(place -> place[1] === :rect && place[2:3] == (0, 0) && is_color_equal(place[4], style(:surface)) &&
+                       place[5] == 1 && is_color_equal(place[6], style(:line)), places)
+    # The text starts inside the line and the padding, 1 + 12 across and 1 + 8
+    # down from where the same string stands with no frame.
+    natural = NaturalToGraphics(measure = _tw_measure(), appearance = Appearance())
+    bare = only(place[2:3] for place in _tw_drawn_places(get_iomap_output(
+        print_document(natural, nothing, PrimitiveString("what this label is for"), PrinterContext())))
+        if place[1] isa String)
+    @test only(place[2:3] for place in places if place[1] == "what this label is for") == bare .+ (13, 9)
+end
+
 @testset "a dwell on a part that says nothing opens none" begin
     editor, backend, scene = _tw_editor()
     _tw_rest!(editor, backend, 20, 50, 1.0)
@@ -128,7 +181,7 @@ end
     _tw_rest!(editor, backend, 20, 10, 1.0; window = :V)
     tip = only(_tw_tooltips(scene))
     @test (tip.x, tip.y) == (600 + 20 + 16, 100 + 10 + 20)
-    @test only(tip.content.layers)[2].value == "what this label is for"
+    @test only(tip.content.layers)[2].text == "what this label is for"
 end
 
 # A dwell goes by its position, as a click does: each container gives it to the
@@ -140,7 +193,7 @@ end
     replace_selection!(labels, annotate_reference_types(labels, second))
     editor, backend, scene = _tw_editor(labels)
     _tw_rest!(editor, backend, 20, 10, 1.0)
-    @test only(only(_tw_tooltips(scene)).content.layers)[2].value == "what this label is for"
+    @test only(only(_tw_tooltips(scene)).content.layers)[2].text == "what this label is for"
 end
 
 # A pane that scrolls gives the dwell to its content in the frame of the content,
@@ -155,7 +208,7 @@ end
     editor, backend, scene = _tw_editor(pane)
     _tw_rest!(editor, backend, 20, 10, 1.0)
     tip = only(_tw_tooltips(scene))
-    @test only(tip.content.layers)[2].value == "the lower label"
+    @test only(tip.content.layers)[2].text == "the lower label"
     @test (tip.x, tip.y) == (100 + 20 + 16, 100 + 10 + 20)
 end
 
@@ -199,6 +252,8 @@ end
     # The nearest part first, and the group after it; the window shows one.
     @test [title for (title, _) in tip.content.layers] == ["WidgetLabel", "WidgetComposite"]
     @test tip.content.shown == 1
+    # The last line names the key that shows the part around, as it is bound.
+    @test "F2 shows 1 more" in _tw_drawn_tooltip(editor)
     _tw_send!(editor, backend, KeyDown(:f2, ModifierKeys(); time = 1.1))
     tip = only(_tw_tooltips(scene))
     @test tip.content.shown == 2
@@ -207,6 +262,8 @@ end
     drawn = _tw_drawn_tooltip(editor)
     @test any(text -> occursin("what this label is for", text), drawn)
     @test any(text -> occursin("the group", text), drawn)
+    @test "Shift+F2 shows one fewer" in drawn
+    @test !any(text -> occursin("more", text), drawn)
     # With every layer shown, F2 changes nothing.
     _tw_send!(editor, backend, KeyDown(:f2, ModifierKeys(); time = 1.2))
     @test only(_tw_tooltips(scene)).content.shown == 2
@@ -218,7 +275,7 @@ end
     editor, backend, scene = _tw_editor(_tw_labels(; group = "the group"))
     _tw_rest!(editor, backend, 20, 50, 1.0)
     tip = only(_tw_tooltips(scene))
-    @test only(tip.content.layers)[2].value == "the group"
+    @test only(tip.content.layers)[2].text == "the group"
 end
 
 @testset "a command runs the binding with no pointer, and the window opens below the part" begin
@@ -242,7 +299,7 @@ end
     @test operation !== nothing
     evaluate_operation(editor, operation)
     tip = only(_tw_tooltips(scene))
-    @test only(tip.content.layers)[2].value == "what this button is for"
+    @test only(tip.content.layers)[2].text == "what this button is for"
     # With no point, the window stands below the button, with the left edges
     # aligned and a gap of 4 pixels.
     @test (tip.x, tip.y) == (100 + 10, 100 + 30 + 24 + 4)
@@ -307,6 +364,26 @@ end
     # And above the bottom of the text, which `x = 1` ends.
     text = find_reference_box(get_iomap_output(editor.iomap.child_iomap), window_content)
     @test tip.y < text.y + text.height
+end
+
+@testset "a move names a part that a view made in the form of the answer of that part" begin
+    expand = ProjecturedPlatform.TooltipModule._expand_introduced_steps
+    view = _TwMakingView()
+    made(steps...) = extend_reference(EmptyReference(), steps...)
+    at_view = made(FieldReferenceStep("content"))
+    button = made(FieldReferenceStep("elements"), ElementReferenceStep(2))
+    # The answer of the button: the path of the view, then the path in its output.
+    answer = concat_references(at_view, button)
+    # A point on the button: the path of the view, then an introduced step.
+    pointed(path) = strip_reference_types(concat_references(at_view,
+        make_introduced_reference(view, WidgetLabel("view"), path)))
+    @test pointed(button) != answer
+    @test expand(pointed(button)) == answer
+    # The next part of the view is another part.
+    next = made(FieldReferenceStep("elements"), ElementReferenceStep(3))
+    @test !is_reference_prefix(answer, expand(pointed(next)))
+    # A path with no introduced step stays the same path.
+    @test expand(answer) === answer
 end
 
 end # @testset

@@ -12,7 +12,7 @@ into, and from the fault layer the test of an exception that no barrier takes.
 The guide `kernel/cell` explains the engine and the invariants that it depends
 on.
 
-The module lives in eight fragments that share this namespace:
+The module lives in nine fragments that share this namespace:
 
 - [`CellInterface.jl`](CellInterface.jl) — `AbstractCell` and the generics that
   every kind answers.
@@ -20,6 +20,9 @@ The module lives in eight fragments that share this namespace:
   computation, and `@computation`, which makes it for an expression.
 - [`ReactiveCell.jl`](ReactiveCell.jl) — `ReactiveCell`, its alias `Cell`, and the
   engine that tracks the readers.
+- [`CellWriterCheck.jl`](CellWriterCheck.jl) — the check that, while an editor
+  runs its loop, only the task that owns the cells writes a cell that a
+  computation reads.
 - [`CellFaultScope.jl`](CellFaultScope.jl) — the fault scope that a computation
   keeps, and the fault that it hands to the scope when it throws.
 - [`MutableCell.jl`](MutableCell.jl) — a box that a write changes and that records
@@ -33,16 +36,19 @@ The module lives in eight fragments that share this namespace:
 module CellModule
 
 using Base.ScopedValues: ScopedValue, with
-using ..PerformanceModule
 using ..FaultModule
+using ..PerformanceModule
 
-export AbstractCell, is_cell_up_to_date, unwrap_cell, get_cell_value_type,
-       make_similar_cell, is_computed_cell, get_cell_computation, has_dependent_cells,
-       run_untracked
+export AbstractCell, is_cell_valid, is_cell_provisional, invalidate_cell!, unwrap_cell,
+       get_cell_value_type, make_similar_cell, is_computed_cell, get_cell_computation,
+       has_dependent_cells, record_cell_fault!
 export Computation, @computation
-export ReactiveCell, Cell, set_cell_value!, set_cell_computation!
-export run_in_fault_scope, record_computation_fault!, RecordedFaultException,
-       get_fault_scope, find_fault_scope
+export ReactiveCell, Cell, run_without_cell_tracking, CellCycleException, set_cell_value!,
+       set_cell_computation!, is_computation_running, mark_computation_provisional!
+export ForeignCellWriteException, add_cell_writer!, remove_cell_writer!,
+       take_foreign_cell_writes!
+export run_in_cell_fault_scope, RecordedCellFaultException, get_cell_fault_scope,
+       find_cell_fault_scope
 export MutableCell
 export ImmutableCell
 export UntrackedCell
@@ -50,6 +56,7 @@ export UntrackedCell
 include("CellInterface.jl")
 include("CellComputation.jl")
 include("ReactiveCell.jl")
+include("CellWriterCheck.jl")
 include("CellFaultScope.jl")
 include("MutableCell.jl")
 include("ImmutableCell.jl")

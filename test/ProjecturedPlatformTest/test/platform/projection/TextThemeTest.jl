@@ -43,6 +43,34 @@ draw_font_sizes(document, appearance::Appearance) =
                                       PrinterContext(EmptyReference(), Cell(800), Cell(600),
                                                      Dict{Symbol,Any}())).output)
 
+"""
+    draw_texts(document, appearance) -> Vector{Tuple{String,StyleColor,Int}}
+
+The text, the colour and the weight of the font of each text that the natural
+renderer draws for `document` with `appearance`, in order, as
+[`draw_font_sizes`](@ref) draws them. A domain test asserts the role of a name
+or a value from what the screen shows.
+"""
+function draw_texts(document, appearance::Appearance)
+    texts = Tuple{String,StyleColor,Int}[]
+    function walk(c)
+        for element in c.elements
+            element = element isa Cell ? element[] : element
+            if element isa GraphicsCanvas
+                walk(element)
+            elseif element isa GraphicsViewport
+                walk(element.content)
+            elseif element isa GraphicsText
+                push!(texts, (element.text, element.color, element.font.weight))
+            end
+        end
+    end
+    walk(print_document(NaturalToGraphics(; measure = FixedMeasure(8, 12, 4, 0), appearance),
+                        nothing, document,
+                        PrinterContext(EmptyReference(), Cell(800), Cell(600), Dict{Symbol,Any}())).output)
+    texts
+end
+
 function test_text_and_syntax_themes()
 @testset "the text and the syntax follow the scales of the appearance" begin
 
@@ -81,6 +109,28 @@ end
     plain = TextToGraphics(; measure)
     @test (plain.caret_width, plain.highlight_radius) == (2, 4)
     @test plain.caret_color == get_theme_defaults(TextTheme).caret
+end
+
+@testset "a text that names no colour draws with the plain text of the theme, and follows the mode" begin
+    appearance = Appearance(color_mode = :dark)
+    text = TextToGraphics(; measure, theme = get_scaled_theme!(appearance, TextTheme))
+    function drawn_color(block)
+        colors = StyleColor[]
+        walk(c) = for element in c.elements
+            element = element isa Cell ? element[] : element
+            element isa GraphicsCanvas && walk(element)
+            element isa GraphicsText && push!(colors, element.color)
+        end
+        walk(print_document(text, nothing, block, offer).output)
+        only(unique(colors))
+    end
+    plain = make_text_block("plain")
+    @test drawn_color(plain) == resolve_theme_color(ColorRole(:text), appearance)
+    @test drawn_color(plain) != resolve_theme_color(ColorRole(:text), Appearance())
+    # A text that names black stays black.
+    @test drawn_color(make_text_block("black", StyleText(UNSTYLED_TEXT_FONT, color_black))) == color_black
+    appearance.color_mode = :light
+    @test drawn_color(plain) == resolve_theme_color(ColorRole(:text), appearance)
 end
 
 @testset "a syntax leaf with no theme has the default style, and with a theme its scaled one" begin

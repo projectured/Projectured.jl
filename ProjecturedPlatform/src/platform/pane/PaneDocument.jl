@@ -61,15 +61,23 @@ _make_title_part_cell(part) = Cell(part)
     make_pane_tab_title(document, name) -> PaneTabTitle
 
 The title of a new tab that shows `document` under the name `name`. The default
-is the name alone.
+is the name with the decoration of the document (`get_document_decoration`): its
+icon with its tint and its corner marks, its counts as badges, and its
+conditions in words as the tooltip. Each part follows the state of the document,
+so the tab of a file shows its unsaved edits as a row of the explorer does.
 
-A slice adds a method for a document whose tab must say more than a name, such
-as the state of the work that the document does. Then each tab that
-[`open_pane!`](@ref) opens on such a document has its icon and its badges, also
-when the caller gives the title as a plain string. A caller that gives a
-`PaneTabTitle` keeps its own parts.
+A slice adds a method for a document whose tab must say more than its
+decoration. Then each tab that [`open_pane!`](@ref) opens on such a document has
+its parts, also when the caller gives the title as a plain string. A caller that
+gives a `PaneTabTitle` keeps its own parts.
 """
-make_pane_tab_title(document, name::AbstractString) = PaneTabTitle(name)
+function make_pane_tab_title(document, name::AbstractString)
+    decoration() = get_document_decoration(document)
+    PaneTabTitle(name; icon = () -> make_decoration_icon(decoration()),
+                 icon_role = () -> find_decoration_tint(decoration()),
+                 badges = () -> WidgetBadge[part for part in make_decoration_badges(decoration()) if part isa WidgetBadge],
+                 tooltip = () -> make_decoration_note(decoration()))
+end
 
 # ── PaneTab ────────────────────────────────────────────────────────────────
 
@@ -297,6 +305,61 @@ function get_pane_groups(split::PaneSplit)
     result
 end
 get_pane_groups(::Any) = PaneGroup[]
+
+"""
+    collect_pane_tab_contents(tree, T) -> Vector
+
+The documents of type `T` that the tabs of `tree` show, in the order of the
+groups and of their tabs. A tab counts when its content is a `T`, or when a
+layer that the content holds is one: a wrapper that `get_wrapped_document` looks
+through, such as a history, or the field that `get_edited_field` names, such as
+the document of a file.
+
+Use it to list the open documents of a kind, such as the assistants of a window.
+Called in a computation, it reads only the structure of the panes and the layers
+of each tab, so an edit inside a document does not run the computation again.
+It reads the live tree: a tab that an undo holds is not in it.
+
+# Example
+
+    collect_pane_tab_contents(tree, Assistant)     # the assistant tabs of the window
+"""
+function collect_pane_tab_contents(tree::PaneTree, T::Type)
+    found = T[]
+    for group in get_pane_groups(tree)
+        for tab in group.tabs
+            document = find_pane_tab_layer(tab, layer -> layer isa T)
+            document === nothing || push!(found, document)
+        end
+    end
+    found
+end
+
+"""
+    find_pane_tab_layer(tab, matches) -> document or nothing
+
+The first layer of what `tab` shows for which `matches(layer)` is true: its
+content, then each layer that the content holds. A layer goes one step down
+through the field that `get_edited_field` names, such as the document of a file
+or of a history, and else through `get_wrapped_document`. `nothing` when no
+layer matches. The search stops after sixteen layers, so a chain that comes
+back to a layer it passed ends.
+"""
+function find_pane_tab_layer(tab::PaneTab, matches)
+    node = tab.content
+    for _ in 1:16
+        matches(node) && return node
+        field = get_edited_field(node)
+        if field !== nothing
+            node = getproperty(node, field)
+            continue
+        end
+        inner = get_wrapped_document(node)
+        inner === node && return nothing
+        node = inner
+    end
+    nothing
+end
 
 """
     get_pane_parent(tree, node) -> (owner, index) | Nothing

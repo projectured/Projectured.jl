@@ -1,5 +1,5 @@
 """
-The fault scope of a computation: a computation made inside `run_in_fault_scope`
+The fault scope of a computation: a computation made inside `run_in_cell_fault_scope`
 keeps the scope, and when it throws it hands the fault to that scope. The tests
 need only the cell layer.
 """
@@ -15,13 +15,11 @@ mutable struct FaultScopeProbe
 end
 FaultScopeProbe(name::Symbol; takes::Bool = true) = FaultScopeProbe(name, takes, Any[])
 
-function CellModule.record_computation_fault!(scope::FaultScopeProbe, computation,
+function CellModule.record_cell_fault!(scope::FaultScopeProbe, computation,
                                               exception; traceback)
     push!(scope.faults, (computation, exception))
     scope.takes
 end
-
-_get_cell_scope(cell::ReactiveCell) = get_fault_scope(cell.computation)
 
 function test_cell_fault_scope()
 @testset "the fault scope of a computation" begin
@@ -29,46 +27,46 @@ function test_cell_fault_scope()
     @testset "a computation made in a scope keeps it" begin
         outer, inner = FaultScopeProbe(:outer), FaultScopeProbe(:inner)
         loose = Cell(@computation 1)
-        kept = run_in_fault_scope(outer) do
+        kept = run_in_cell_fault_scope(outer) do
             here = Cell(@computation 2)
-            nested = run_in_fault_scope(() -> Cell(@computation 3), inner)
+            nested = run_in_cell_fault_scope(() -> Cell(@computation 3), inner)
             after = Cell(@computation 4)
             (here, nested, after)
         end
-        @test _get_cell_scope(loose) === nothing
-        @test _get_cell_scope(kept[1]) === outer
-        @test _get_cell_scope(kept[2]) === inner
+        @test get_cell_fault_scope(loose) === nothing
+        @test get_cell_fault_scope(kept[1]) === outer
+        @test get_cell_fault_scope(kept[2]) === inner
         # The outer scope comes back when the inner print returns.
-        @test _get_cell_scope(kept[3]) === outer
+        @test get_cell_fault_scope(kept[3]) === outer
     end
 
     @testset "a computation made by a running computation takes its scope" begin
         scope = FaultScopeProbe(:maker)
-        maker = run_in_fault_scope(() -> Cell(@computation Cell(@computation 5)), scope)
+        maker = run_in_cell_fault_scope(() -> Cell(@computation Cell(@computation 5)), scope)
         made = maker[]
         @test made[] == 5
-        @test _get_cell_scope(made) === scope
+        @test get_cell_fault_scope(made) === scope
     end
 
     @testset "a scope set inside a running computation takes its place" begin
         outer, inner = FaultScopeProbe(:outer), FaultScopeProbe(:inner)
-        maker = run_in_fault_scope(outer) do
-            Cell(@computation run_in_fault_scope(() -> Cell(@computation 6), inner))
+        maker = run_in_cell_fault_scope(outer) do
+            Cell(@computation run_in_cell_fault_scope(() -> Cell(@computation 6), inner))
         end
-        @test _get_cell_scope(maker[]) === inner
+        @test get_cell_fault_scope(maker[]) === inner
     end
 
     @testset "the innermost computation that throws hands the fault to its scope" begin
         outer, inner = FaultScopeProbe(:outer), FaultScopeProbe(:inner)
-        broken = run_in_fault_scope(() -> Cell(@computation error("broken")), inner)
-        reader = run_in_fault_scope(() -> Cell(@computation broken[] + 1), outer)
+        broken = run_in_cell_fault_scope(() -> Cell(@computation error("broken")), inner)
+        reader = run_in_cell_fault_scope(() -> Cell(@computation broken[] + 1), outer)
         thrown = try
             reader[]
             nothing
         catch exception
             exception
         end
-        @test thrown isa RecordedFaultException
+        @test thrown isa RecordedCellFaultException
         @test thrown.scope === inner
         @test thrown.exception isa ErrorException
         @test length(inner.faults) == 1
@@ -81,15 +79,15 @@ function test_cell_fault_scope()
 
     @testset "a scope that does not take the fault lets it go on" begin
         outer, inner = FaultScopeProbe(:outer), FaultScopeProbe(:inner; takes = false)
-        broken = run_in_fault_scope(() -> Cell(@computation error("broken")), inner)
-        reader = run_in_fault_scope(() -> Cell(@computation broken[] + 1), outer)
+        broken = run_in_cell_fault_scope(() -> Cell(@computation error("broken")), inner)
+        reader = run_in_cell_fault_scope(() -> Cell(@computation broken[] + 1), outer)
         thrown = try
             reader[]
             nothing
         catch exception
             exception
         end
-        @test thrown isa RecordedFaultException
+        @test thrown isa RecordedCellFaultException
         @test thrown.scope === outer
         @test length(inner.faults) == 1
         @test length(outer.faults) == 1
@@ -102,7 +100,7 @@ function test_cell_fault_scope()
 
     @testset "an interrupt passes every scope" begin
         scope = FaultScopeProbe(:scope)
-        interrupted = run_in_fault_scope(() -> Cell(@computation throw(InterruptException())),
+        interrupted = run_in_cell_fault_scope(() -> Cell(@computation throw(InterruptException())),
                                          scope)
         @test_throws InterruptException interrupted[]
         @test isempty(scope.faults)
@@ -110,39 +108,85 @@ function test_cell_fault_scope()
 
     @testset "an untracked cell hands its fault to its scope" begin
         scope = FaultScopeProbe(:scope)
-        untracked = run_in_fault_scope(
+        untracked = run_in_cell_fault_scope(
             () -> UntrackedCell{Int}(@computation error("broken")), scope)
-        @test_throws RecordedFaultException untracked[]
+        @test get_cell_fault_scope(untracked) === scope
+        @test_throws RecordedCellFaultException untracked[]
         @test length(scope.faults) == 1
+        @test get_cell_fault_scope(UntrackedCell{Int}(3)) === nothing
     end
 
     @testset "a computation given to a cell that exists keeps the scope" begin
         scope = FaultScopeProbe(:scope)
         cell = Cell(1)
-        run_in_fault_scope(() -> set_cell_computation!(cell, () -> 2), scope)
+        run_in_cell_fault_scope(() -> set_cell_computation!(cell, () -> 2), scope)
         @test cell[] == 2
-        @test _get_cell_scope(cell) === scope
+        @test get_cell_fault_scope(cell) === scope
     end
 
     @testset "a computation made in an untracked run takes the scope that runs" begin
         outer = FaultScopeProbe(:outer)
         # A cell made outside every scope, whose computation makes a cell.
         loose = Cell(@computation Cell(@computation 8))
-        made = run_in_fault_scope(outer) do
-            CellModule.run_untracked(() -> loose[])
+        made = run_in_cell_fault_scope(outer) do
+            CellModule.run_without_cell_tracking(() -> loose[])
         end
         @test made[] == 8
-        @test _get_cell_scope(made) === nothing
+        @test get_cell_fault_scope(made) === nothing
+    end
+
+    @testset "a computation made in an untracked run inside a computation takes its scope" begin
+        outer = FaultScopeProbe(:outer)
+        loose = Cell(@computation Cell(@computation 9))
+        # The scope is set inside a running computation, and the untracked run puts a
+        # new stack in place, so the computation that makes the cell is on another stack.
+        host = Cell(@computation run_in_cell_fault_scope(outer) do
+            CellModule.run_without_cell_tracking(() -> loose[])
+        end)
+        made = host[]
+        @test made[] == 9
+        @test get_cell_fault_scope(made) === nothing   # the scope of `loose`, not `outer`
+    end
+
+    @testset "a MethodError of an older world goes to no scope, and the retry runs" begin
+        scope = FaultScopeProbe(:scope)
+        # A new function for each run, which gets its method only after the cell is
+        # made, so a read from the world before the method throws a `MethodError`.
+        late = Core.eval(@__MODULE__, :(function $(gensym(:fault_scope_late)) end))
+        cell = run_in_cell_fault_scope(() -> Cell(@computation late()), scope)
+        world = Base.get_world_counter()
+        Core.eval(@__MODULE__, :($(nameof(late))() = 11))
+        @test Base.invoke_in_world(world, () -> cell[]) == 11
+        @test isempty(scope.faults)
     end
 
     @testset "the value comes back when the computation works" begin
         scope = FaultScopeProbe(:scope)
         is_broken = Cell(true)
-        cell = run_in_fault_scope(
+        cell = run_in_cell_fault_scope(
             () -> Cell(@computation is_broken[] ? error("broken") : 7), scope)
-        @test_throws RecordedFaultException cell[]
+        @test_throws RecordedCellFaultException cell[]
         is_broken[] = false
         @test cell[] == 7
+    end
+
+    @testset "find_cell_fault_scope answers the scope of a computation made now" begin
+        @test find_cell_fault_scope() === nothing
+        @test run_in_cell_fault_scope(find_cell_fault_scope, :part) === :part
+        made = run_in_cell_fault_scope(() -> Cell(@computation find_cell_fault_scope()), :part)
+        @test run_in_cell_fault_scope(() -> made[], :other) === :part
+    end
+
+    @testset "a scope with no method takes no fault" begin
+        plain = run_in_cell_fault_scope(() -> Cell(@computation error("x")), :plain)
+        @test_throws ErrorException plain[]
+        @test get_cell_fault_scope(Cell(1)) === nothing
+        @test get_cell_fault_scope(MutableCell(1)) === nothing
+    end
+
+    @testset "a recorded fault shows the exception that it holds" begin
+        @test sprint(showerror, RecordedCellFaultException(ErrorException("x"), nothing)) ==
+              "a fault that a scope recorded: x"
     end
 end
 end

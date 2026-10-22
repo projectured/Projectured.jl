@@ -50,6 +50,16 @@ _ww_help_rows(screen) =
     [row.description for row in only(window.content for window in screen.windows
                                      if window.content isa GestureMap).rows]
 
+# The texts drawn in `node` and below it.
+function _ww_drawn_texts(node, texts = String[])
+    node = _cm_force(node)
+    node === nothing && return texts
+    hasproperty(node, :text) && push!(texts, String(_cm_force(node.text)))
+    hasproperty(node, :elements) &&
+        foreach(element -> _ww_drawn_texts(element, texts), _cm_force(node.elements))
+    texts
+end
+
 function test_window_wrappers()
 @testset "the features of a window as wrappers of build_editor" begin
 
@@ -67,7 +77,7 @@ end
 
 @testset "focus_cycling: on by default, Tab starts over at the end of the window" begin
     fields() = VerticalLayout(Any[WidgetText("a"), WidgetText("b")])
-    tab = KeyDown(:tab, ModifierKeys(); time = 0.0)
+    tab = KeyPress('\t'; time = 0.0)
     places(editor, backend) = [(_ww_press!(editor, backend, tab); _ww_selection(editor)) for _ in 1:3]
     editor, backend = _ww_editor(fields(); tabs = false)
     first_place, second_place, third_place = places(editor, backend)
@@ -107,25 +117,43 @@ end
 end
 
 @testset "gesture_log: an operation of the window is an entry of the gesture log" begin
-    log = get_session_gesture_log()
     editor, backend = _ww_editor(PrimitiveString("x"); undo = true, gesture_log = true)
-    entries = length(log.entries)
+    log = get_session_gesture_log(; editor)
+    # `count` counts every entry recorded, also one that the bounded log dropped.
+    recorded = log.count
     _ww_focus_first_tab!(editor)
     _ww_press!(editor, backend, _ww_ctrl(:t))
     @test _ww_tabs(editor) == 2
-    @test length(log.entries) > entries
+    @test log.count > recorded
+    @test last(log.entries).gesture == "Ctrl+T"
+end
+
+@testset "gesture_log: each editor records into a log of its own, or the one that its option gives" begin
+    held = GestureLog()
+    first_editor, first_backend = _ww_editor(PrimitiveString("x"); undo = true, gesture_log = true)
+    second_editor, _ = _ww_editor(PrimitiveString("y"); undo = true, gesture_log = (; log = held))
+    @test get_session_gesture_log(; editor = second_editor) === held
+    first_log = get_session_gesture_log(; editor = first_editor)
+    @test first_log !== held
+    entries = length(first_log.entries)
+    _ww_focus_first_tab!(first_editor)
+    _ww_press!(first_editor, first_backend, _ww_ctrl(:t))
+    @test length(first_log.entries) > entries
+    @test isempty(held.entries)
 end
 
 @testset "gesture_log: with overlay, the newest gestures draw in a panel over the window" begin
-    log = get_session_gesture_log()
     editor, backend = _ww_editor(PrimitiveString("x"); undo = true,
                                  gesture_log = (; overlay = true, lines = 3))
+    log = get_session_gesture_log(; editor)
     @test "no gesture yet" in _shell_texts(last(rendered_output(backend)))
-    entries = length(log.entries)
+    recorded = log.count
     _ww_focus_first_tab!(editor)
     _ww_press!(editor, backend, _ww_ctrl(:t))
-    # The log of the session records as before, and the panel draws the gesture.
-    @test length(log.entries) > entries
+    # The log of the session of the editor records as before, and the panel draws
+    # the gesture.
+    @test log.count > recorded
+    @test last(log.entries).gesture == "Ctrl+T"
     texts = _shell_texts(last(rendered_output(backend)))
     @test !("no gesture yet" in texts)
     @test any(text -> strip(text) == "Ctrl+T", texts)
@@ -148,9 +176,10 @@ end
     @test any(feed -> feed isa FrameStatisticsFeed, editor.feeds)
 end
 
-@testset "fault_log: the session log on the fault store of the editor" begin
+@testset "fault_log: the log of the session of the editor on its fault store" begin
     editor, _ = _ww_editor(PrimitiveString("x"); fault_log = true)
-    @test any(target -> target === get_session_fault_log(), editor.faults.targets)
+    @test any(target -> target === get_session_fault_log(; editor), editor.faults.targets)
+    @test get_session_fault_log(; editor) !== get_session_fault_log()
 end
 
 @testset "shell: a tool that shows what the window records is there when its wrapper is" begin
@@ -161,8 +190,8 @@ end
     try
         shell = editor.document
         @test shell isa WidgetShell
-        @test labels(shell.toolbar) == ["Explorer", "Assistant", "Evaluator", "Message log", "Gesture log",
-                                        "Fault log", "Statistics", "Frame times", "Selection", "Appearance",
+        @test labels(shell.toolbar) == ["Explorer", "Files", "Assistant", "Evaluator", "Message log", "Gesture log",
+                                        "Fault log", "Frame statistics", "Frame times", "Selection", "Appearance",
                                         "Settings"]
         @test shell.status_bar === nothing
     finally
@@ -170,7 +199,35 @@ end
     end
     editor, _ = _ww_editor(PrimitiveString("x"); shell = true, gesture_log = true)
     @test labels(editor.document.toolbar) ==
-          ["Explorer", "Evaluator", "Gesture log", "Selection", "Appearance", "Settings"]
+          ["Explorer", "Files", "Evaluator", "Gesture log", "Selection", "Appearance", "Settings"]
+end
+
+@testset "assistant_list: the Assistants button opens the list of the assistants of the tabs, and a stop unlinks it" begin
+    labels(bar) = [String(string(item.action.label)) for item in bar.elements]
+    one, two = Assistant(), Assistant()
+    tree = PaneTree(PaneGroup([PaneTab("One", one), PaneTab("Notes", PrimitiveString("x")),
+                               PaneTab("Two", two)]))
+    editor, _ = _ww_editor(tree; shell = (; status_bar = false), assistant_list = true)
+    list = get_session_assistant_list(; editor)
+    try
+        @test labels(editor.document.toolbar) ==
+              ["Explorer", "Files", "Evaluator", "Selection", "Appearance", "Settings", "Assistants"]
+        @test length(list.assistants) == 2
+        @test list.assistants[1] === one && list.assistants[2] === two
+        # A tool opens in the focused group. The button posts its pane edit, and
+        # the drain applies what was posted.
+        _ww_focus_first_tab!(editor)
+        button = only(item for item in editor.document.toolbar.elements
+                      if string(item.action.label) == "Assistants")
+        evaluate_operation(editor, InvokeActionOperation(button.action))
+        drain_operations!(editor)
+        @test only(collect_pane_tab_contents(tree, AssistantList)) === list
+    finally
+        foreach(step -> step(editor), editor.stop_steps)
+    end
+    @test isempty(list.assistants) && list.opener === nothing
+    editor, _ = _ww_editor(PrimitiveString("x"); shell = true)
+    @test !("Assistants" in labels(editor.document.toolbar))
 end
 
 @testset "shell: the Help menu offers the gesture help and the palette when their wrappers are on" begin
@@ -204,6 +261,18 @@ end
         _ww_click_help_item!(editor, backend, screen, id, "Gestures", 5.0)
         @test length(screen.windows) == 1
     end
+end
+
+@testset "shell: the help window draws its rows through its own row, not the shell's row for any document" begin
+    editor, backend = _ww_editor(PrimitiveString("x"); window = (; width = 800, height = 600),
+                                 shell = true, gesture_help = true)
+    screen = get_wrapped_document(editor.document)
+    _ww_press!(editor, backend, WindowInput(screen.windows[1].id, KeyDown(:f1, ModifierKeys(); time = 0.0)))
+    help = only(window for window in screen.windows if window.content isa GestureMap)
+    texts = _ww_drawn_texts(_cm_drawn_window(editor, screen, help.id))
+    @test any(description -> any(text -> occursin(description, text), texts), _ww_help_rows(screen))
+    # The row for any document draws a row as a reflected value, by its type name.
+    @test !any(==("GestureRow"), texts)
 end
 
 @testset "shell: Command palette in the Help menu does what Ctrl+Shift+P does" begin

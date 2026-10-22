@@ -12,14 +12,16 @@ mutable struct _EvaluatorToplevelMockEditor; document::Any; tools::ToolSet; end
 
 # Flatten a result document (a `TextBlock`, or another document's own printed
 # text) to a plain string.
-function _et_flatten(t::TextBlock)
-    io = IOBuffer()
-    for span in t.elements
-        hasproperty(span, :content) && print(io, span.content)
-    end
-    String(take!(io))
-end
+_et_flatten(t::TextBlock) = get_flat_string(t)
 _et_flatten(d) = String(strip(print_natural_text(d)))
+
+# The event that a key gives its meaning by: the KeyPress of the character it
+# types, or its KeyDown.
+function _evt_key_event(key, modifiers)
+    character = find_typed_character(key)
+    character === nothing ? KeyDown(key, modifiers; time = 0.0) :
+                            KeyPress(character, modifiers; time = 0.0)
+end
 
 function test_evaluator_toplevel()
 @testset "the evaluator toplevel is a persistent REPL" begin
@@ -57,8 +59,8 @@ print_natural(document) =
 render(document) = drawn(print_natural(document))
 
 editor(t) = _EvaluatorToplevelMockEditor(t, ToolSet())
-enter() = KeyDown(:return, ModifierKeys(); time = 0.0)
-shift_enter() = KeyDown(:return, ModifierKeys(shift = true); time = 0.0)
+enter() = KeyPress('\n'; time = 0.0)
+shift_enter() = KeyPress('\n', ModifierKeys(shift = true); time = 0.0)
 
 @testset "a fresh loop holds one empty form, caret inside it" begin
     toplevel = make_insertion_document(EvaluatorToplevel)
@@ -77,7 +79,7 @@ end
 # The words of a drawn text, less the icons of the private use area.
 is_icon(word) = all(c -> '\ue000' <= c <= '\uf8ff', word)
 words(text) = [word for word in split(text) if !is_icon(word)]
-OPTION_WORDS = ["Parse", "evaluated", "forms", "Structured", "forms"]
+OPTION_WORDS = ["Parse", "evaluated", "forms", "Structured", "forms", "Background"]
 
 @testset "it draws through NaturalToGraphics" begin
     toplevel = make_insertion_document(EvaluatorToplevel)
@@ -130,12 +132,13 @@ end
     @test 0 <= last(prompts_y()) < 120
     @test first(prompts_y()) < 0
     # A wheel turn toward the start takes the view off the end, and moves the
-    # forms down by one line, which is 24 pixels with this measure.
+    # forms down. A notch is three lines of 24 pixels, but the view of the forms
+    # is 92 pixels tall, so the notch moves the view less one line: 68 pixels.
     at_end = last(prompts_y())
     change = read_intent(projection, nothing, Intent(MouseScroll(0, 1, 50, 50; time = 0.0)), iomap)
     evaluate_operation(ed, change.operation)
     @test toplevel.follow_end == false
-    @test last(prompts_y()) == at_end + 24
+    @test last(prompts_y()) == at_end + 68
     # The options stay where they are, and the forms move under them.
     @test options_y() == [0]
     # An evaluation brings the end back into view, where the next key goes.
@@ -228,7 +231,7 @@ end
     @test toplevel.elements[1].form.selection === nothing
     @test toplevel.elements[2].form.selection !== nothing
     # Alt+Enter evaluates nothing: Enter alone does.
-    @test read_gesture(toplevel, KeyDown(:return, ModifierKeys(alt = true); time = 0.0)) === nothing
+    @test read_gesture(toplevel, KeyPress('\n', ModifierKeys(alt = true); time = 0.0)) === nothing
 end
 
 # The form that evaluating `code` leaves behind, with the parse on or off.
@@ -351,13 +354,16 @@ end
 end
 
 @testset "a form whose parse would change more than spacing keeps its string" begin
-    # A comment has no place in the Julia document, and the print writes a
-    # juxtaposed product with `*`: both forms keep what was typed.
-    for code in ("x = 1 + 2  # three", "y = 2x + 1")
-        form = evaluated_form(code)
-        @test form.form isa PrimitiveString
-        @test form.form.value == code
-    end
+    # The print writes a juxtaposed product with `*`, so the form keeps what was
+    # typed.
+    form = evaluated_form("y = 2x + 1")
+    @test form.form isa PrimitiveString
+    @test form.form.value == "y = 2x + 1"
+    # A comment at the end of the line is part of the Julia document, and the
+    # print writes it back, so the form parses.
+    form = evaluated_form("x = 1 + 2  # three")
+    @test !(form.form isa PrimitiveString)
+    @test print_natural_text(form.form) == "x = 1 + 2  # three"
     # Code of several statements prints as an indented block with an empty first
     # and last line, so it keeps the lines it was typed on.
     form = evaluated_form("x = 1\nx + 1")
@@ -401,7 +407,7 @@ end
     @test no_result(evaluated_form("xs = [1, 2, 3];  # three"))
     @test no_result(evaluated_form("xs = [1, 2, 3];"; parse = false))
     # A document is not drawn either.
-    @test no_result(evaluated_form("TextBlock(TextString(\"hidden\"));"))
+    @test no_result(evaluated_form("TextBlock(TextLine(TextString(\"hidden\")));"))
     # What the code prints still shows, and so does an error.
     @test _et_flatten(evaluated_form("println(\"shown\"); 42;").result) == "shown"
     form = evaluated_form("throw(ArgumentError(\"stop\"));")
@@ -447,7 +453,7 @@ function history_session(codes...; parse = true, structured = false)
     toplevel.type_structured_forms = structured
     ed = editor(toplevel)
     type!(text) = evaluate_operation(ed, ReplaceStringRangeOperation(toplevel.selection, text))
-    press!(key; modifiers...) = (op = read_gesture(toplevel, KeyDown(key, ModifierKeys(; modifiers...); time = 0.0));
+    press!(key; modifiers...) = (op = read_gesture(toplevel, _evt_key_event(key, ModifierKeys(; modifiers...)));
                    op === nothing || evaluate_operation(ed, op); op)
     shown() = toplevel.elements[length(toplevel.elements)].form.value
     caret() = last(get_reference_steps(strip_reference_types(toplevel.selection)))
@@ -481,17 +487,17 @@ end
 end
 
 @testset "the history holds string forms and Julia forms alike" begin
-    # The comment keeps the first form a string, and the second becomes Julia.
-    s = history_session("x = 1  # one", "y = 2")
+    # Two statements keep the first form a string, and the second becomes Julia.
+    s = history_session("x = 1\n# one", "y = 2")
     @test s.toplevel.elements[1].form isa PrimitiveString
     @test s.toplevel.elements[2].form isa JuliaAssignment
     s.press!(:up); @test s.shown() == "y = 2"
     # The string form comes back with its comment.
-    s.press!(:up); @test s.shown() == "x = 1  # one"
+    s.press!(:up); @test s.shown() == "x = 1\n# one"
     s.press!(:down); s.press!(:down); @test s.shown() == ""
     # The prefix finds both kinds.
     s.type!("x")
-    s.press!(:up); @test s.shown() == "x = 1  # one"
+    s.press!(:up); @test s.shown() == "x = 1\n# one"
     # A Julia form comes back as it prints, which is the code without the blank
     # space around it.
     s = history_session("\nz = 3\n")
@@ -626,13 +632,13 @@ end
     @test form.source == "x = 1 + 2"
     @test occursin("3", _et_flatten(form.result))
     @test s.toplevel.elements[3].form isa JuliaInsertion
-    # A hole whose parse would lose a comment keeps its text, and still ran.
+    # A hole with a comment at the end of the line commits too, with the comment.
     s.type!("y = 2  # two")
     s.press!(:return)
-    @test s.toplevel.elements[3].form isa JuliaInsertion
-    @test s.toplevel.elements[3].form.value == "y = 2  # two"
+    @test s.toplevel.elements[3].form isa JuliaEndOfLineComment
+    @test print_natural_text(s.toplevel.elements[3].form) == "y = 2  # two"
     @test occursin("2", _et_flatten(s.toplevel.elements[3].result))
-    # Up recalls both, the hole's text as it was typed.
+    # Up recalls both as they print.
     s.press!(:up); @test s.shown() == "y = 2  # two"
     s.press!(:up); @test s.shown() == "x = 1 + 2"
 end
@@ -689,15 +695,40 @@ end
     @test s.toplevel.elements[2].form isa PrimitiveString
 end
 
-@testset "the command palette runs both options by name" begin
+@testset "the command palette runs each option by name" begin
     t = make_insertion_document(EvaluatorToplevel)
     bindings = collect_document_gesture_bindings(EvaluatorToplevel)
     for (name, option) in (("Parse evaluated forms", :parse_evaluated_forms),
-                           ("Type structured forms", :type_structured_forms))
+                           ("Type structured forms", :type_structured_forms),
+                           ("Evaluate in the background", :evaluate_in_background))
         operation = fire_named_gesture_binding(bindings, t, name; selection = t.selection)
         @test operation isa ToggleEvaluatorOptionOperation
         @test operation.option === option
     end
+end
+
+@testset "a form evaluates in the background with the option on, and a stop ends it" begin
+    toplevel = make_insertion_document(EvaluatorToplevel)
+    ed = editor(toplevel)
+    evaluate_operation(ed, ToggleEvaluatorOptionOperation(toplevel, :evaluate_in_background))
+    @test toplevel.evaluate_in_background === true
+    toplevel.elements[1].form.value = "sleep(10)"
+    evaluate_operation(ed, read_gesture(toplevel, enter()))
+    sleeping = toplevel.elements[1]
+    # The fresh form opens at once, and the form shows that it runs, with a stop.
+    @test length(toplevel.elements) == 2
+    @test sleeping.is_running === true
+    @test occursin("Running", render(toplevel)) && occursin("Stop", render(toplevel))
+    evaluate_operation(ed, StopEvaluatorFormOperation(sleeping))
+    @test timedwait(() -> sleeping.is_running !== true, 10.0) === :ok
+    @test occursin("InterruptException", _et_flatten(sleeping.result))
+    # A form that ends answers its value, as one that runs at once does.
+    toplevel.elements[2].form.value = "sleep(0.1); 40 + 2"
+    evaluate_operation(ed, read_gesture(toplevel, enter()))
+    counted = toplevel.elements[2]
+    @test timedwait(() -> counted.is_running !== true, 10.0) === :ok
+    @test _et_flatten(counted.result) == "42"
+    @test !occursin("Running", render(toplevel))
 end
 
 @testset "a press on a check box turns its option on and off" begin
@@ -746,7 +777,7 @@ end
     # A circle has no notation in a line of code.
     object = GraphicsCircle(10, 10, 10)
     call = parse_natural_text(:jl, "setproperty!(x, :radius, 20)")
-    call.arguments[1] = object
+    call.arguments[1] = JuliaObject(object)
     whole(i) = ConcreteReference(FieldReferenceStep("elements"),
         ConcreteReference(RangeReferenceStep(i - 1, i),
             ConcreteReference(FieldReferenceStep("form"), EmptyReference())))
@@ -762,7 +793,7 @@ end
     @test object.radius == 20
     form = s.toplevel.elements[2]
     @test !form.is_error
-    @test form.form === call && call.arguments[1] === object
+    @test form.form === call && call.arguments[1].value === object
     # Its label is no code, so the form keeps no text and the history skips it.
     @test form.source == ""
     s.press!(:up); @test s.shown() == "y = 1"

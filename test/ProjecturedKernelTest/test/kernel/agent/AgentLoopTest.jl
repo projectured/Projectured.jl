@@ -4,8 +4,10 @@
 using Test
 import ProjecturedKernel.AgentModule: Agent, run_turn!, AgentToolResult
 import ProjecturedKernel.FaultModule: FaultStore, get_fault_records
-import ProjecturedKernel.LlmModule: LlmMessage, LlmFailure, LlmTextStart, LlmTurnEnd
-import ProjecturedKernel.ToolModule: Tool, ToolSet, register_tool!
+import ProjecturedKernel.LlmModule: LlmMessage, LlmFailure, LlmTextStart, LlmTurnEnd, LlmImage
+import ProjecturedKernel.ToolModule: Tool, ToolSet, register_tool!, register_default_tools!,
+                                     call_tool, take_tool_call_value!, start_background_work,
+                                     stop_background_work!
 using ProjecturedKernelExample: ScriptedLlm, make_scripted_turn, make_scripted_run,
                                 make_scripted_say
 
@@ -97,6 +99,65 @@ function test_agent_loop()
         @test occursin("agent_loop_missing", result.output)
     end
 
+    @testset "a tool of the turn answers later, with a task that the loop waits for" begin
+        answer = Channel{String}(1)
+        waiting = Tool("probe"; description = "a tool of the turn", parameters = NamedTuple[],
+                       handler = (target, arguments) -> @async take!(answer))
+        llm = ScriptedLlm([_make_agent_loop_call_round(), _make_agent_loop_answer_round("Done.")])
+        events = Any[]
+        turn = @async run_turn!(Agent(llm, ToolSet()), (name = :target,); messages = () -> LlmMessage[],
+                                on_event = event -> push!(events, event), tools = Tool[waiting])
+        # The loop waits for the task, and sends no result before its value.
+        sleep(0.2)
+        @test !istaskdone(turn) && isempty(_get_agent_tool_results(events))
+        put!(answer, "later")
+        @test fetch(turn) === :end_turn
+        result = only(_get_agent_tool_results(events))
+        @test (result.output, result.is_error) == ("later", false)
+        # A task that throws gives the text of its error.
+        failing = Tool("probe"; description = "a tool of the turn", parameters = NamedTuple[],
+                       handler = (target, arguments) -> @async error("no answer came"))
+        llm = ScriptedLlm([_make_agent_loop_call_round(), _make_agent_loop_answer_round("Done.")])
+        events = Any[]
+        run_turn!(Agent(llm, ToolSet()), (name = :target,); messages = () -> LlmMessage[],
+                  on_event = event -> push!(events, event), tools = Tool[failing])
+        result = only(_get_agent_tool_results(events))
+        @test result.is_error && occursin("no answer came", result.output)
+    end
+
+    @testset "a tool that answers background work answers when the work ends, and keeps its value" begin
+        code_tools = register_default_tools!(ToolSet())
+        tools = _make_agent_loop_tools((target, arguments) ->
+            call_tool(code_tools, "execute_julia_code"; target,
+                      args = Dict{String,Any}("code" => "sleep(0.1); println(\"slept\"); 7",
+                                              "background" => true)))
+        llm = ScriptedLlm([_make_agent_loop_call_round(), _make_agent_loop_answer_round("Done.")])
+        stop, events = _run_agent_loop_turn(Agent(llm, tools))
+        result = only(_get_agent_tool_results(events))
+        @test stop === :end_turn
+        @test (result.output, result.is_error) == ("slept\n7\n", false)
+        @test take_tool_call_value!(tools, "tu_1") == 7
+    end
+
+    @testset "a stop of a turn that runs as background work stops the work of its call" begin
+        code_tools = register_default_tools!(ToolSet())
+        tools = _make_agent_loop_tools((target, arguments) ->
+            call_tool(code_tools, "execute_julia_code"; target,
+                      args = Dict{String,Any}("code" => "sleep(30)", "background" => true)))
+        llm = ScriptedLlm([_make_agent_loop_call_round(), _make_agent_loop_answer_round("Done.")])
+        events = Any[]
+        started = time()
+        turn = start_background_work(; editor = nothing, parent = nothing) do
+            run_turn!(Agent(llm, tools), (name = :target,); messages = () -> LlmMessage[],
+                      on_event = event -> push!(events, event))
+        end
+        sleep(0.5)                                   # the turn waits for the work of its call
+        stop_background_work!(turn)
+        @test fetch(turn) === :end_turn
+        @test time() - started < 10
+        @test occursin("InterruptException", only(_get_agent_tool_results(events)).output)
+    end
+
     @testset "a tool that answers gives a result not marked as an error" begin
         tools = _make_agent_loop_tools((target, arguments) -> "three words")
         llm = ScriptedLlm([_make_agent_loop_call_round(),
@@ -106,6 +167,16 @@ function test_agent_loop()
         @test stop === :end_turn
         @test !result.is_error
         @test result.output == "three words"
+    end
+
+    @testset "a tool that answers a picture gives the model a line of text" begin
+        tools = _make_agent_loop_tools((target, arguments) -> LlmImage("image/png", UInt8[1, 2, 3]))
+        llm = ScriptedLlm([_make_agent_loop_call_round(),
+                           _make_agent_loop_answer_round("Done.")])
+        stop, events = _run_agent_loop_turn(Agent(llm, tools))
+        result = only(_get_agent_tool_results(events))
+        @test !result.is_error
+        @test occursin("gets no picture from a tool", result.output)
     end
 
     @testset "a stream with no terminal event ends the turn with :error" begin

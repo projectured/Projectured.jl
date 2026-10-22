@@ -35,6 +35,16 @@ Stop the agent server and release its resources.
 function stop_agent_server! end
 
 """
+    stop_agent_server_work!(server) -> Nothing
+
+Stop the background work of each call of `server` that runs, as
+`stop_background_work!` stops one: the `sleep` of its code and the waits of the
+verbs end, and the call answers what the code gave. The cancel of the turn of the
+agent that made the calls calls it. It does not wait for the work.
+"""
+function stop_agent_server_work! end
+
+"""
     get_agent_server_access(server) -> (name, url, headers)
 
 What a client needs to reach `server`: its `name`, its `url`, and the `headers`
@@ -45,7 +55,8 @@ server of its editor to an external agent.
 function get_agent_server_access end
 
 """
-    run_on_editor_task!(function_, target; wait = true) -> value
+    run_on_editor_task!(function_, target; wait = true, description = "a call from another task",
+                        timeout = EDITOR_CALL_TIMEOUT_SECONDS, stop = nothing) -> value
 
 Run `function_()` on the task that owns `target`, and answer its value.
 
@@ -61,11 +72,40 @@ With `wait = false` the call is only posted, and the answer is `nothing`. The
 posts of one task are applied in the order they were made, and before any call
 that the same task makes after them with `wait = true`.
 
+A posted call runs in a code unit of the editor: on a thread of its own, while the
+editor holds its frames, so a long call does not stop the window. `description`
+names the call on the busy bar meanwhile, such as the name of a tool. `stop`, a
+function with no argument, runs when the person stops that unit, such as the
+cancel of the turn that made the call.
+
+With `wait = true`, the caller waits at most `timeout` seconds for the editor to
+start the call. When the editor is busy longer, as with a long code unit, the call
+is withdrawn and never runs, and the caller gets
+[`EditorCallTimeoutException`](@ref). After the start the caller waits for the
+end, because Julia can not stop a task half way.
+
+A task that the running code unit started can not wait for a call: the editor
+waits for the unit, so it throws `CodeUnitWaitException` at once.
+
 The call runs at once, on the calling task, when nothing runs a loop for
-`target`, or when the calling task is the one that runs it. So a call from the
-editor's own task, and a call in a test that drives no loop, never wait.
+`target`, or when the calling task owns the documents of `target`: the task of
+its running code unit, or else the task of its loop. So a call from the editor's
+own task, from code that runs in a unit, and from a test that drives no loop, never
+waits.
 
 The default runs the call at once for every target. A target type whose loop can
 run on another task adds a method that posts the call to that loop.
 """
 function run_on_editor_task! end
+
+"""
+    is_editor_loop_running(target) -> Bool
+
+Whether the loop of the editor `target` runs, so a call through
+[`run_on_editor_task!`](@ref) from another task posts and waits for a frame. With
+no loop, such a call runs at once on the task that makes it. So a task that makes
+such calls can run on a thread of its own only while the loop runs; with no loop
+it runs on the thread of its caller, never at the same time as the caller. A
+target that is no editor answers `false`.
+"""
+function is_editor_loop_running end

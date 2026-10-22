@@ -87,15 +87,17 @@ function print_document(projection::AssistantToWidgetSplitPane,
                          min_height=projection.composer_min_height,
                          preferred_height=projection.composer_min_height),
     ]
-    # A row under the composer holds the button that stops the turn that runs.
-    # An external agent has options of its own, and a row of menus beside the
+    # A row under the composer holds the button that stops the turn that runs,
+    # and the button that puts a picture into the draft. An external agent has
+    # options of its own, and a row of menus beside the
     # button shows them, and a line says how much of its context the session
     # uses. The row is the last child, so the maps below, which name the first
     # two, stay as they are, and a click on it is a click on a part that the view
     # drew. A split pane prints a child at the height of its slot, so the row
     # declares its height.
-    items = Any[make_assistant_stop_button(a)]
+    items = Any[make_assistant_stop_button(a), make_assistant_picture_button(a)]
     if a.backend === :acp
+        push!(items, _make_assistant_work_button(a))
         usage = WidgetLabel("")
         set_cell_computation!(getfield(usage, :content), () -> format_agent_usage(a.agent_usage))
         set_cell_computation!(getfield(usage, :tooltip), () -> describe_agent_usage(a.agent_usage))
@@ -180,7 +182,11 @@ _CARD_PANE_PREFIX(i) = Any[FieldReferenceStep("children"), RangeReferenceStep(0,
                            FieldReferenceStep("content")]
 
 # `conversation.<rest>` / `draft.<rest>` → the pane that holds it, plus `<rest>`.
-function map_reference_forward(::AssistantToWidgetCard, iomap::SimpleIoMap, reference)
+# A part that the view drew is the path in the card that its introduced reference
+# holds.
+function map_reference_forward(p::AssistantToWidgetCard, iomap::SimpleIoMap, reference)
+    introduced = find_introduced_path(p, reference)
+    introduced === nothing || return introduced
     reference isa ConcreteReference || return nothing
     head = reference.head
     head isa FieldReferenceStep || return nothing
@@ -218,7 +224,12 @@ function read_intent(p::AssistantToWidgetCard, iomap::SimpleIoMap,
 end
 
 # Assistant → vertical WidgetSplitPane(conversation | input), each a scroll pane.
-function map_reference_forward(::AssistantToWidgetSplitPane, iomap, reference)
+# A part that the view drew, such as a pane with its bar, is the path in the split
+# pane that its introduced reference holds, so the drag of a thumb comes back to
+# the pane, also through a view that wraps this one.
+function map_reference_forward(p::AssistantToWidgetSplitPane, iomap, reference)
+    introduced = find_introduced_path(p, reference)
+    introduced === nothing || return introduced
     @reference_case reference begin
         ::Assistant.conversation.rest... => @reference ::WidgetSplitPane.elements::CellVector[1]::LayoutConstraint.child::WidgetScrollPane.content.^(rest)
         ::Assistant.draft.rest...        => @reference ::WidgetSplitPane.elements::CellVector[2]::LayoutConstraint.child::WidgetScrollPane.content.^(rest)
@@ -316,18 +327,40 @@ end
 
 # ── Natural-projection registration ──────────────────────────────────────────
 #
-# The row that lets a tab draw an assistant. Without it a person who opens one
-# sees its field names, because the render-anything projection falls through to
-# the reflection tail for a document no row claims.
+# The rows that let a tab draw an assistant and the list of the assistants.
+# Without them a person who opens one sees its field names, because the
+# render-anything projection falls through to the reflection tail for a document
+# no row claims.
 #
 # The factory form, so every renderer builds its own projection instance. An
 # assistant reached as a pane tab's own content needs its own chained instance
 # rather than this bare row — see the caveat on `PaneToWidget`.
 
+"""
+    build_assistant_graphics_entry(; measure = nothing, appearance) -> Vector{Pair{Type,Any}}
+
+The rows of the natural renderer that draw an assistant, the Assistants pane
+([`AssistantListToWidgetPane`](@ref)), the work page of an assistant
+([`AssistantWorkToWidget`](@ref)) and the page of a subagent
+([`AgentWorkToWidget`](@ref)), each with the scaled `ConversationTheme`
+of `appearance`, the `Appearance` of the window. `measure` is what the registry
+gives every row; these rows draw widgets, which the renderer measures.
+"""
+function build_assistant_graphics_entry(; measure = nothing, appearance)
+    theme = get_scaled_theme!(appearance, ConversationTheme)
+    # The pane is a vertical layout of widgets: its own canvas draws it, and the
+    # renderer draws the widgets inside, as for the MCP log.
+    Pair{Type,Any}[Assistant => AssistantToWidgetSplitPane(theme),
+                   AssistantList => ChainingProjection(AssistantListToWidgetPane(theme),
+                                                       VerticalLayoutToGraphicsCanvas()),
+                   AssistantWork => ChainingProjection(AssistantWorkToWidget(theme),
+                                                       VerticalLayoutToGraphicsCanvas()),
+                   AgentWork => ChainingProjection(AgentWorkToWidget(theme),
+                                                   VerticalLayoutToGraphicsCanvas())]
+end
+
 function __init__()
-    register_natural_graphics!(:assistant,
-        (; measure, appearance) -> Pair{Type,Any}[Assistant =>
-            AssistantToWidgetSplitPane(get_scaled_theme!(appearance, ConversationTheme))])
+    register_natural_graphics!(:assistant, build_assistant_graphics_entry)
 end
 
 # ── The options of an external agent ───────────────────────────────────────
@@ -341,11 +374,30 @@ the stop icon and no word, so the row of the options of an agent keeps its
 room; its tooltip says what it does.
 """
 function make_assistant_stop_button(a::Assistant)
-    button = WidgetButton(""; icon = :stop, tooltip = "Stop the turn",
+    button = WidgetButton(""; icon = :stop, tooltip = "Stop the turn.",
                           action = editor -> evaluate_operation(editor, CancelAssistantTurnOperation(a)))
     set_cell_computation!(getfield(button, :enabled), () -> is_assistant_turn_running(a))
     button
 end
+
+"""
+    make_assistant_picture_button(assistant) -> WidgetButton
+
+The button that puts a picture into the draft of `assistant`, with
+`AddDraftPictureOperation`: a picture of the part that the person selected with
+Alt+click, or else of the window. It shows the camera icon and no word; its
+tooltip says what it does.
+"""
+make_assistant_picture_button(a::Assistant) =
+    WidgetButton(""; icon = :camera,
+                 tooltip = "Add a picture of the selected part, or of the window, to the message.",
+                 action = editor -> evaluate_operation(editor, AddDraftPictureOperation(a)))
+
+# The button that shows the work page of the agent of an assistant in a tab.
+_make_assistant_work_button(a::Assistant) =
+    WidgetButton(""; icon = :list,
+                 tooltip = "Show the plans, the subagents and the tasks of the agent.",
+                 action = editor -> (show_assistant_work!(a; editor); nothing))
 
 # The options of an external agent that the bar shows, in this order, with the
 # word that names each one.
@@ -371,6 +423,7 @@ function make_agent_option_bar(a::Assistant)
     for (index, (category, word)) in enumerate(_AGENT_OPTION_BAR)
         item = WidgetMenuItem(word; action = editor -> evaluate_operation(editor, StartExternalAgentOperation(a)))
         set_cell_computation!(item, () -> _get_agent_option_label(a, category, word, index))
+        set_cell_computation!(getfield(item, :tooltip), () -> _make_agent_option_note(a, category))
         set_cell_computation!(getfield(item, :visible),
                               () -> isempty(a.agent_options) ? index == 1 :
                                     _find_agent_option(a, category) !== nothing)
@@ -381,6 +434,10 @@ function make_agent_option_bar(a::Assistant)
     set_cell_computation!(getfield(commands, :visible), () -> !isempty(a.agent_commands))
     set_cell_computation!(getfield(commands, :submenu), () -> _make_agent_command_menu(a))
     push!(items, commands)
+    sign_out = WidgetMenuItem("Sign out"; tooltip = "Sign the agent out.",
+                              action = editor -> evaluate_operation(editor, SignOutAgentOperation(a)))
+    set_cell_computation!(getfield(sign_out, :visible), () -> !isempty(a.agent_options) && _has_agent_sign_out(a))
+    push!(items, sign_out)
     WidgetMenu(items; orientation = :horizontal)
 end
 
@@ -408,11 +465,20 @@ function _get_agent_option_label(a::Assistant, category::Symbol, word::String, i
     word * ": " * (value === nothing ? option.current_value : option.values[value].name)
 end
 
+# What the menu of an option says when the pointer rests: the description that the
+# agent gives, or nothing when it gives none.
+function _make_agent_option_note(a::Assistant, category::Symbol)
+    option = _find_agent_option(a, category)
+    (option === nothing || isempty(option.description)) && return nothing
+    TooltipNote(; title = option.name, text = option.description)
+end
+
 # The values of one option, with a mark before the one that holds.
 function _make_agent_option_menu(a::Assistant, category::Symbol)
     option = _find_agent_option(a, category)
     option === nothing && return nothing
     WidgetMenu(Any[WidgetMenuItem((value.value == option.current_value ? "✓ " : "   ") * value.name;
+                                  tooltip = isempty(value.description) ? nothing : value.description,
                                   action = editor -> evaluate_operation(editor,
                                       SetAgentOptionOperation(a, option.id, value.value)))
                    for value in option.values])

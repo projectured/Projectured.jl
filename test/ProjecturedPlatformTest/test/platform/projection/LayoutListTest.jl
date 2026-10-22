@@ -81,7 +81,9 @@ read(io, g) = begin
     change isa Intent ? change.operation : change
 end
 wheel(io, dx, dy) = read(io, MouseScroll(dx, dy, 50, 50; time = 0.0))
-apply!(pane, op) = (getfield(pane, :scroll_position)[] = get_wrapped_operation(op).value)
+# The scroll that an answer writes; it comes first, before the run of the wheel.
+apply!(pane, op) = (getfield(pane, :scroll_position)[] =
+                        get_wrapped_operation(op isa CompoundOperation ? first(op.operations) : op).value)
 column(list; kw...) = VerticalLayout(list; child_width = Fixed(200), gap = 4, kw...)
 row(list; kw...) = HorizontalLayout(list; child_height = Fixed(40), gap = 4, kw...)
 
@@ -214,6 +216,151 @@ end
     @test column_step isa RangeReferenceStep && column_step.start == 1
 end
 
+# A list of `values` with its nodes linked both ways, as a filter makes a new one.
+function list_of(values)
+    nodes = [ListNode(value) for value in values]
+    for (i, node) in enumerate(nodes)
+        set_cell_value!(getfield(node, :next), i < length(nodes) ? nodes[i + 1] : nothing)
+        set_cell_value!(getfield(node, :prev), i > 1 ? nodes[i - 1] : nothing)
+    end
+    isempty(nodes) ? nothing : nodes[1]
+end
+label_rows(count) = [Any[WidgetLabel("r$(i) c$(c)") for c in 1:3] for i in 1:count]
+# The recursion with a fault barrier at each place, which keeps the context of
+# the place, so a test reads the path of a cell.
+barred = RecursiveProjection(FaultCatchingProjection(inner = TypeDispatchingProjection(vcat(
+    LayoutToGraphics().dispatch,
+    WidgetToGraphics(StyleFont("Ubuntu", 20); measure = det).dispatch))))
+# The IO map of the cell in column 1 of row `k`, and the count in its path.
+first_cell(grid_io, k) = find_grid_list_row(grid_io, k)[2][1][3]
+path_count(cim) = get_reference_steps(strip_reference_types(cim.context.reference[]))[end - 1].stop
+
+@testset "a row that stays keeps its print, at the place and the path of its new count" begin
+    rows = label_rows(6)
+    layout = grid(list_of(rows))
+    io = print_document(barred, nothing, WidgetScrollPane(layout; size = Point2D(400, 200)), context())
+    grid_io = io.content_iomap
+    y_of(i) = place(io, "r$(i) c1")[2]
+    ys = [y_of(i) for i in 1:6]
+    printed = [first_cell(grid_io, k) for k in 1:6]
+    @test path_count(printed[3]) == 3
+    # The filter drops the second row: a new list of the rows that stay.
+    getfield(layout, :children)[] = list_of(rows[[1, 3, 4, 5, 6]])
+    @test y_of(3) == ys[2] && y_of(6) == ys[5]
+    @test all(first_cell(grid_io, k) === printed[i] for (k, i) in enumerate([1, 3, 4, 5, 6]))
+    @test [path_count(first_cell(grid_io, k)) for k in 1:5] == 1:5
+    @test isempty(filter(t -> t[3] == "r2 c1", texts(viewport(io))))
+    # The second row waits one head, and goes with the head after it.
+    @test haskey(grid_io.state.prints.before, rows[2])
+    getfield(layout, :children)[] = list_of(rows[[1, 3, 4, 5, 6]])
+    y_of(1)
+    @test !haskey(grid_io.state.prints.current, rows[2]) && !haskey(grid_io.state.prints.before, rows[2])
+    @test first_cell(grid_io, 2) === printed[3]
+    # It comes back as a new print.
+    getfield(layout, :children)[] = list_of(rows)
+    @test y_of(2) == ys[2]
+    @test first_cell(grid_io, 2) !== printed[2]
+    @test first_cell(grid_io, 3) === printed[3]
+end
+
+@testset "a kept row whose cell holds a new document prints again, and draws it" begin
+    # A cell of a row can change its document while the row stays, as a cell of a
+    # table does when it opens for an edit; the kept print then shows the old one.
+    rows = [CellVector(Cell[Cell(WidgetLabel("r$(i) c$(c)")) for c in 1:3]) for i in 1:4]
+    layout = grid(list_of(rows))
+    io = print_document(barred, nothing, WidgetScrollPane(layout; size = Point2D(400, 200)), context())
+    grid_io = io.content_iomap
+    texts(viewport(io))
+    other = first_cell(grid_io, 3)
+    rows[2][1] = WidgetLabel("r2 open")
+    drawn = [t[3] for t in texts(viewport(io))]
+    @test "r2 open" in drawn && !("r2 c1" in drawn)
+    @test first_cell(grid_io, 3) === other
+end
+
+@testset "a row in the list two times prints at both places, each with the path of its place" begin
+    rows = label_rows(3)
+    layout = grid(list_of(rows[[1, 2, 1, 3]]))
+    io = print_document(barred, nothing, WidgetScrollPane(layout; size = Point2D(400, 200)), context())
+    grid_io = io.content_iomap
+    @test length(filter(t -> t[3] == "r1 c1", texts(viewport(io)))) == 2
+    first, again, other = first_cell(grid_io, 1), first_cell(grid_io, 3), first_cell(grid_io, 2)
+    @test first !== again
+    @test (path_count(first), path_count(again)) == (1, 3)
+    # The counts of the new head find the row at two places, so the grid keeps no
+    # print of it, and keeps the print of the row that is at one place.
+    getfield(layout, :children)[] = list_of(rows[[2, 1, 3, 1]])
+    @test length(filter(t -> t[3] == "r1 c1", texts(viewport(io)))) == 2
+    @test first_cell(grid_io, 1) === other
+    @test first_cell(grid_io, 2) !== first && first_cell(grid_io, 2) !== again
+    @test (path_count(first_cell(grid_io, 2)), path_count(first_cell(grid_io, 4))) == (2, 4)
+end
+
+@testset "a row inserted inside the list under the same head takes its place, and the rows after it the paths of their new counts" begin
+    rows = label_rows(6)
+    head = list_of(rows[1:5])
+    layout = grid(head)
+    io = print_document(barred, nothing, WidgetScrollPane(layout; size = Point2D(400, 200)), context())
+    grid_io = io.content_iomap
+    y_of(i) = place(io, "r$(i) c1")[2]
+    ys = [y_of(i) for i in 1:5]
+    @test [path_count(first_cell(grid_io, k)) for k in 1:5] == 1:5
+    # The new row goes between rows 2 and 3 of the list, in place: the head stays.
+    second = head.next
+    third = second.next
+    inserted = ListNode(rows[6])
+    set_cell_value!(getfield(inserted, :prev), second)
+    set_cell_value!(getfield(inserted, :next), third)
+    set_cell_value!(getfield(second, :next), inserted)
+    set_cell_value!(getfield(third, :prev), inserted)
+    @test getfield(layout, :children)[] === head
+    @test y_of(1) == ys[1] && y_of(2) == ys[2]
+    @test y_of(6) == ys[3]
+    @test y_of(3) == ys[4] && y_of(4) == ys[5] && y_of(5) > y_of(4)
+    @test [path_count(first_cell(grid_io, k)) for k in 1:6] == 1:6
+    @test first_cell(grid_io, 3).output !== first_cell(grid_io, 4).output
+end
+
+# The IO map of child `k` of a column that a walk reached, and the count in its path.
+child_iomap(list_io, k) = list_io.state.built[k][3]
+child_count(cim) = get_reference_steps(strip_reference_types(cim.context.reference[]))[end].stop
+
+@testset "a child of a column that stays keeps its print, at the place and the path of its new count" begin
+    labels = [WidgetLabel("child $(i)") for i in 1:6]
+    layout = column(list_of(labels))
+    io = print_document(barred, nothing, WidgetScrollPane(layout; size = Point2D(300, 200)), context())
+    list_io = io.content_iomap
+    y_of(i) = place(io, "child $(i)")[2]
+    ys = [y_of(i) for i in 1:6]
+    printed = [child_iomap(list_io, k) for k in 1:6]
+    @test child_count(printed[3]) == 3
+    getfield(layout, :children)[] = list_of(labels[[1, 3, 4, 5, 6]])
+    @test y_of(3) == ys[2] && y_of(6) == ys[5]
+    @test all(child_iomap(list_io, k) === printed[i] for (k, i) in enumerate([1, 3, 4, 5, 6]))
+    @test [child_count(child_iomap(list_io, k)) for k in 1:5] == 1:5
+    @test isempty(filter(t -> t[3] == "child 2", texts(viewport(io))))
+    getfield(layout, :children)[] = list_of(labels)
+    @test y_of(2) == ys[2]
+    @test child_iomap(list_io, 2) !== printed[2]
+    @test child_iomap(list_io, 3) === printed[3]
+end
+
+@testset "a child in a column two times prints at both places, each with the path of its place" begin
+    labels = [WidgetLabel("child $(i)") for i in 1:3]
+    layout = column(list_of(labels[[1, 2, 1, 3]]))
+    io = print_document(barred, nothing, WidgetScrollPane(layout; size = Point2D(300, 200)), context())
+    list_io = io.content_iomap
+    @test length(filter(t -> t[3] == "child 1", texts(viewport(io)))) == 2
+    first, again, other = child_iomap(list_io, 1), child_iomap(list_io, 3), child_iomap(list_io, 2)
+    @test first !== again
+    @test (child_count(first), child_count(again)) == (1, 3)
+    getfield(layout, :children)[] = list_of(labels[[2, 1, 3, 1]])
+    @test length(filter(t -> t[3] == "child 1", texts(viewport(io)))) == 2
+    @test child_iomap(list_io, 1) === other
+    @test child_iomap(list_io, 2) !== first && child_iomap(list_io, 2) !== again
+    @test (child_count(child_iomap(list_io, 2)), child_count(child_iomap(list_io, 4))) == (2, 4)
+end
+
 # A list of `count` values, built one at a time as a walk reaches them, that
 # reaches both ways from index `at`. `value_of(i)` makes the value of node `i`.
 function make_list_of(count::Int, value_of; at::Int = 1, built = Ref(0))
@@ -279,6 +426,28 @@ end
     column_step = op.path.tail.tail.tail.head
     @test rows_step isa RangeReferenceStep && rows_step.start == 1       # row 2
     @test column_step isa RangeReferenceStep && column_step.start == -1  # one before the head: 0
+end
+
+@testset "a row of a grid lazy both ways that stays keeps its cells, at the place and the path of its new count" begin
+    rows = [make_list_of(4, c -> WidgetLabel("r$(i) c$(c)")) for i in 1:6]
+    layout = GridLayout(list_of(rows), 1; column_policies = make_list_of(4, c -> Fixed(90)),
+                        row_policy = Fixed(20), horizontal_gap = 6, vertical_gap = 4)
+    io = print_document(barred, nothing, WidgetScrollPane(layout; size = Point2D(400, 200)), context())
+    grid_io = io.content_iomap
+    y_of(i) = place(io, "r$(i) c2")[2]
+    ys = [y_of(i) for i in 1:6]
+    cell(k) = find_grid_list_cell(grid_io, k, 2)[3]
+    printed = [cell(k) for k in 1:6]
+    @test path_count(printed[3]) == 3
+    getfield(layout, :children)[] = list_of(rows[[1, 3, 4, 5, 6]])
+    @test y_of(3) == ys[2] && y_of(6) == ys[5]
+    @test all(cell(k) === printed[i] for (k, i) in enumerate([1, 3, 4, 5, 6]))
+    @test [path_count(cell(k)) for k in 1:5] == 1:5
+    @test isempty(filter(t -> t[3] == "r2 c2", texts(viewport(io))))
+    getfield(layout, :children)[] = list_of(rows)
+    @test y_of(2) == ys[2]
+    @test cell(2) !== printed[2]
+    @test cell(3) === printed[3]
 end
 
 @testset "a grid lazy both ways needs Fixed columns and Fixed rows" begin

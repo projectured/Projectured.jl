@@ -1,5 +1,6 @@
-# Fragment of `AcpModule` — from a `session/update` of the agent to the events of
-# the kernel.
+# Fragment of `AcpModule` — from a `session/update` of the agent, and from the
+# extension notification `_session/background_task`, to the events of the
+# kernel.
 #
 # ACP sends the text of an answer as chunks with no frame around them, and the
 # kernel's events frame a block with a start and a stop. So a turn keeps the
@@ -11,25 +12,81 @@
 """
     AcpTurn(on_event)
 
-The state of one prompt of a session while it runs: the function that gets its
-events, the block that is open, the message that the open block belongs to,
-and the replies of the requests that wait for a person.
+The state of the updates of one session: the function that gets their events,
+the block that is open, the message that the open block belongs to, the replies
+of the requests that wait for a person, and the events that wait for the task
+that gives them to `on_event`, in their order. A prompt has one while it runs. A
+child session has one, a frame, whose events go to its parent, and a session has
+one between two prompts, whose events go to its queue.
+
+The `on_event` of a prompt can wait, because it posts to an editor. So the code
+of the connection puts the events of a prompt into its outbox, a queue with no
+bound whose `put!` never waits, also under the lock of the turns, and one task
+gives them to `on_event` with no lock held. The `on_event` of a frame only passes
+an event on, to its parent or to a queue, and never waits, so a frame gives each
+event at once, under the lock.
 """
 mutable struct AcpTurn
     on_event::Function
     open_block::Symbol
     message_id::String
     waiting_replies::Vector{Function}
+    outbox::Channel{Any}
+    deliverer::Union{Task,Nothing}
 end
 
-AcpTurn(on_event::Function) = AcpTurn(on_event, :none, "", Function[])
+AcpTurn(on_event::Function) = AcpTurn(on_event, :none, "", Function[], Channel{Any}(Inf), nothing)
+
+# Start the task that gives the events of the outbox of `turn` to its `on_event`,
+# one after the other, until the outbox closes and is empty.
+function _start_turn_delivery!(turn::AcpTurn)
+    turn.deliverer = errormonitor(@async _deliver_turn_events(turn))
+    nothing
+end
+
+function _deliver_turn_events(turn::AcpTurn)
+    for event in turn.outbox
+        try
+            turn.on_event(event)
+        catch exception
+            is_fault_exception(exception) || rethrow()
+            @warn "An event of the agent did not reach the editor." exception
+        end
+    end
+    nothing
+end
+
+# Put `events` into the outbox of `turn`, or give them at once to the `on_event`
+# of a frame, which has no task that delivers. An event after the end of a prompt
+# has no place, and goes.
+function _send_turn_events!(turn::AcpTurn, events)
+    turn.deliverer === nothing && return (foreach(turn.on_event, events); nothing)
+    for event in events
+        try
+            put!(turn.outbox, event)
+        catch exception
+            exception isa InvalidStateException || rethrow()
+            return nothing
+        end
+    end
+    nothing
+end
+
+# End the outbox of `turn`, and wait until its task gave each event to `on_event`.
+function _end_turn_delivery!(turn::AcpTurn)
+    close(turn.outbox)
+    turn.deliverer === nothing || wait(turn.deliverer)
+    nothing
+end
 
 # The events of one `session/update`, in order. An update kind that the client
-# does not show (`user_message_chunk`), and a kind it does not know, answers no
-# event. The connection answers the updates of the session —
-# `config_option_update`, `current_mode_update`, `usage_update`,
-# `session_info_update` and `available_commands_update` — because it keeps them
-# also outside a prompt.
+# does not show, and a kind it does not know, answers no event. The connection
+# answers the updates of the session — `config_option_update`,
+# `current_mode_update`, `usage_update`, `session_info_update` and
+# `available_commands_update` — because it keeps them for a session that has no
+# frame; the updates that name another session — `subagent_update`, the
+# `user_message_chunk` of a child session, `session_message` and
+# `session_message_chunk`; and the compactions, whose summary it keeps.
 function _translate_session_update!(turn::AcpTurn, update::Dict{String,Any})
     kind = get(update, "sessionUpdate", "")
     events = Any[]
@@ -44,9 +101,17 @@ function _translate_session_update!(turn::AcpTurn, update::Dict{String,Any})
         push!(events, _read_tool_call(update))
     elseif kind == "plan"
         _close_open_block!(events, turn)
-        push!(events, AgentPlanUpdate(AgentPlanEntry[_read_plan_entry(entry)
-                                                     for entry in get(update, "entries", Any[])
-                                                     if entry isa Dict{String,Any}]))
+        push!(events, AgentPlanUpdate(_read_plan_entries(get(update, "entries", Any[]))))
+    elseif kind == "plan_update"
+        _close_open_block!(events, turn)
+        plan = _read_plan_update(get(update, "plan", nothing))
+        plan === nothing || push!(events, plan)
+    elseif kind == "plan_removed"
+        _close_open_block!(events, turn)
+        push!(events, AgentPlanUpdate(AgentPlanEntry[]; id = _read_id(get(update, "planId", nothing)),
+                                      is_removed = true))
+    elseif kind == "notice"
+        push!(events, _read_notice(update))
     end
     events
 end
@@ -80,9 +145,8 @@ end
 function _read_tool_call(update::Dict{String,Any})
     name = _find_string(update, "name")
     if name === nothing
-        meta = get(update, "_meta", nothing)
-        claude = meta isa Dict{String,Any} ? get(meta, "claudeCode", nothing) : nothing
-        name = claude isa Dict{String,Any} ? _find_string(claude, "toolName") : nothing
+        claude = _find_claude_meta(update)
+        name = claude === nothing ? nothing : _find_string(claude, "toolName")
     end
     input = get(update, "rawInput", nothing)
     content = get(update, "content", nothing)
@@ -90,18 +154,162 @@ function _read_tool_call(update::Dict{String,Any})
     output = content isa Vector{Any} && !isempty(content) ? _format_tool_content(content) :
              raw_output isa AbstractString ? String(raw_output) :
              raw_output === nothing ? nothing : ACP.write_json(raw_output)
+    resource = _find_content_resource(content)
     AgentToolCallUpdate(string(get(update, "toolCallId", ""));
                         name, title = _find_string(update, "title"),
                         kind = _find_symbol(update, "kind"),
                         status = _find_symbol(update, "status"),
                         input = input isa Dict{String,Any} ? input : nothing,
-                        output)
+                        output,
+                        output_mime_type = resource === nothing ? nothing : _find_string(resource, "mimeType"),
+                        output_uri = resource === nothing ? nothing : _find_string(resource, "uri"))
 end
 
-_read_plan_entry(entry::Dict{String,Any}) =
+# The `_meta.claudeCode` of an object of the protocol, where the Claude agents of
+# ACP put what the protocol has no field for; `nothing` when it has none.
+function _find_claude_meta(object::Dict{String,Any})
+    meta = get(object, "_meta", nothing)
+    claude = meta isa Dict{String,Any} ? get(meta, "claudeCode", nothing) : nothing
+    claude isa Dict{String,Any} ? claude : nothing
+end
+
+_read_plan_entries(list) =
+    AgentPlanEntry[_read_plan_entry(entry) for entry in (list isa Vector{Any} ? list : Any[])
+                   if entry isa Dict{String,Any}]
+
+# An entry of a plan. The keys `taskId`, `description`, `activeForm` and
+# `blockedBy` of its `_meta.claudeCode` give its id, its description, its active
+# title and its blockers, as `claude-code-acp` sends them; the entry reads no
+# other key there.
+function _read_plan_entry(entry::Dict{String,Any})
+    claude = something(_find_claude_meta(entry), Dict{String,Any}())
+    blockers = get(claude, "blockedBy", nothing)
     AgentPlanEntry(string(get(entry, "content", "")),
                    something(_find_symbol(entry, "priority"), :medium),
-                   something(_find_symbol(entry, "status"), :pending))
+                   something(_find_symbol(entry, "status"), :pending);
+                   id = _read_id(get(claude, "taskId", nothing)),
+                   description = something(_find_string(claude, "description"), ""),
+                   active_title = something(_find_string(claude, "activeForm"), ""),
+                   blocked_by = blockers isa Vector{Any} ?
+                                String[_read_id(blocker) for blocker in blockers
+                                       if blocker isa Union{AbstractString,Integer}] : String[])
+end
+
+# The content of a `plan_update`: its entries, its Markdown text or its file, with
+# the id of the plan; `nothing` for a content of a type that the client does not
+# know.
+function _read_plan_update(plan)
+    plan isa Dict{String,Any} || return nothing
+    id = _read_id(get(plan, "planId", nothing))
+    type = get(plan, "type", nothing)
+    type == "items" && return AgentPlanUpdate(_read_plan_entries(get(plan, "entries", Any[])); id)
+    type == "markdown" &&
+        return AgentPlanUpdate(AgentPlanEntry[]; id, markdown = something(_find_string(plan, "content"), ""))
+    type == "file" && return AgentPlanUpdate(AgentPlanEntry[]; id, uri = something(_find_string(plan, "uri"), ""))
+    nothing
+end
+
+# An id that the agent gives as a text or as a number, as a text; empty when it
+# gives none.
+_read_id(value) = value isa AbstractString ? String(value) : value isa Integer ? string(value) : ""
+
+# A `notice`. A severity that the client does not know shows as `:info`.
+function _read_notice(update::Dict{String,Any})
+    severity = _find_symbol(update, "severity")
+    AgentNoticeUpdate(severity in (:info, :warning, :error) ? severity : :info,
+                      something(_find_string(update, "title"), ""),
+                      something(_find_string(update, "description"), ""))
+end
+
+# A `compaction_update`. A `summary` that the update leaves out keeps the summary
+# before, and `null` or an empty list clears it; the text of its blocks, one on
+# each line, is the summary.
+function _read_compaction_update(update::Dict{String,Any})
+    summary = !haskey(update, "summary") ? nothing :
+              update["summary"] isa Vector{Any} ?
+                  join(filter(!isempty, String[_read_content_text(block) for block in update["summary"]]), '\n') : ""
+    AgentCompactionUpdate(_read_id(get(update, "compactionId", nothing)),
+                          something(_find_symbol(update, "status"), :in_progress), summary)
+end
+
+# A `subagent_update` as an `AgentSubagentUpdate` with no event. A key that the
+# update leaves out gives `nothing`, which keeps the value before, and a `null`
+# clears: a title or a description becomes empty, a state `:unknown`, and the
+# capabilities say that the work can not be cancelled. The state comes from
+# `state.state`, and the stop reason of an idle state from its `stopReason`.
+# `capabilities.cancel` says whether its work can be cancelled.
+# The counts come from the keys `usage.totalTokens`, `usage.toolUses`,
+# `usage.durationMs`, `lastToolName` and `summary` of `_meta.claudeCode`, as
+# `claude-code-acp` sends them, and the token count also from the `usage` of an
+# idle state.
+function _read_subagent_update(update::Dict{String,Any})
+    state = get(update, "state", missing)
+    state_usage = state isa Dict{String,Any} ? get(state, "usage", nothing) : nothing
+    claude = _find_claude_meta(update)
+    claude_usage = claude === nothing ? nothing : get(claude, "usage", nothing)
+    milliseconds = _find_number(claude_usage, "durationMs")
+    capabilities = get(update, "capabilities", missing)
+    AgentSubagentUpdate(_read_id(get(update, "sessionId", nothing));
+                        title = _read_patch_text(update, "title"),
+                        description = _read_patch_text(update, "description"),
+                        state = state === missing ? nothing :
+                                state isa Dict{String,Any} ? _read_subagent_state(get(state, "state", nothing)) :
+                                :unknown,
+                        stop_reason = state isa Dict{String,Any} ? _find_symbol(state, "stopReason") : nothing,
+                        token_count = _find_count(something(_find_number(claude_usage, "totalTokens"),
+                                                            _find_number(state_usage, "totalTokens"), Some(nothing))),
+                        tool_call_count = _find_count(_find_number(claude_usage, "toolUses")),
+                        duration = milliseconds === nothing ? nothing : milliseconds / 1000,
+                        last_tool = claude === nothing ? nothing : _find_string(claude, "lastToolName"),
+                        summary = claude === nothing ? nothing : _find_string(claude, "summary"),
+                        can_cancel = capabilities === missing ? nothing :
+                                     capabilities isa Dict{String,Any} &&
+                                     get(capabilities, "cancel", nothing) isa Dict{String,Any})
+end
+
+# A state that the client does not know is `:unknown`.
+_read_subagent_state(state) =
+    state isa AbstractString && state in ("running", "idle", "requires_action", "unknown") ? Symbol(state) : :unknown
+
+# The extension notification `_session/background_task` as an
+# `AgentBackgroundTaskUpdate`. A key that the notification leaves out gives
+# `nothing`, which keeps the value before. A `null` clears a text: the title, the
+# tool call, the subagent, the output and the summary; the kernel has no empty
+# value for the kind, the status, the times and `canStop`, so a `null` there keeps
+# the value before. The times come in milliseconds since 1970.
+function _read_background_task(params::Dict{String,Any})
+    start_time = _find_number(params, "startTime")
+    end_time = _find_number(params, "endTime")
+    can_stop = get(params, "canStop", nothing)
+    AgentBackgroundTaskUpdate(_read_id(get(params, "taskId", nothing));
+                              kind = _find_symbol(params, "kind"), title = _read_patch_text(params, "title"),
+                              status = _find_symbol(params, "status"),
+                              tool_call_id = _read_patch_text(params, "toolCallId"),
+                              subagent_id = _read_patch_text(params, "subagentId"),
+                              output_uri = _read_patch_text(params, "outputUri"),
+                              summary = _read_patch_text(params, "summary"),
+                              start_time = start_time === nothing ? nothing : start_time / 1000,
+                              end_time = end_time === nothing ? nothing : end_time / 1000,
+                              can_stop = can_stop isa Bool ? can_stop : nothing)
+end
+
+# A text of a patch: `nothing` when the patch leaves the key out, which keeps the
+# value before, and empty for a `null`, which clears it.
+function _read_patch_text(object::Dict{String,Any}, key::String)
+    haskey(object, key) || return nothing
+    value = object[key]
+    value === nothing ? "" : value isa AbstractString ? String(value) : nothing
+end
+
+# A number of an object, or `nothing` when the object or the number is not
+# there.
+function _find_number(object, key::String)
+    object isa Dict{String,Any} || return nothing
+    value = get(object, key, nothing)
+    value isa Real && !(value isa Bool) ? Float64(value) : nothing
+end
+
+_find_count(value) = value === nothing ? nothing : round(Int, value)
 
 # The text of a tool's content: its text blocks as they are, a diff as the path
 # and its lines marked `-` and `+`, and a terminal by its id.
@@ -124,6 +332,18 @@ function _format_tool_content(content::Vector{Any})
         end
     end
     join(pieces, '\n')
+end
+
+# The resource of a tool's content when the content is that one resource and
+# nothing else, as the text of a file that the tool read; `nothing` else.
+function _find_content_resource(content)
+    content isa Vector{Any} && length(content) == 1 || return nothing
+    item = only(content)
+    item isa Dict{String,Any} && get(item, "type", "") == "content" || return nothing
+    block = get(item, "content", nothing)
+    block isa Dict{String,Any} && get(block, "type", "") == "resource" || return nothing
+    resource = get(block, "resource", nothing)
+    resource isa Dict{String,Any} ? resource : nothing
 end
 
 # The text of one content block: the text of a text block, the text or the uri
@@ -204,6 +424,15 @@ function _read_usage_update(update::Dict{String,Any})
 end
 
 _read_count(value) = value isa Real ? Int(round(value)) : 0
+
+# A `session_info_update`: its title, and the id of the process of the session
+# in `_meta.processId`, as `claude-code-acp` sends it.
+function _read_session_info_update(update::Dict{String,Any})
+    meta = get(update, "_meta", nothing)
+    process_id = meta isa Dict{String,Any} ? get(meta, "processId", nothing) : nothing
+    AgentSessionInfoUpdate(_read_session_title(update);
+                           process_id = process_id isa Integer && !(process_id isa Bool) ? process_id : nothing)
+end
 
 # The title of a `session_info_update`: `nothing` when the update leaves it out,
 # empty when it clears it.

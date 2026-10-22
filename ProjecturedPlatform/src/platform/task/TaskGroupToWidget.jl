@@ -1,16 +1,15 @@
 # The views of tasks: the pane of a group, the title of its tab, and the Tasks
 # pane. The pane of a group is a card that says what the whole group does, a
-# table with one row for each task, and the detail of the task that a person
-# picked. The card follows the `summary` of the group, which a drain writes with
+# table with one row for each task, and the detail of the task whose row a person
+# pressed. The card follows the `summary` of the group, which a drain writes with
 # each change; a row reads the cells of its own task document, so a task that
 # reports draws its own row again. What a kind of task adds — its columns, its
 # facts and its buttons — the views ask of the task.
 
 # The columns of the table, in the order a reader wants them, and how they share
-# the width: the prose most, a number least. The first column holds a square
-# button as high as a button of the theme. The columns of the kind of task
+# the width: the prose most, a number least. The columns of the kind of task
 # (`get_task_columns`) stand between the state and the progress.
-const _LEADING_COLUMNS = ["" => 0, "state" => 1]
+const _LEADING_COLUMNS = ["state" => 1]
 const _TRAILING_COLUMNS = ["progress" => 2, "elapsed" => 1, "process" => 1, "processor" => 1,
                            "memory" => 1, "result" => 6]
 
@@ -23,11 +22,7 @@ _get_columns(kind_columns) = vcat(_LEADING_COLUMNS, kind_columns, _TRAILING_COLU
 _make_share_policy(weight) = SizePolicy(nothing, nothing, nothing, Float64(weight))
 
 # The columns of a table: each holds the policy of its width.
-function _make_table_columns(p, columns)
-    Any[WidgetTableColumn(; policy = index == 1 ? Fixed(round(Int, p.button_size.y[])) :
-                                                  _make_share_policy(share))
-        for (index, (_, share)) in enumerate(columns)]
-end
+_make_table_columns(columns) = Any[WidgetTableColumn(; policy = _make_share_policy(share)) for (_, share) in columns]
 
 _get_column_headers(columns) = Any[name for (name, _) in columns]
 
@@ -57,14 +52,6 @@ end
 function _format_duration(seconds::Real; precision::Integer = 0)
     text = format_elapsed_time(seconds; precision = precision)
     occursin(':', text) ? text : text * " s"
-end
-
-"""A number of bytes in the unit a person reads: `512 B`, `12.3 MB`, `1.2 GB`."""
-function format_memory_size(bytes::Integer)
-    bytes < 1024 && return string(bytes, " B")
-    for (unit, size) in (("GB", 1024^3), ("MB", 1024^2), ("kB", 1024))
-        bytes >= size && return string(round(bytes / size; digits = 1), " ", unit)
-    end
 end
 
 # The colour of a role of a result code, and of the states that have none.
@@ -213,10 +200,13 @@ function _build_summary_card(p, doc::TaskGroupDocument; actions::Bool = true)
     end)
 
     is_going() = getfield(doc, :status)[] in (:running, :stopping)
-    run_all = _make_action_button(p, "Run all", () -> is_going() ? nothing : start_task_group_document!(doc); enabled = () -> !is_going())
-    stop = _make_action_button(p, "Stop", () -> stop_task_group_document!(doc); enabled = is_going)
+    run_all = _make_action_button(p, "Run all", () -> is_going() ? nothing : start_task_group_document!(doc);
+                                  enabled = () -> !is_going(), tooltip = "Start every task of the group.")
+    stop = _make_action_button(p, "Stop", () -> stop_task_group_document!(doc); enabled = is_going,
+                               tooltip = "Stop the tasks that run and start no more.")
     again = _make_action_button(p, "Run unexpected again", () -> rerun_task_group_document!(doc, :unexpected);
-                   enabled = () -> !is_going() && !get_summary().is_expected)
+                   enabled = () -> !is_going() && !get_summary().is_expected,
+                   tooltip = _make_rerun_note(doc))
     rows = WidgetToggleGroup(Any["all", "running", "unexpected"];
                              values = Any["all", "running", "unexpected"],
                              target = getfield(doc, :row_filter)[], field = "value")
@@ -273,12 +263,19 @@ end
 # warning, not a fault of the window.
 # An action that takes one argument gets the editor that evaluates the press, as
 # the callback of an `InvokeActionOperation` does.
-function _make_action_button(p, text, action; enabled)
-    button = WidgetButton(text; size = p.button_size, action = editor ->
+function _make_action_button(p, text, action; enabled, tooltip = nothing)
+    button = WidgetButton(text; size = p.button_size, tooltip, action = editor ->
         _run_guarded(text, applicable(action, editor) ? () -> action(editor) : action))
     set_cell_computation!(getfield(button, :enabled), enabled)
     button
 end
+
+# What "Run unexpected again" says when the pointer rests: how many tasks it runs
+# again, the ones that finished with a result that was not expected.
+_make_rerun_note(doc::TaskGroupDocument) = () ->
+    TooltipNote(; title = "Run unexpected again",
+                text = "Run again the tasks that finished with a result that was not expected.",
+                facts = ["Tasks" => string(sum(counts -> counts[3], get_task_group_document_counts(doc).counts; init = 0))])
 
 # An action must never take the window down with it.
 function _run_guarded(what::AbstractString, action)
@@ -305,12 +302,26 @@ function _compute_shown_indices(doc::TaskGroupDocument)
     collect(eachindex(documents))
 end
 
-function _build_table_row(p, doc::TaskGroupDocument, group, kind_columns, index::Int,
-                          document::TaskDocument)
-    pick = WidgetButton("›"; action = _ -> select_task_document!(doc, index))
+# The gestures of a part that opens a page: a press opens it here, in the navigator
+# around the pane, and Ctrl+press opens it in a new tab. The open names `document`
+# and a path from it, so the navigator opens the page where its content holds it
+# (`find_navigator_address`).
+function _make_open_gestures(document, reference::Reference)
+    open(place) = (_, _) -> OpenPageOperation(document, reference, place)
+    GestureBinding[GestureBinding(MouseClickPattern(:left; modifiers = Symbol[]), open(:here);
+                                  description = "Open as a page", domain = "task"),
+                   GestureBinding(MouseClickPattern(:left; modifiers = [:ctrl]), open(:new_tab);
+                                  description = "Open in a new tab", domain = "task")]
+end
+
+# The path from a group to the document of its task `index`.
+_make_task_reference(index::Int) = Reference(FieldReferenceStep("tasks"), RangeReferenceStep(index - 1, index))
+
+# The cells of the row of a task. The row takes the press, not a cell
+# (`_convert_table_answer`).
+function _build_table_row(p, doc::TaskGroupDocument, group, kind_columns, document::TaskDocument)
     task = getfield(document, :task)[]
-    Any[pick,
-        _make_live_label(() -> _get_task_state(p, group, document)),
+    Any[_make_live_label(() -> _get_task_state(p, group, document)),
         (WidgetLabel(format_task_column(task, name)) for (name, _) in kind_columns)...,
         _make_task_progress_ring(document),
         WidgetLabel(() -> _format_task_elapsed_time(doc, document)),
@@ -324,31 +335,47 @@ end
 
 _format_or_blank(value) = value === nothing ? "" : string(value)
 
+# What a press on a row of a table of tasks does, for a person who rests the
+# pointer on it.
+const _TABLE_TOOLTIP = "A press shows the task below. A double press opens its page, and a Ctrl+press opens it in a new tab."
+
+# The place, among the shown rows `shown`, of the row at the head of the list of
+# the table: the row of the anchor of the group, else the first row after it
+# that the choice shows, else the last row.
+_get_head_place(doc::TaskGroupDocument, shown) =
+    clamp(searchsortedfirst(shown, getfield(doc, :anchor)[]), 1, max(1, length(shown)))
+
+# The selection of the row of the task that the detail shows, in a table whose
+# row 1 is the place `first` of the shown rows; `nothing` when the choice does
+# not show that task. A row before the head of a list has a number of zero or
+# less.
+function _find_selected_row(doc::TaskGroupDocument, shown, first::Int)
+    place = findfirst(==(getfield(doc, :selected)[]), shown)
+    place === nothing && return nothing
+    row = place - first + 1
+    ConcreteReference(FieldReferenceStep("rows"), ConcreteReference(RangeReferenceStep(row - 1, row), EmptyReference()))
+end
+
 # The table. Its rows are a list built one node at a time as the viewport reaches
-# it, so a group of 22,731 runs costs what a group of twenty costs.
+# it, with its head at the anchor of the group, so a group of 22,731 runs costs
+# what a group of twenty costs. The row of the task of the detail is selected.
 function _build_table(p, doc::TaskGroupDocument)
     group = get_task_group(doc)
     kind_columns = _get_kind_columns(group)
     columns = _get_columns(kind_columns)
-    function make_row_node(shown, k)
-        documents = getfield(doc, :tasks)[]
-        index = shown[k]
-        node = ListNode(make_widget_table_row(
-            _build_table_row(p, doc, group, kind_columns, index, documents[index])))
-        set_cell_computation!(getfield(node, :next), () -> begin
-            k < length(shown) || return nothing
-            following = make_row_node(shown, k + 1)
-            set_cell_value!(getfield(following, :prev), node)
-            following
-        end)
-        node
-    end
     table = WidgetTable(; column_headers = _get_column_headers(columns),
                         cells = ListNode(make_widget_table_row(Any["" for _ in columns])),
-                        columns = _make_table_columns(p, columns))
+                        columns = _make_table_columns(columns), tooltip = _TABLE_TOOLTIP)
     set_cell_computation!(getfield(table, :cells), () -> begin
         shown = _compute_shown_indices(doc)
-        isempty(shown) ? CellVector() : make_row_node(shown, 1)
+        isempty(shown) && return CellVector()
+        make_index_list(length(shown), _get_head_place(doc, shown), place ->
+            make_widget_table_row(_build_table_row(p, doc, group, kind_columns,
+                                                   getfield(doc, :tasks)[][shown[place]])))
+    end)
+    set_cell_computation!(getfield(table, :selection), () -> begin
+        shown = _compute_shown_indices(doc)
+        _find_selected_row(doc, shown, _get_head_place(doc, shown))
     end)
     table
 end
@@ -361,12 +388,124 @@ function _build_whole_table(p, doc::TaskGroupDocument)
     kind_columns = _get_kind_columns(group)
     columns = _get_columns(kind_columns)
     documents = getfield(doc, :tasks)[]
-    rows = Any[_build_table_row(p, doc, group, kind_columns, index, documents[index])
-               for index in _compute_shown_indices(doc)]
-    WidgetTable(_get_column_headers(columns), rows; columns = _make_table_columns(p, columns))
+    shown = _compute_shown_indices(doc)
+    rows = Any[_build_table_row(p, doc, group, kind_columns, documents[index]) for index in shown]
+    table = WidgetTable(_get_column_headers(columns), rows; columns = _make_table_columns(columns),
+                        tooltip = _TABLE_TOOLTIP)
+    set_cell_computation!(getfield(table, :selection), () -> _find_selected_row(doc, shown, 1))
+    table
 end
 
 # ── The detail of one task ───────────────────────────────────────────────────
+
+# ── The documents of a task, edited where they show ─────────────────────────
+#
+# The detail of a task draws the tree of the processes of the task while it runs,
+# and the document of its result, each in the card of an embedded document
+# (`make_embed_card`). A path from the group reaches each document,
+# `tasks[i].process_tree + rest` and `tasks[i].result_document + rest`, so the
+# pane maps that path to its card, `content + rest`, and back, as a page maps an
+# embedded file. Every other path takes the defaults of `Projection`.
+
+# The steps from the root of the pane to the detail: the split is the second
+# child of the root, in a constraint, and the detail is the second pane of the
+# split, in a constraint too (`_build_group_parts`).
+const _DETAIL_STEPS = (FieldReferenceStep("children"), RangeReferenceStep(1, 2), FieldReferenceStep("child"),
+                       FieldReferenceStep("elements"), RangeReferenceStep(1, 2), FieldReferenceStep("child"))
+
+# The parts of the detail of a task before its cards: its state, its facts, its
+# process, its result, its earlier executions and its buttons.
+const _PARTS_BEFORE_CARDS = 6
+
+# The fields of a task document that the detail shows in a card, in this order,
+# each when it holds a document.
+const _CARD_FIELDS = (:process_tree, :result_document)
+
+# The card of each document that the detail of the pane shows: the steps from the
+# group to the document, and the steps from the root of the pane to its card. A
+# task of an inner group shows in the detail of that group, which no path from
+# this group reaches.
+function _find_card_places(doc::TaskGroupDocument)
+    places = Tuple{Tuple,Tuple}[]
+    index = getfield(doc, :selected)[]
+    documents = getfield(doc, :tasks)[]
+    (1 <= index <= length(documents)) || return places
+    find_task_group_document(doc, index) === nothing || return places
+    for field in _CARD_FIELDS
+        getfield(documents[index], field)[] === nothing && continue
+        position = _PARTS_BEFORE_CARDS + length(places)
+        push!(places, ((FieldReferenceStep("tasks"), RangeReferenceStep(index - 1, index),
+                        FieldReferenceStep(String(field))),
+                       (_DETAIL_STEPS..., FieldReferenceStep("children"),
+                        RangeReferenceStep(position, position + 1), FieldReferenceStep("child"))))
+    end
+    places
+end
+
+# What a step names, so a step that a reader answers and a step written here
+# compare by what they select.
+_get_step_key(step::FieldReferenceStep) = (:field, step.name)
+_get_step_key(step::RangeReferenceStep) = (:range, step.start, step.stop)
+_get_step_key(step) = (:other, step)
+
+_make_steps_reference(steps) =
+    foldr((step, rest) -> ConcreteReference(step, rest), steps; init = EmptyReference())
+
+# The part of `path` below `head`, or `nothing` when `path` does not begin with it.
+function _find_path_below(path, head)
+    path isa ConcreteReference || return nothing
+    steps = get_reference_steps(strip_reference_types(path))
+    length(steps) >= length(head) || return nothing
+    all(_get_step_key(steps[k]) == _get_step_key(head[k]) for k in eachindex(head)) || return nothing
+    _make_steps_reference(steps[(length(head) + 1):end])
+end
+
+function map_reference_forward(p::TaskGroupDocumentToWidgetPane, iomap, reference)
+    if reference isa ConcreteReference
+        for (document_steps, card_steps) in _find_card_places(iomap.input)
+            inside = _find_path_below(reference, document_steps)
+            inside === nothing || return annotate_reference_types(iomap.output,
+                concat_references(_make_steps_reference(card_steps), make_embed_card_path(inside)))
+        end
+    end
+    invoke(map_reference_forward, Tuple{Projection,Any,Any}, p, iomap, reference)
+end
+
+function map_reference_backward(p::TaskGroupDocumentToWidgetPane, iomap, reference)
+    if reference isa ConcreteReference
+        for (document_steps, card_steps) in _find_card_places(iomap.input)
+            below = _find_path_below(reference, card_steps)
+            inside = below === nothing ? nothing : find_embed_card_path_inside(below)
+            inside === nothing || return annotate_reference_types(iomap.input,
+                concat_references(_make_steps_reference(document_steps), inside))
+        end
+    end
+    invoke(map_reference_backward, Tuple{Projection,Any,Any}, p, iomap, reference)
+end
+
+# A key goes to the child that the selection of each container names, so each
+# widget and layout from the root of the pane to the card holds its part of the
+# path. The walk stops at a card that holds a document of a domain: the card
+# follows the paths of its document (`make_embed_card`), and the document holds
+# its own. It leaves out the table, whose rows take no key and which selects the
+# row of the task of the detail itself. A constraint is on the way: the split and
+# the detail each stand in one.
+_is_embed_card(node) =
+    node isa WidgetCard && node.content isa Document &&
+    !(node.content isa WidgetDocument || node.content isa LayoutDocument)
+_is_followed_by_selection(node) =
+    (node isa WidgetDocument || node isa LayoutDocument || node isa LayoutConstraint) &&
+    !(node isa WidgetTable) && !_is_embed_card(node)
+
+# A part that the detail builds holds its part of the paths of the detail, so a
+# key reaches the card after the person picks another task: the walk of the pane
+# reaches only the parts that were there when the pane was drawn.
+function _follow_detail_part!(detail, part, position::Int)
+    steps = (FieldReferenceStep("children"), RangeReferenceStep(position, position + 1))
+    below(field) = () -> _find_path_below(getfield(detail, field)[], steps)
+    follow_output_selection!(part, below(:selection); forward_mouse_target = below(:mouse_target),
+                             is_followed = _is_followed_by_selection)
+end
 
 function _build_detail(p, doc::TaskGroupDocument, bounded::Bool)
     group = get_task_group(doc)
@@ -376,7 +515,7 @@ function _build_detail(p, doc::TaskGroupDocument, bounded::Bool)
         index == -1 && return Cell[Cell(x) for x in _build_preparation_detail(p, doc, bounded)]
         documents = getfield(doc, :tasks)[]
         (1 <= index <= length(documents)) ||
-            return Cell[Cell(_make_label("Press › on a row to see its task here.", p.muted_color))]
+            return Cell[Cell(_make_label("Press a row to see its task here.", p.muted_color))]
         # A task that is a group shows its own pane: its card, its table and
         # the detail of the task picked in it.
         inner = find_task_group_document(doc, index)
@@ -414,8 +553,23 @@ function _build_detail(p, doc::TaskGroupDocument, bounded::Bool)
                               () -> !(getfield(doc, :status)[] in (:running, :stopping)))
         actions = Any[_make_task_action_button(p, label, action, task)
                       for (label, action) in get_task_actions(task)]
-        push!(parts, HorizontalLayout(Any[stop, again, actions...]; vertical_align = :center,
+        page = WidgetButton("Open the task page"; size = p.button_size,
+                            gestures = _make_open_gestures(doc, _make_task_reference(index)))
+        push!(parts, HorizontalLayout(Any[page, stop, again, actions...]; vertical_align = :center,
                                       gap = p.inline_gap))
+        # The tree of the processes of the task while it runs, and the document
+        # that the kind gives for the result, each in the card of an embedded
+        # document, between the facts and the output. The maps of the pane find
+        # each card by its place.
+        length(parts) == _PARTS_BEFORE_CARDS ||
+            error("the cards of the task are not where the maps of the pane find them")
+        for field in _CARD_FIELDS
+            shown = getfield(document, field)[]
+            shown === nothing && continue
+            card = make_embed_card(shown, something(get_document_title(shown), "Result"))
+            push!(parts, _follow_detail_part!(detail, LayoutConstraint(card; height = Relative(2), width = Fill),
+                                              length(parts)))
+        end
         push!(parts, _make_label("stdout", p.muted_color))
         push!(parts, _build_output_pane(() -> collect_task_document_lines(document, :output); weight = 2))
         push!(parts, _make_label("stderr", p.muted_color))
@@ -501,28 +655,44 @@ The tooltip holds the summary card in short. The icon and the badges read the
 and the tooltip reads the summary; so the tab follows the group, and nothing of
 the title is written while the group runs.
 
-It is the `make_pane_tab_title` of a group, so `open_pane!` gives each tab of a
-group this title, also when its caller gives the name as a plain string.
+It is the title that the decoration of a group gives
+(`get_document_decoration`), as `open_pane!` gives each tab of a group, also when
+its caller gives the name as a plain string, and as a row of a tree shows it.
+
+Use it to give the tab of a group a title that shows how far the group is.
 
 # Example
 
     group = wrap_task_group_document(TaskGroup(tasks; name = "builds"))
     open_pane!(group; title = "Builds")
     start_task_group_document!(group)
-"""
-function make_task_group_tab_title(doc::TaskGroupDocument; name = getfield(doc, :title)[])
-    group = get_task_group(doc)
-    state() = (status = getfield(doc, :status)[], counts = get_task_group_document_counts(doc),
-               cancelled = group.stopping)
-    PaneTabTitle(String(name);
-                 icon = () -> _get_tab_icon(state()),
-                 icon_role = () -> _get_tab_role(group, state()),
-                 badges = () -> _make_tab_badges(group, state()),
-                 tooltip = () -> _format_tab_tooltip(doc, group))
-end
 
-make_pane_tab_title(doc::TaskGroupDocument, name::AbstractString) =
-    make_task_group_tab_title(doc; name)
+See also `describe_task_group` and `open_pane!`.
+"""
+function make_task_group_tab_title end
+
+make_task_group_tab_title(doc::TaskGroupDocument; name = getfield(doc, :title)[]) =
+    make_pane_tab_title(doc, String(name))
+
+# A group is a work item: its icon is its state, its tint the role of its state,
+# its counts how far it is and each code that came back unexpected, and its
+# tooltip the summary card in short. It reads the counts and the status, which
+# change when a task starts or ends.
+function get_document_decoration(doc::TaskGroupDocument)
+    group = get_task_group(doc)
+    state = (status = getfield(doc, :status)[], counts = get_task_group_document_counts(doc),
+             cancelled = group.stopping)
+    kind = _get_tab_state(state)
+    role = _get_tab_role(group, state)
+    condition = kind === :running ? DocumentCondition(:running) :
+                kind === :pending ? DocumentCondition(:pending) :
+                kind === :cancelled ? DocumentCondition(:stopped) :
+                kind === :expected ? DocumentCondition(:done) :
+                DocumentCondition(role === :error ? :failed : :unexpected; role)
+    counts = DocumentCount[DocumentCount(badge.content; role = badge.role) for badge in _make_tab_badges(group, state)]
+    DocumentDecoration(; icon = _get_tab_icon(state), conditions = [condition], counts,
+                       tooltip = _make_tab_note(doc, group), work_item = true)
+end
 
 # What the tab of a group is in: not started, running, cancelled, all as
 # expected, or with an unexpected code.
@@ -573,24 +743,40 @@ function _make_tab_badges(group, state)
     badges
 end
 
-# The summary card in short: what the group is, how far it is, what it found,
-# and the time.
-function _format_tab_tooltip(doc::TaskGroupDocument, group)
+# The summary card in short, as a note: the title of the group and what it does,
+# then how far it is, what it found and the time, as facts.
+function _make_tab_note(doc::TaskGroupDocument, group)
     s = get_task_group_document_summary(doc)
     running = getfield(doc, :status)[] in (:running, :stopping)
     heading = running ? format_task_group_description(group) : format_task_group_close_description(group)
-    lines = String[string(getfield(doc, :title)[], " (", getfield(doc, :identifier)[], ")"),
-                   string(heading, ": ", s.finished, " of ", s.total, " finished, ", s.running,
-                          " running, ", group.jobs, " at a time")]
-    isempty(s.summary) || push!(lines, s.summary)
-    times = String[]
-    group.start_time === nothing ||
-        push!(times, "Started " * Libc.strftime("%H:%M:%S", group.start_time))
-    s.elapsed === nothing || push!(times, _format_duration(s.elapsed) * " elapsed")
-    s.remaining === nothing || push!(times, "about " * _format_duration(s.remaining) * " left")
-    isempty(times) || push!(lines, join(times, " · "))
-    join(lines, "\n")
+    facts = Pair{String,String}["Identifier" => getfield(doc, :identifier)[],
+                                "Finished" => string(s.finished, " of ", s.total)]
+    s.running > 0 && push!(facts, "Running" => string(s.running))
+    push!(facts, "At a time" => string(group.jobs))
+    isempty(s.summary) || push!(facts, "Result" => s.summary)
+    group.start_time === nothing || push!(facts, "Started" => Libc.strftime("%H:%M:%S", group.start_time))
+    s.elapsed === nothing || push!(facts, "Elapsed" => _format_duration(s.elapsed))
+    s.remaining === nothing || push!(facts, "Left" => "about " * _format_duration(s.remaining))
+    TooltipNote(; title = getfield(doc, :title)[], text = heading, facts)
 end
+
+# ── The node of a tree ───────────────────────────────────────────────────────
+
+# A group in a tree has its tasks under its node. Its text is its identifier and
+# its title; how far it is shows as the counts of its decoration.
+get_tree_children_steps(::TaskGroupDocument) = ((FieldReferenceStep("tasks"),),)
+
+format_tree_node_label(doc::TaskGroupDocument) = getfield(doc, :identifier)[] * " " * getfield(doc, :title)[]
+
+# The list of the groups has a node for each group, and a closed group keeps its
+# place there and says that it closed.
+get_tree_children_steps(::TaskGroupList) = ((FieldReferenceStep("groups"),),)
+format_tree_node_label(group::ClosedTaskGroup) = getfield(group, :identifier)[] * " " * getfield(group, :title)[]
+get_document_decoration(group::ClosedTaskGroup) =
+    DocumentDecoration(; icon = :minus, conditions = [DocumentCondition(:stopped)], detail = "closed", work_item = true,
+                       tooltip = () -> TooltipNote(; title = getfield(group, :title)[],
+                                                   text = isempty(getfield(group, :summary)[]) ? nothing :
+                                                          getfield(group, :summary)[]))
 
 # ── The pane ─────────────────────────────────────────────────────────────────
 
@@ -612,8 +798,135 @@ function print_document(p::TaskGroupDocumentToWidgetPane, recursion, doc::TaskGr
     iomap = ChildrenIoMap(p, doc, root, Cell(Any[]))
     # The part under the pointer, so a button lights and takes a press.
     follow_output_mouse_target!(root, () ->
-        map_mouse_target_forward(doc, path -> map_reference_forward(p, iomap, path)))
+        map_mouse_target_forward(doc, path -> map_reference_forward(p, iomap, path));
+        is_followed = !_is_embed_card)
+    # The caret, so a key reaches the document of a result in the detail.
+    follow_output_selection!(root, () -> begin
+        path = getfield(doc, :selection)[]
+        path === nothing ? nothing : map_reference_forward(p, iomap, path)
+    end; is_followed = _is_followed_by_selection)
     iomap
+end
+
+# ── A press on a row ─────────────────────────────────────────────────────────
+#
+# A table of text gives a press on a row back as the selection of the row, and a
+# scroll far from the head of its list as a write of its head, `cells`. The pane
+# turns the first into what the press does to the task of the row, and the
+# second into a write of the anchor of the group, as the owner of a list does.
+
+# The steps from the parts of a group to its table: the split is the second part,
+# in a constraint, and the table is its first pane, in a constraint and a scroll
+# pane (`_build_group_parts`).
+const _TABLE_STEPS = (FieldReferenceStep("children"), RangeReferenceStep(1, 2), FieldReferenceStep("child"),
+                      FieldReferenceStep("elements"), RangeReferenceStep(0, 1), FieldReferenceStep("child"),
+                      FieldReferenceStep("content"))
+
+# The group whose parts the detail of `doc` shows: the selected task when it is a
+# group, or the preparation when it is a group and the detail shows it.
+function _find_detail_group(doc::TaskGroupDocument)
+    index = getfield(doc, :selected)[]
+    inner = index == -1 ? get_task_group_preparation(doc) : find_task_group_document(doc, index)
+    inner isa TaskGroupDocument ? inner : nothing
+end
+
+# Each table of a group that the pane draws, as `(group, table, steps)`: the table
+# of the group of the pane, and the table of the group that its detail shows, in
+# turn. `steps` go from the root of the pane to the table; `parts` is the layout
+# of the card and the split of `doc`.
+function _collect_group_tables(doc::TaskGroupDocument, parts, head = (), found = Any[])
+    table = try_evaluate_reference(parts, _make_steps_reference(_TABLE_STEPS), nothing)
+    table isa WidgetTable && push!(found, (doc, table, (head..., _TABLE_STEPS...)))
+    inner = _find_detail_group(doc)
+    inner === nothing && return found
+    detail = try_evaluate_reference(parts, _make_steps_reference(_DETAIL_STEPS), nothing)
+    detail === nothing || _collect_group_tables(inner, detail, (head..., _DETAIL_STEPS...), found)
+    found
+end
+
+# The task of the row `row` of `table`, a table of `doc`: a list counts its rows
+# from its head, the anchor of the group, and a table of every row from the first
+# row the choice shows. `nothing` for a row that the choice does not show.
+function _find_row_task(doc::TaskGroupDocument, table::WidgetTable, row::Int)
+    shown = _compute_shown_indices(doc)
+    place = (table.cells isa ListNode ? _get_head_place(doc, shown) : 1) + row - 1
+    1 <= place <= length(shown) ? shown[place] : nothing
+end
+
+# The group, the table and the number of the row that the selection `path`, from
+# the root of the pane, names whole; `nothing` for any other path.
+function _find_selected_table_row(tables, path)
+    for (group, table, steps) in tables
+        rest = _find_path_below(path, steps)
+        rest isa ConcreteReference || continue
+        below = get_reference_steps(rest)
+        (length(below) == 2 && below[1] isa FieldReferenceStep && below[1].name == "rows" &&
+         below[2] isa RangeReferenceStep && below[2].stop == below[2].start + 1) || return nothing
+        return (group, table, below[2].stop)
+    end
+    nothing
+end
+
+# What a press on the row of task `index` of `group` does: a press shows the task
+# in the detail, a double press opens its page, in the navigator around the pane
+# or else in a new tab, and Ctrl+press opens it in a new tab. Which task the
+# detail shows is view state, so the undo does not record it.
+function _make_row_press_operation(group::TaskGroupDocument, index::Int, gesture)
+    reference = _make_task_reference(index)
+    if gesture isa MouseClick
+        gesture.modifiers.ctrl && return OpenPageOperation(group, reference, :new_tab)
+        gesture.count == 2 && return OpenPageOperation(group, reference, :here)
+    end
+    ReplaceViewStateOperation(ReplaceReferencedValueOperation(group, "selected", index))
+end
+
+# The write of the anchor of a group for a write of the head of the list of its
+# table, which moves the head to a later or an earlier node; `nothing` for any
+# other operation.
+function _convert_head_write(tables, operation)
+    operation isa ReplaceViewStateOperation || return nothing
+    write = get_wrapped_operation(operation)
+    (write isa ReplaceReferencedValueOperation && write.value isa ListNode &&
+     write.reference isa ConcreteReference && write.reference.head isa FieldReferenceStep &&
+     write.reference.head.name == "cells") || return nothing
+    entry = findfirst(entry -> entry[2] === write.document, tables)
+    entry === nothing && return nothing
+    (group, table, _) = tables[entry]
+    row = find_list_index(table.cells, write.value)
+    index = row === nothing ? nothing : _find_row_task(group, table, row)
+    index === nothing && return DoNothingOperation()
+    ReplaceViewStateOperation(ReplaceReferencedValueOperation(group, "anchor", index))
+end
+
+# The answer of the pane to a selection of a row of a table of a group, and to a
+# compound that moves the head of the list of one; `nothing` for any other. The
+# selection of a row moves with the head in that compound, but the table selects
+# the row of the task of the detail, wherever the head is, so that part does
+# nothing.
+function _convert_table_answer(doc::TaskGroupDocument, root, operation, gesture)
+    if operation isa ReplaceSelectionOperation
+        found = _find_selected_table_row(_collect_group_tables(doc, root), operation.path)
+        found === nothing && return nothing
+        (group, table, row) = found
+        index = _find_row_task(group, table, row)
+        return index === nothing ? DoNothingOperation() : _make_row_press_operation(group, index, gesture)
+    end
+    operation isa CompoundOperation || return nothing
+    tables = _collect_group_tables(doc, root)
+    anchors = Any[_convert_head_write(tables, part) for part in operation.operations]
+    all(isnothing, anchors) && return nothing
+    CompoundOperation(Any[anchor !== nothing ? anchor :
+                          part isa ReplaceSelectionOperation && _find_selected_table_row(tables, part.path) !== nothing ?
+                              DoNothingOperation() : part
+                          for (part, anchor) in zip(operation.operations, anchors)])
+end
+
+function read_intent(p::TaskGroupDocumentToWidgetPane, recursion, change::Intent, iomap)
+    operation = change.operation
+    converted = operation === nothing ? nothing :
+                _convert_table_answer(iomap.input, iomap.output, operation, change.gesture)
+    converted === nothing || (change = Intent(change.gesture, converted, change.description, change.domain))
+    invoke(read_intent, Tuple{Projection,Any,Intent,Any}, p, recursion, change, iomap)
 end
 
 # ── The Tasks pane ───────────────────────────────────────────────────────────
@@ -621,11 +934,14 @@ end
 """
     TaskGroupListToWidgetPane(; theme styles…)
 
-Draw a [`TaskGroupList`](@ref) as the Tasks pane: one row for each group of the
-session, newest first, with its identifier, its title, its kind, the word of its
-state, its counts, how far it is and the time, and the buttons that show its
-pane, stop it, run its unexpected tasks again, and close its row. A group whose
-pane was closed keeps its row, and Show opens the pane again.
+Draw a [`TaskGroupList`](@ref) as the Tasks pane: one row for each open work item
+of the session, newest first. A group shows its identifier, its title, its kind,
+the word of its state, its counts, how far it is and the time, and the buttons
+that stop it, run its unexpected tasks again, and close its row. Another work
+item, such as a search, shows its identifier, its title, its kind, and the word
+of its state and its line as its decoration says them, and the buttons that stop
+it and close its row. The title is a link to the page of the item. A closed row
+leaves a [`ClosedTaskGroup`](@ref) in the list, which the pane does not show.
 """
 @projection UntrackedCell struct TaskGroupListToWidgetPane <: Projection
     button_size::Point2D = get_task_style(nothing, :button_size)
@@ -639,45 +955,47 @@ pane was closed keeps its row, and Show opens the pane again.
     muted_color::StyleColor = get_task_style(nothing, :muted_color)
 end
 
-const _LIST_COLUMNS = ("", "group", "title", "kind", "state", "counts", "progress", "elapsed", "")
+const _LIST_COLUMNS = ("item", "title", "kind", "state", "counts", "progress", "elapsed", "")
 
 """
     make_task_group_list_tab_title(list) -> PaneTabTitle
 
-The title of the Tasks tab: its name, and a badge with the count of the groups
-that run while any does.
+The title of the Tasks tab: its name, and a badge with the count of the work items
+that run while any does. It is the title that the decoration of the list gives
+(`get_document_decoration`), so a navigator whose page is the list gives its tab
+the same icon and badge, and a row of a tree shows the same.
 """
-make_task_group_list_tab_title(list::TaskGroupList) =
-    PaneTabTitle("Tasks"; icon = :list,
-                 badges = () -> (n = count(g -> getfield(g, :status)[] in (:running, :stopping), list.groups);
-                                 n == 0 ? Any[] : Any[WidgetBadge(string(n, " running"); role = :accent)]))
+make_task_group_list_tab_title(list::TaskGroupList; name = "Tasks") = make_pane_tab_title(list, String(name))
 
-# The counts of a group in a line: each code, then the tasks that run and wait.
-function _format_group_counts(counts)
-    parts = String[]
-    for (code, expected, unexpected) in counts.counts
-        expected > 0 && push!(parts, string(expected, " ", code))
-        unexpected > 0 && push!(parts, string(unexpected, " ", code, " unexpected"))
-    end
-    counts.running > 0 && push!(parts, string(counts.running, " running"))
-    counts.pending > 0 && push!(parts, string(counts.pending, " waiting"))
-    join(parts, " · ")
+# The list says how many of its work items run, and runs while one does.
+function get_document_decoration(list::TaskGroupList)
+    running = count(_is_work_item_running, collect_work_items(list))
+    tooltip = () -> TooltipNote(; title = "Tasks", text = "Every task group of this session, and its tasks.",
+                                facts = ["Groups" => string(length(collect(list.groups))),
+                                         "Running" => string(running)])
+    running == 0 && return DocumentDecoration(; icon = :list, tooltip)
+    DocumentDecoration(; icon = :list, conditions = [DocumentCondition(:running)],
+                       counts = [DocumentCount(string(running, " running"); role = :accent)], tooltip)
 end
 
-function _build_list_row(p, list::TaskGroupList, doc::TaskGroupDocument)
+function _build_list_row(p, list::TaskGroupList, doc::TaskGroupDocument, index::Int)
     group = get_task_group(doc)
+    # The title is a link to the page of the group.
+    title = WidgetButton(getfield(doc, :title)[];
+                         gestures = _make_open_gestures(list, Reference(FieldReferenceStep("groups"),
+                                                                        RangeReferenceStep(index - 1, index))))
     is_going() = getfield(doc, :status)[] in (:running, :stopping)
-    show_button = _make_action_button(p, "Show", editor -> open_task_group_pane(editor, list, doc);
-                                      enabled = () -> true)
-    stop_button = _make_action_button(p, "Stop", () -> stop_task_group_document!(doc); enabled = is_going)
+    stop_button = _make_action_button(p, "Stop", () -> stop_task_group_document!(doc); enabled = is_going,
+                                      tooltip = "Stop the tasks that run and start no more.")
     again_button = _make_action_button(p, "Run unexpected again",
                                        () -> rerun_task_group_document!(doc, :unexpected);
-                                       enabled = () -> !is_going() && !get_task_group_document_counts(doc).is_expected)
+                                       enabled = () -> !is_going() && !get_task_group_document_counts(doc).is_expected,
+                                       tooltip = _make_rerun_note(doc))
     close_button = _make_action_button(p, "Close", () -> remove_task_group!(list, doc);
-                                       enabled = () -> !is_going())
-    Any[show_button,
-        WidgetLabel(getfield(doc, :identifier)[]),
-        WidgetLabel(() -> getfield(doc, :title)[]),
+                                       enabled = () -> !is_going(),
+                                       tooltip = "Close the group: its tasks and their output are gone, and its summary stays.")
+    Any[WidgetLabel(getfield(doc, :identifier)[]),
+        title,
         WidgetLabel(group.name),
         _make_live_label(() -> _get_group_state(p, doc, group)),
         WidgetLabel(() -> _format_group_counts(get_task_group_document_counts(doc))),
@@ -687,18 +1005,70 @@ function _build_list_row(p, list::TaskGroupList, doc::TaskGroupDocument)
                          gap = p.inline_gap)]
 end
 
+# The row of another work item: its identifier, its title as a link to its page,
+# its kind, the word of its state and its line, as its decoration says them, and
+# the buttons that stop it and close its row.
+function _build_list_row(p, list::TaskGroupList, item, index::Int)
+    title = WidgetButton(get_document_title(item);
+                         gestures = _make_open_gestures(list, Reference(FieldReferenceStep("groups"),
+                                                                        RangeReferenceStep(index - 1, index))))
+    is_going() = _is_work_item_running(item)
+    stop_button = _make_action_button(p, "Stop", () -> stop_work_item!(item); enabled = is_going,
+                                      tooltip = "Stop this work before it ends.")
+    close_button = _make_action_button(p, "Close", () -> remove_task_group!(list, item);
+                                       enabled = () -> !is_going(),
+                                       tooltip = "Close the row: a summary of the work takes its place.")
+    Any[WidgetLabel(get_work_item_identifier(item)),
+        title,
+        WidgetLabel(describe_work_item_kind(item, 1)),
+        _make_live_label(() -> _get_work_item_state(p, item)),
+        WidgetLabel(() -> get_document_decoration(item).detail),
+        WidgetLabel(""),
+        WidgetLabel(""),
+        HorizontalLayout(Any[stop_button, close_button]; vertical_align = :center, gap = p.inline_gap)]
+end
+
+# The word of the state of a work item and its color: the first condition of its
+# decoration.
+function _get_work_item_state(p, item)
+    conditions = get_document_decoration(item).conditions
+    isempty(conditions) && return ("", p.muted_color)
+    condition = first(conditions)
+    look = get_condition_look(Val(condition.name))
+    role = something(condition.role, Some(look.role))
+    (look.words, role === :accent ? p.running_color : role === nothing ? p.muted_color : _get_role_color(p, role))
+end
+
+# The open work items of the list, newest first, each with its place in the list,
+# which the path of its link names.
+_collect_shown_task_groups(list::TaskGroupList) =
+    [(index, item) for (index, item) in Iterators.reverse(collect(enumerate(list.groups)))
+     if !(item isa ClosedTaskGroup)]
+
+# The count of each kind of the open work items, in the order of the first start
+# of each kind, and how many run: "2 groups · 1 search · 1 running". With no item,
+# "0 groups · 0 running".
+function _format_list_heading(items)
+    kinds = Pair{Any,Vector{Any}}[]
+    for item in items
+        kind = Base.typename(typeof(item)).wrapper
+        place = findfirst(pair -> first(pair) === kind, kinds)
+        place === nothing ? push!(kinds, kind => Any[item]) : push!(last(kinds[place]), item)
+    end
+    parts = String[string(length(found), " ", describe_work_item_kind(first(found), length(found)))
+                   for (_, found) in kinds]
+    isempty(parts) && push!(parts, "0 groups")
+    join(vcat(parts, string(count(_is_work_item_running, items), " running")), " · ")
+end
+
 function print_document(p::TaskGroupListToWidgetPane, recursion, list::TaskGroupList, ctx)
-    heading = WidgetLabel(() -> begin
-        groups = collect(list.groups)
-        running = count(g -> getfield(g, :status)[] in (:running, :stopping), groups)
-        string(length(groups), length(groups) == 1 ? " group" : " groups", " · ", running, " running")
-    end)
+    heading = WidgetLabel(() -> _format_list_heading(collect_work_items(list)))
     body = VerticalLayout(Any[]; child_width = Fill)
     set_cell_computation!(getfield(body.children, :elements), () -> begin
-        groups = collect(list.groups)
-        isempty(groups) && return Cell[Cell(_make_label(
-            "No group of tasks ran in this session yet.", p.muted_color))]
-        rows = Any[_build_list_row(p, list, doc) for doc in groups]
+        shown = _collect_shown_task_groups(list)
+        isempty(shown) && return Cell[Cell(_make_label(
+            "No group of tasks is open in this session.", p.muted_color))]
+        rows = Any[_build_list_row(p, list, item, index) for (index, item) in shown]
         Cell[Cell(WidgetTable(collect(Any, _LIST_COLUMNS), rows))]
     end)
     root = VerticalLayout(Any[heading, LayoutConstraint(WidgetScrollPane(body); width = Fill, height = Fill)];
@@ -709,14 +1079,41 @@ function print_document(p::TaskGroupListToWidgetPane, recursion, list::TaskGroup
     iomap
 end
 
+# ── A closed group ───────────────────────────────────────────────────────────
+
+"""
+    ClosedTaskGroupToWidgetPane(; stack_gap, inline_gap, muted_color)
+
+Draw a [`ClosedTaskGroup`](@ref) as its page: the title and the identifier of the
+group, that it closed, and the line that sums it up. A path that named the group
+names this page, and never another group.
+"""
+@projection UntrackedCell struct ClosedTaskGroupToWidgetPane <: Projection
+    stack_gap::Int = get_task_style(nothing, :stack_gap)
+    inline_gap::Int = get_task_style(nothing, :inline_gap)
+    muted_color::StyleColor = get_task_style(nothing, :muted_color)
+end
+
+function print_document(p::ClosedTaskGroupToWidgetPane, recursion, group::ClosedTaskGroup, ctx)
+    heading = HorizontalLayout(Any[WidgetLabel(getfield(group, :title)[]),
+                                   WidgetBadge(getfield(group, :identifier)[]; variant = :outline)];
+                               vertical_align = :center, gap = p.inline_gap)
+    lines = VerticalLayout(Any[_make_label("This group is closed. Its tasks and their output are gone.", p.muted_color),
+                               WidgetLabel(getfield(group, :summary)[])]; gap = p.stack_gap, child_width = Fill)
+    root = VerticalLayout(Any[WidgetCard(; title = heading, content = lines)]; horizontal_align = :left,
+                          gap = p.stack_gap)
+    ChildrenIoMap(p, group, root, Cell(Any[]))
+end
+
 # ── Natural-projection registration ─────────────────────────────────────────
 
 """
     build_task_graphics_entry(; measure = nothing, appearance = Appearance())
         -> Vector{Pair{Type,Any}}
 
-The rows of the natural renderer that draw a group of tasks as its pane and the
-groups of the session as the Tasks pane. Each pane draws with the scaled
+The rows of the natural renderer that draw a group of tasks as its pane, the
+groups of the session as the Tasks pane, a closed group, and a task, an execution
+and a stream as their pages. Each pane draws with the scaled
 `TaskTheme` of `appearance`, and its widgets draw with a widget renderer of
 their own, which also takes a click back to the button under it. `measure` is
 what the registry gives every row; a row made by hand measures with the font
@@ -731,14 +1128,40 @@ function build_task_graphics_entry(; measure = nothing, appearance::Appearance =
               info_color = get_style(:info_color), warning_color = get_style(:warning_color),
               error_color = get_style(:error_color), running_color = get_style(:running_color),
               muted_color = get_style(:muted_color))
-    widgets() = RecursiveProjection(WidgetToGraphics(; measure = measured,
-        theme = get_scaled_theme!(appearance, WidgetTheme),
-        graphics_theme = get_scaled_theme!(appearance, GraphicsTheme)))
+    # A document that a kind gives for a result draws as it draws in any
+    # document: by the method of `make_graphics_projection` for its type.
+    documents = Pair{Type,Any}[type => Base.invokelatest(make_graphics_projection, type;
+                                                         measure = measured, appearance = appearance)
+                               for type in collect_graphics_projection_types()]
+    widget_theme = get_scaled_theme!(appearance, WidgetTheme)
+    make_widget_rows() = WidgetToGraphics(; measure = measured, theme = widget_theme,
+                                          graphics_theme = get_scaled_theme!(appearance, GraphicsTheme)).dispatch
+    widgets() = RecursiveProjection(TypeDispatchingProjection(vcat(make_widget_rows(), documents)))
+    # The page of a stream draws the fields of its bar and its lines too. A row of lines is a line of the font of the widgets with the padding of
+    # a cell and a rule, as the table draws it.
+    table = last(only(row for row in make_widget_rows() if first(row) === WidgetTable))
+    row_step = UntrackedCell{Int}(@computation ceil(Int, compute_line_box(measured, "M", widget_theme.font).height) +
+                                               2 * Int(table.cell_padding.top[]) + 1)
+    lines = TaskStreamLinesToWidget(; row_step, inline_gap = styles.inline_gap, warning_color = styles.warning_color,
+                                    error_color = styles.error_color, info_color = styles.info_color,
+                                    running_color = styles.running_color, muted_color = styles.muted_color)
+    stream_widgets() = RecursiveProjection(TypeDispatchingProjection(vcat(
+        make_object_field_widget_dispatch(make_widget_rows()), documents, Pair{Type,Any}[
+            TaskStreamLines => ChainingProjection(lines, VerticalLayoutToGraphicsCanvas())])))
     Pair{Type,Any}[
         TaskGroupDocument => ChainingProjection(TaskGroupDocumentToWidgetPane(; styles...), widgets()),
-        TaskGroupList => ChainingProjection(TaskGroupListToWidgetPane(; styles...), widgets())]
+        TaskGroupList => ChainingProjection(TaskGroupListToWidgetPane(; styles...), widgets()),
+        ClosedTaskGroup => ChainingProjection(ClosedTaskGroupToWidgetPane(; stack_gap = styles.stack_gap,
+                                                  inline_gap = styles.inline_gap, muted_color = styles.muted_color),
+                                              widgets()),
+        TaskDocument => ChainingProjection(TaskDocumentToWidgetPane(; styles...), widgets()),
+        ACTaskExecution => ChainingProjection(TaskExecutionToWidgetPane(; styles...), widgets()),
+        TaskStream => ChainingProjection(TaskStreamToWidget(; gap = styles.stack_gap), stream_widgets())]
 end
 
 function __init__()
     register_natural_graphics!(:task, build_task_graphics_entry)
+    # The tasks of the groups of the session, as a source of a roster.
+    register_roster_source!(:tasks, link -> _SessionTasks();
+                            description = "the tasks of the groups of the session, each with its group as within")
 end

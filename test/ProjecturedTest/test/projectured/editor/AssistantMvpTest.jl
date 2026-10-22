@@ -14,7 +14,7 @@
 # Typing goes through the standard `PrimitiveString → Syntax → Text →
 # Graphics` chain (PrimitiveStringToSyntaxLeaf catches `KeyPress`).
 # Enter goes through `AssistantToWidgetSplitPane.read_intent`, which
-# returns `SubmitProseOperation` for `KeyDown :return`.
+# returns `SubmitProseOperation` for `KeyPress('\n')`.
 # The test deliberately does not wire the full assistant → graphics
 # chain — that path is exercised by the standalone assistant example
 # (see [`make_assistant_only_example`](../example/Examples.jl)).
@@ -24,10 +24,11 @@
 # composite's `elements` *without* re-running `print_document`.
 # ═══════════════════════════════════════════════════════════════════════════
 
-using ProjecturedKernel.ToolModule: ToolSet, register_default_tools!
+using ProjecturedKernel.ToolModule: ToolSet, register_default_tools!, is_background_work_done
 using ProjecturedPlatform.AssistantModule: _text_to_string, _run_agent_loop!,
                                             _eval_code, _eval_result, _doc_source,
-                                            _eval_form_doc, AssistantToWidgetCard
+                                            _eval_form_doc, AssistantToWidgetCard,
+                                            _TURN_WORKS, _TURN_WORKS_LOCK
 import ProjecturedKernel.LlmModule: stream_turn,
     LlmEvent, LlmTextStart, LlmTextDelta, LlmTextStop,
     LlmToolUse, LlmToolUseStart, LlmToolInputDelta, LlmToolUseStop,
@@ -69,14 +70,22 @@ function make_assistant_mvp_setup(; reply::AbstractString = "Yes, sir!")
     a
 end
 
-# After SubmitProseOperation launches `_run_agent_loop!` on an @async task,
-# spin until status returns to `:idle` (or until the deadline). Tests must
-# observe the post-stream state.
-function _mvp_wait_idle!(a::Assistant; timeout_seconds::Real = 2.0)
+# Wait while a turn of `a` streams, and answer the status after it. A submit
+# runs the turn as background work, and the end of that work puts the status
+# back; a message that waited starts the next turn there. So the wait follows
+# the work of each turn, however long its first run compiles. The bound is far
+# above the time of any turn of these tests: it only ends a turn that never ends,
+# so that the test fails and does not hang.
+function _mvp_wait_idle!(a::Assistant; timeout_seconds::Real = 120)
     deadline = time() + timeout_seconds
     while a.status === :streaming && time() < deadline
-        yield()
-        sleep(0.005)
+        control = a.turn_control
+        work = control === nothing ? nothing : lock(() -> get(_TURN_WORKS, control, nothing), _TURN_WORKS_LOCK)
+        if work === nothing || is_background_work_done(work)
+            sleep(0.005)
+        else
+            timedwait(() -> is_background_work_done(work), max(deadline - time(), 0.0); pollint = 0.01)
+        end
     end
     a.status
 end
@@ -100,7 +109,7 @@ function _mvp_enter!(a::Assistant)
     chain = make_assistant_projection_example()
     set_selection!(a, @reference(a, draft.^(make_draft_caret_reference(a.draft))))
     iomap = print_document(chain, a)
-    op = read_intent(chain, iomap, KeyDown(:return, ModifierKeys(); time = 0.0))
+    op = read_intent(chain, iomap, KeyPress('\n'; time = 0.0))
     op === nothing && return nothing
     evaluate_operation((document = a, tools = register_default_tools!(ToolSet())), op)
     op
@@ -233,8 +242,9 @@ end
 
 # ── Return while a turn streams ────────────────────────────────────────
 #
-# A turn streams on a task of its own. Return in that time submits nothing: the
-# draft keeps its text, and no second turn starts on the same conversation.
+# A turn streams on a task of its own. Return in that time sends the message: it
+# shows at once, and a turn that has not begun its answer reads it with the
+# message before it.
 
 # An editor with no loop, on the assistant, for an operation to be evaluated in.
 _mvp_editor(a::Assistant) =
@@ -242,25 +252,20 @@ _mvp_editor(a::Assistant) =
            devices = Device[], tools = register_default_tools!(ToolSet()))
 
 function _mvp_test_submit_while_streaming()
-    @testset "Return while a turn streams does nothing" begin
+    @testset "Return while a turn streams sends the message" begin
         a = make_assistant_mvp_setup()
         editor = _mvp_editor(a)
         _mvp_type!(a, "Hello")
         evaluate_operation(editor, SubmitDraftTurnOperation(a))
         @test a.status === :streaming
-        # The task of the turn has not run yet, so the turn still streams.
+        # The task of the turn has not run yet: the message goes in before the
+        # answer, and the turn reads both messages.
         _mvp_type!(a, "What?")
         evaluate_operation(editor, SubmitDraftTurnOperation(a))
-        @test length(a.conversation.turns) == 1
-        @test _mvp_draft_text(a) == "What?"
+        @test _mvp_draft_text(a) == ""
         @test _mvp_wait_idle!(a) === :idle
-        @test [t.role for t in a.conversation.turns] == [:user, :assistant]
-        @test _mvp_draft_text(a) == "What?"
-        # Once the turn ended, Return submits the draft.
-        evaluate_operation(editor, SubmitDraftTurnOperation(a))
-        @test _mvp_wait_idle!(a) === :idle
-        @test [t.role for t in a.conversation.turns] == [:user, :assistant, :user, :assistant]
-        @test _text_to_string(a.conversation.turns[3].parts[1].content) == "What?"
+        @test [t.role for t in a.conversation.turns] == [:user, :user, :assistant]
+        @test _text_to_string(a.conversation.turns[2].parts[1].content) == "What?"
     end
 end
 
@@ -320,10 +325,36 @@ function _mvp_test_stop_turn()
     end
 end
 
-# Alt+Return and the prose submit have the same guard as Return: a user turn in
-# the middle of a streamed turn would come between a tool call and its result.
+# A turn runs as background work, so its stop stops the background work of the
+# tool call that it waits for: the code ends at its `sleep`, and the turn ends
+# long before the sleep would, with the result of the call. The first print of a
+# stack trace in a process compiles for some seconds, so the bound of the time is
+# far above the time of a stop and far below the time of the sleep.
+function _mvp_test_stop_turn_stops_background_call()
+    @testset "a stop of a turn stops the background work of its tool call" begin
+        code = Dict{String,Any}("code" => "sleep(60)", "background" => true)
+        a = Assistant(; llm = ScriptedLlm([_tool_use_script("tu_1", "execute_julia_code", code),
+                                           _final_text_script("Done.")]))
+        editor = _mvp_editor(a)
+        a.input.value = "Go"
+        started = time()
+        evaluate_operation(editor, SubmitProseOperation(a))
+        sleep(1.0)                                   # the turn waits for the work of its call
+        evaluate_operation(editor, CancelAssistantTurnOperation(a))
+        @test _mvp_wait_idle!(a) === :idle
+        @test time() - started < 40
+        last_turn = collect(a.conversation.turns)[end]
+        @test last_turn.stop_reason === :cancelled
+        form = only(part.content for part in collect(last_turn.parts) if part.content isa EvaluatorForm)
+        @test occursin("InterruptException", form.output)
+    end
+end
+
+# Alt+Return keeps its guard while a turn streams: its form in the middle of a
+# streamed turn would come between a tool call and its result. A prose submit
+# sends the message, as Return does.
 function _mvp_test_evaluate_while_streaming()
-    @testset "Alt+Return and a prose submit while a turn streams do nothing" begin
+    @testset "Alt+Return while a turn streams does nothing, and a prose submit sends" begin
         a = make_assistant_mvp_setup()
         editor = _mvp_editor(a)
         _mvp_type!(a, "Hello")
@@ -336,14 +367,13 @@ function _mvp_test_evaluate_while_streaming()
         @test _mvp_draft_text(a) == "What?"
         a.input.value = "again"
         evaluate_operation(editor, SubmitProseOperation(a))
-        @test length(a.conversation.turns) == 1
-        @test a.input.value == "again"
+        @test a.input.value == ""
         @test _mvp_wait_idle!(a) === :idle
-        @test [t.role for t in a.conversation.turns] == [:user, :assistant]
+        @test [t.role for t in a.conversation.turns] == [:user, :user, :assistant]
         @test _mvp_draft_text(a) == "What?"
         # Once the turn ended, Alt+Return puts the draft into the conversation.
         evaluate_operation(editor, EvaluateDraftTurnOperation(a))
-        @test [t.role for t in a.conversation.turns] == [:user, :assistant, :user]
+        @test [t.role for t in a.conversation.turns] == [:user, :user, :assistant, :user]
     end
 end
 
@@ -351,9 +381,10 @@ end
 #
 # A turn streams on a task of its own and a frame reads what it writes, so the
 # turn writes the assistant through the inbox: its parts, its status, and each
-# tool call, which runs on the editor's task. The test plays a running loop: it
-# marks its own task as the loop's and drains the inbox by hand, and between two
-# drains nothing that the turn wrote may change.
+# tool call, which runs in a code unit of the editor: on a task of its own when
+# the process has a thread for it, or else on the task of the loop. The test plays
+# a running loop: it marks its own task as the loop's and drains the inbox by
+# hand, and between two drains nothing that the turn wrote may change.
 
 function _mvp_test_turn_writes_on_editor_task()
     @testset "a turn writes the assistant on the editor task" begin
@@ -387,7 +418,10 @@ function _mvp_test_turn_writes_on_editor_task()
         @test !changed_between_drains
         @test drains > 0
         @test a.status === :idle
-        @test ran_on == [current_task()]
+        has_unit_thread = any(thread -> thread != Threads.threadid(),
+                              Threads.threadpooltids(:default))
+        @test length(ran_on) == 1
+        @test (only(ran_on) === current_task()) == !has_unit_thread
         reply = a.conversation.turns[end]
         @test [t.role for t in a.conversation.turns] == [:user, :assistant]
         @test reply.stop_reason === :end_turn
@@ -458,16 +492,20 @@ plus the reactive-thunk probe. No SDL, no network.
 # The transcript of the assistant is a pane in the output of the view, and its bar
 # is a part that the view drew. A press on the thumb starts a drag that names the
 # pane through the view, and the drag comes back along that path and scrolls the
-# transcript.
+# transcript. The application draws the assistant inside a fault barrier, so the
+# view itself maps the part that it drew forward, and the case reads both chains.
 function _mvp_test_transcript_bar_drag()
-    @testset "a drag of the thumb of the transcript scrolls it" begin
+    application = only(row.second for row in make_application_content_projections(; measure = _mvp_measure)
+                       if row.first === Assistant)
+    chains = (("the example", make_assistant_projection_example(; measure = _mvp_measure)),
+              ("the application", application))
+    @testset "a drag of the thumb of the transcript scrolls it, in $name" for (name, chain) in chains
         turns = [ConversationTurn(:user, [ConversationPart("line $i")]) for i in 1:40]
         a = Assistant(; conversation = ConversationConversation(turns), llm = FakeLlm("ok"))
-        chain = make_assistant_projection_example(; measure = _mvp_measure)
         offer = ProjectionModule.with_exact_size(ProjectionModule.PrinterContext();
                                                  width = Cell(Int32(600)), height = Cell(Int32(400)))
         iomap = print_document(chain, nothing, a, offer)
-        pane = iomap.step_iomaps[1][].output.elements[1].child
+        pane = get_content_iomap(iomap.step_iomaps[1][]).output.elements[1].child
         @test pane isa WidgetModule.WidgetScrollPane
         plain = ModifierKeys()
         read(gesture, route = nothing) =
@@ -494,10 +532,15 @@ function _mvp_test_transcript_bar_drag()
         end
         apply!(press)
         @test pane.follow_end
-        # Up from the end: the transcript leaves its end and scrolls up.
-        apply!(read(DragMove(x, y - 60, plain; time = 0.0), start.path))
+        # Up from the end: the transcript leaves its end and scrolls up, and the
+        # view goes on up with the thumb.
+        apply!(read(DragMove(x, y - 20, plain; time = 0.0), start.path))
         @test !pane.follow_end
-        apply!(read(DragEnd(x, y - 60, plain; time = 0.0), start.path))
+        offset = Int(pane.scroll_position.y[])
+        @test offset > 0
+        apply!(read(DragMove(x, y - 40, plain; time = 0.0), start.path))
+        @test 0 <= Int(pane.scroll_position.y[]) < offset
+        apply!(read(DragEnd(x, y - 40, plain; time = 0.0), start.path))
     end
 end
 
@@ -518,8 +561,13 @@ function test_assistant_mvp()
         _mvp_test_submit_while_streaming()
         _mvp_test_evaluate_while_streaming()
         _mvp_test_stop_turn()
+        _mvp_test_stop_turn_stops_background_call()
         _mvp_test_turn_writes_on_editor_task()
         _mvp_test_markdown_tool_result()
+        _mvp_test_agent_markdown_tool_result()
+        _mvp_test_agent_resource_result()
+        _mvp_test_ask_person()
+        _mvp_test_message_while_model_works()
         _mvp_test_markdown_result_table()
     end
 end
@@ -529,6 +577,156 @@ end
 # A tool that declares `"text/markdown"` has its answer drawn as a Markdown
 # page, and the model gets the text the tool wrote. An error stays text, and so
 # does the answer of a tool that declares plain text.
+
+# In a turn of an agent, a tool of this editor, which the agent reaches through
+# the MCP server of the editor, gets the page that a turn of a model makes of its
+# answer. A tool of the agent itself, and an error, keep their text.
+function _mvp_test_agent_markdown_tool_result()
+    @testset "a tool of the editor that answers Markdown gets a Markdown page in a turn of an agent" begin
+        written = "# Found\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+        connection = ScriptedAgentConnection([Any[
+            AgentToolCallUpdate("t1"; name = "mcp__projectured__read_resource", status = :pending,
+                                input = Dict{String,Any}("uri" => "doc://found")),
+            AgentToolCallUpdate("t1"; status = :completed, output = written),
+            AgentToolCallUpdate("t2"; name = "Read", status = :pending,
+                                input = Dict{String,Any}("file_path" => "/found.md")),
+            AgentToolCallUpdate("t2"; status = :completed, output = written),
+            AgentToolCallUpdate("t3"; name = "mcp__projectured__read_resource", status = :pending,
+                                input = Dict{String,Any}("uri" => "doc://lost")),
+            AgentToolCallUpdate("t3"; status = :failed, output = "# No resource doc://lost"),
+            LlmTextStart(), LlmTextDelta("Done."), LlmTextStop()]])
+        a = Assistant(; backend = :acp, agent_session = ExternalAgentSession(connection))
+        editor = _mvp_editor(a)
+        a.input.value = "Look it up"
+        evaluate_operation(editor, SubmitProseOperation(a))
+        @test _mvp_wait_idle!(a) === :idle
+        forms = [part.content for turn in a.conversation.turns for part in turn.parts
+                 if part.content isa EvaluatorForm]
+        @test [form.tool_name for form in forms] == ["read_resource", "Read", "read_resource"]
+        resource, read, failed = forms
+        @test resource.result isa MarkdownRoot
+        @test any(block -> block isa MarkdownTable, resource.result.elements)
+        @test resource.output == written
+        @test read.result isa TextBlock
+        @test failed.is_error && failed.result isa TextBlock
+        stop_external_agent!(a)
+    end
+end
+
+# In a turn of an agent, a result that the agent gives with a media type or the uri
+# of a file, as the text of a file that a tool read, is a document of that format.
+# A model of this editor asks the person with its tool `ask_person`: a question
+# card in the turn while the loop waits off the editor task, and the answer is
+# the result of the tool, which the model reads in place of the card.
+function _mvp_test_ask_person()
+    requests(a) = [part.content for turn in collect(a.conversation.turns) for part in collect(turn.parts)
+                   if part.content isa ConversationQuestionRequest]
+    @testset "a model of this editor asks the person, and the answer is the result of its tool" begin
+        llm = ScriptedLlm([_tool_use_script("tu_1", "ask_person",
+                                            Dict{String,Any}("question" => "Which colour?", "options" => "Red\nBlue")),
+                           _final_text_script("Blue it is.")])
+        a = Assistant(; llm)
+        editor = _mvp_editor(a)
+        a.input.value = "Ask me"
+        evaluate_operation(editor, SubmitProseOperation(a))
+        @test timedwait(() -> length(requests(a)) == 1, 10.0; pollint = 0.01) === :ok
+        request = only(requests(a))
+        @test request.message == "Which colour?"
+        @test [field.kind for field in request.fields] == [:choice, :text]
+        @test [option.value for option in request.fields[1].options] == ["Red", "Blue"]
+        # The turn waits for the person.
+        @test a.status === :streaming
+        collect(request.form.values)[1].value = "Blue"
+        answer_question_request!(request, find_question_values(request))
+        @test _mvp_wait_idle!(a) === :idle
+        @test request.answer == "Answered: Choice: Blue"
+        results = [content for message in build_messages(a.conversation) for content in message.content
+                   if content isa LlmToolResult]
+        @test only(results).content == "The person chose: Blue"
+        # The card is for the person: the model reads no text of it.
+        @test !any(content -> content isa LlmText && occursin("Which colour?", content.text),
+                   [content for message in build_messages(a.conversation) if message.role === :assistant
+                    for content in message.content])
+    end
+    @testset "a stop declines the question that waits" begin
+        llm = ScriptedLlm([_tool_use_script("tu_1", "ask_person", Dict{String,Any}("question" => "Your name?")),
+                           _final_text_script("Thanks.")])
+        a = Assistant(; llm)
+        editor = _mvp_editor(a)
+        a.input.value = "Ask me"
+        evaluate_operation(editor, SubmitProseOperation(a))
+        @test timedwait(() -> length(requests(a)) == 1, 10.0; pollint = 0.01) === :ok
+        request = only(requests(a))
+        @test [field.kind for field in request.fields] == [:text]
+        evaluate_operation(editor, CancelAssistantTurnOperation(a))
+        @test _mvp_wait_idle!(a) === :idle
+        @test request.answer == "Declined"
+    end
+end
+
+# A message that a person sends while a model of this editor works waits below the
+# answer that streams, the turn that runs does not read it, and a turn of its own
+# answers it when the running turn ends.
+function _mvp_test_message_while_model_works()
+    @testset "a message while a model of this editor works waits, and a turn of its own follows" begin
+        llm = ScriptedLlm([_final_text_script("First answer."), _final_text_script("Second answer.")]; delay = 0.3)
+        a = Assistant(; llm)
+        editor = _mvp_editor(a)
+        a.input.value = "First"
+        evaluate_operation(editor, SubmitProseOperation(a))
+        @test a.status === :streaming
+        # The answer streams, so a message now waits below it.
+        @test timedwait(() -> any(turn -> turn.role === :assistant && !isempty(turn.parts),
+                                  collect(a.conversation.turns)), 10.0; pollint = 0.01) === :ok
+        a.input.value = "Second"
+        evaluate_operation(editor, SubmitProseOperation(a))
+        @test last(collect(a.conversation.turns)).role === :user
+        @test timedwait(() -> a.status === :idle && count(turn -> turn.role === :assistant,
+                                                          collect(a.conversation.turns)) == 2,
+                        15.0; pollint = 0.01) === :ok
+        turns = collect(a.conversation.turns)
+        @test [turn.role for turn in turns] == [:user, :assistant, :user, :assistant]
+        @test occursin("First answer.", join(_text_to_string(part.content) for part in turns[2].parts))
+        @test occursin("Second answer.", join(_text_to_string(part.content) for part in turns[4].parts))
+        # The first turn read the conversation up to itself, not the message below it.
+        messages = build_messages(a.conversation; until = turns[2])
+        @test !any(message -> any(content -> content isa LlmText && occursin("Second", content.text),
+                                  message.content), messages)
+    end
+end
+
+function _mvp_test_agent_resource_result()
+    @testset "a file that an agent read is a document of its format" begin
+        markdown = "# Read\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+        connection = ScriptedAgentConnection([Any[
+            AgentToolCallUpdate("t1"; name = "Read", status = :pending,
+                                input = Dict{String,Any}("file_path" => "/r.md")),
+            AgentToolCallUpdate("t1"; status = :completed, output = markdown,
+                                output_mime_type = "text/markdown", output_uri = "file:///r.md"),
+            AgentToolCallUpdate("t2"; name = "Read", status = :pending,
+                                input = Dict{String,Any}("file_path" => "/r.jl")),
+            AgentToolCallUpdate("t2"; status = :completed, output = "f(x) = x + 1",
+                                output_uri = "file:///r.jl"),
+            AgentToolCallUpdate("t3"; name = "Read", status = :pending,
+                                input = Dict{String,Any}("file_path" => "/r.txt")),
+            AgentToolCallUpdate("t3"; status = :completed, output = "# not a page",
+                                output_mime_type = "text/plain", output_uri = "file:///r.txt"),
+            LlmTextStart(), LlmTextDelta("Done."), LlmTextStop()]])
+        a = Assistant(; backend = :acp, agent_session = ExternalAgentSession(connection))
+        editor = _mvp_editor(a)
+        a.input.value = "Read them"
+        evaluate_operation(editor, SubmitProseOperation(a))
+        @test _mvp_wait_idle!(a) === :idle
+        page, code, plain = [part.content for turn in a.conversation.turns for part in turn.parts
+                             if part.content isa EvaluatorForm]
+        @test page.result isa MarkdownRoot
+        @test any(block -> block isa MarkdownTable, page.result.elements)
+        @test page.output == markdown
+        @test code.result isa JuliaDocument
+        @test plain.result isa TextBlock
+        stop_external_agent!(a)
+    end
+end
 
 function _mvp_test_markdown_tool_result()
     @testset "a tool that answers Markdown gets a Markdown page" begin
@@ -612,7 +810,7 @@ function _mvp_test_markdown_result_table()
         conversation = ConversationConversation([
             ConversationTurn(:user, [ConversationPart("look it up")]),
             ConversationTurn(:assistant, [ConversationPart(
-                EvaluatorForm(TextBlock(TextString("uri: resource://guide/x"));
+                EvaluatorForm(TextBlock(TextLine(TextString("uri: resource://guide/x")));
                               tool_name = "read_resource",
                               input = Dict{String,Any}("uri" => "resource://guide/x"),
                               result = parse_markdown(written), output = written,

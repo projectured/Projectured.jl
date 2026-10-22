@@ -1,12 +1,9 @@
 # The verbs of tasks over a group of plain shell commands: a group is listed,
 # found, described with its tasks and its facts, read, stopped, run again and
-# closed, and a model may call each verb. The editor is a document in a struct,
-# so each verb runs at once on the calling task. The probe tasks are those of
-# `TaskGroupTest.jl` and `TaskGroupToWidgetTest.jl`.
-
-mutable struct _TaskVerbsProbeEditor
-    document::Any
-end
+# closed, and a model may call each verb. The editor is headless and runs no
+# loop, so each verb runs at once on the calling task, and the group starts in an
+# evaluation of that editor, so it joins the list of its session. The probe tasks
+# are those of `TaskGroupTest.jl` and `TaskGroupToWidgetTest.jl`.
 
 function test_task_group_verbs()
     @testset "task group verbs" begin
@@ -14,10 +11,35 @@ function test_task_group_verbs()
                  for name in ("alpha", "fail")]
         group = wrap_task_group_document(TaskGroup(tasks; name = "verbs", jobs = 2);
                                          title = "the verbs")
-        editor = _TaskVerbsProbeEditor(PaneTree(PaneGroup(PaneTab[PaneTab("verbs", group)])))
-        start_task_group_document!(group)
+        editor = Editor(PaneTree(PaneGroup(PaneTab[PaneTab("verbs", group)])),
+                        NaturalToGraphics(; measure = FixedMeasure(8, 12, 4, 0)); backend = HeadlessBackend(),
+                        devices = Device[])
+        run_with_evaluation_editor(() -> start_task_group_document!(group), editor)
         @test wait_for_task_group!(editor, group) === group
         identifier = getfield(group, :identifier)[]
+
+        @testset "a stop of the code unit ends the wait for a group" begin
+            slow = wrap_task_group_document(
+                TaskGroup([_TaskViewProbeTask("slow", "sleep 30")]; name = "slow", jobs = 1))
+            start_task_group_document!(slow)
+            tools = ProjecturedKernel.ToolModule
+            unit = tools.CodeUnit(["wait for the group"])
+            waiter = Threads.@spawn tools.run_as_code_unit(unit) do
+                try
+                    wait_for_task_group!(editor, slow)
+                    :waited
+                catch exception
+                    exception isa InterruptException ? :stopped : rethrow()
+                end
+            end
+            sleep(0.3)
+            started = time()
+            tools.stop_code_unit!(unit)
+            @test fetch(waiter) === :stopped
+            @test time() - started < 2
+            stop_task_group!(get_task_group(slow))
+            wait_task_group(get_task_group(slow))
+        end
 
         @testset "a group is listed and found" begin
             line = only(l for l in split(string(list_task_groups(; editor)), "\n")
@@ -51,7 +73,24 @@ function test_task_group_verbs()
             @test occursin(r"earlier 1: started \d\d:\d\d:\d\d — ERROR", detail)
             @test occursin("Closed the group " * identifier, string(close_task_group!(group; editor)))
             @test isempty(get_pane_groups(editor.document)[1].tabs)
-            @test !any(g -> g === group, get_session_task_group_list().groups)
+            # The closed group keeps its place in the list, as a closed group.
+            groups = collect(get_session_task_group_list(; editor).groups)
+            @test !any(g -> g === group, groups)
+            @test any(g -> g isa ClosedTaskGroup && getfield(g, :identifier)[] == identifier, groups)
+            @test find_task_group(identifier; editor) === nothing
+        end
+
+        @testset "another work item is listed, found, described, stopped and closed" begin
+            item = _TaskViewProbeItem("S1", "a probe item")
+            add_task_group!(get_session_task_group_list(; editor), item)
+            lines = split(string(list_task_groups(; editor)), "\n")
+            @test first(lines) == "S1 · a probe item · probe · running · found 3"
+            @test find_task_group("S1"; editor) === item && find_task_group("a probe item"; editor) === item
+            @test string(describe_task_group(item; editor)) == "running\nfound 3"
+            @test string(describe_task_group(item; limit = 1, editor)) == "running"
+            @test string(stop_tasks!(item; editor)) == "Stopping the probe S1." && item.stopped
+            @test string(close_task_group!(item; editor)) == "Closed the probe S1."
+            @test find_task_group("S1"; editor) === nothing
         end
 
         @testset "a model may call every verb" begin

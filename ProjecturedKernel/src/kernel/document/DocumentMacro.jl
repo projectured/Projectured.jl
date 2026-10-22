@@ -75,13 +75,79 @@ _declared_type_name(::Any) = nothing
 # collection registered a reactive counterpart for it — see
 # `get_cell_layout_field_type`. The NATIVE layout never asks, so it keeps the plain
 # type the programmer wrote.
+#
+# A type that the cell layout holds goes through `_get_cell_layout_value_type` when
+# the schema is defined, so a native layout of another schema becomes its family. A
+# list type keeps its head, because `_is_list_field_type` reads the expression.
+#
+# Only a reactive field holds a list. A field that names a kind that is not reactive,
+# such as a buffer declared `MutableCell{Vector{T}}`, holds its value as one value.
 function _cell_value_types(plan)
-    map(get_cell_struct_value_types(plan)) do vt
+    named_kinds = get_cell_struct_field_kinds(plan; default = missing)
+    map(zip(get_cell_struct_value_types(plan), named_kinds)) do (vt, kind)
+        kind === missing || kind === ReactiveCell || return _make_cell_layout_type_call(vt)
         name = _declared_type_name(vt)
         substitute = name === nothing ? nothing : get_cell_layout_field_type(Val(name))
-        substitute === nothing ? vt : substitute
+        if substitute === nothing
+            _is_list_field_type(vt) || return _make_cell_layout_type_call(vt)
+            substitute = vt isa Expr ? vt.args[1] : vt
+        end
+        # `Vector{X}` keeps its element type: the cell layout holds `CellVector{X}`.
+        vt isa Expr && vt.head === :curly ?
+            Expr(:curly, substitute, map(_make_cell_layout_type_call, vt.args[2:end])...) :
+            substitute
     end
 end
+
+_make_cell_layout_type_call(vt) = :($(_get_cell_layout_value_type)($vt))
+
+# The type that a cell layout holds where a field declares `T`. A native layout of a
+# schema stands for the family of the schema: the bare name of `@document [M, C]` is
+# the native layout, and a cell layout holds the cell layout of its child. A union
+# maps each member. A native layout with parameters, named bare, is a `UnionAll`. Any
+# other type, and a type parameter, stay as they are.
+@inline _get_cell_layout_value_type(T) = T
+@inline _get_cell_layout_value_type(T::Union) =
+    Union{_get_cell_layout_value_type(T.a), _get_cell_layout_value_type(T.b)}
+@inline function _get_cell_layout_value_type(T::Union{DataType, UnionAll})
+    T <: Document || return T
+    native = get_document_native_type(T)
+    native !== nothing && native === Base.typename(T).wrapper ? get_document_family(T) : T
+end
+
+# Whether a field whose cell layout holds `vt` is a list field: its type names a
+# collection that registered itself with `is_collection_field_type`.
+function _is_list_field_type(vt)
+    vt isa Type && return _is_list_type(vt)
+    # A substituted `Vector{X}` is `CellVector{X}` with the type object at its head.
+    vt isa Expr && vt.head === :curly && vt.args[1] isa Type && return _is_list_type(vt.args[1])
+    name = _declared_type_name(vt)
+    name !== nothing && is_collection_field_type(Val(name))
+end
+
+# Whether the declared type `T` names a registered collection, at run time.
+_is_list_type(T) = (T isa DataType || T isa UnionAll) && is_collection_field_type(Val(nameof(T)))
+
+# A plain vector that goes into a list field becomes the list of the field, so the
+# cell layout holds one form of a list (`CellVector{X}` for `Vector{X}`).
+_wrap_list_value(list_type, value) = value isa AbstractVector ? list_type(value) : value
+
+# The setter's form: the list type comes from the declared type of the field.
+function _wrap_list_write(document, name::Symbol, value)
+    value isa AbstractVector || return value
+    declared_type = find_declared_field_type(typeof(document), name)
+    declared_type === nothing && return value
+    _wrap_list_value_of(declared_type, value)
+end
+
+# The form of an operation, which knows the declared type of its slot.
+_wrap_list_value_of(declared_type, value) =
+    value isa AbstractVector && _is_list_type(declared_type) ? declared_type(value) : value
+
+# A kind constructor of a variant (`ICFoo`, `MCFoo`) holds the list in its own kind:
+# a plain vector becomes the list of the field, copied into cells of the kind `K`.
+_wrap_list_value_of_kind(K, list_type, value) =
+    value isa AbstractVector ? copy_document(K, list_type(value)) : value
 
 # Per-field cell type parameters: `C1, C2, …`.
 _cell_params(plan) = [Symbol("C", i) for i in 1:length(plan.field_names)]
@@ -119,7 +185,10 @@ end
 The auto-wrapping inner constructor — the **only** inner constructor. Raw values
 wrap in `ReactiveCell{Any}` (the untyped `Cell`), so the bare name keeps
 the untyped-cell semantics; cells of any kind pass through as-is, which is how the
-kind constructors and `copy_document` build every other kind.
+kind constructors and `copy_document` build every other kind. A raw value is
+stored as its [`get_document`](@ref), so a document never holds a referenced
+document; the call resolves when the constructor compiles for the types of its
+arguments.
 
 `new{…}` needs the cell types as parameters, and computing them via `typeof` is a
 runtime `apply_type` per construction (~2.5× build cost, measured on the JSON
@@ -139,7 +208,13 @@ function _emit_autowrap_ctor(plan, arg_names; default = ReactiveCell)
     kinds     = get_cell_struct_field_kinds(plan; default = default)
     vts       = get_cell_struct_value_types(plan)
     def_types = Any[build_cell_struct_field_type(kinds[i], vts[i]) for i in 1:n]
-    raw_wrap(i) = :($(def_types[i])($(arg_names[i])))
+    # A raw value is stored as its document, and a plain vector for a reactive list
+    # field becomes the list of the field.
+    list_types = _cell_value_types(plan)
+    stored(i) = :($(get_document)($(arg_names[i])))
+    raw_value(i) = kinds[i] === ReactiveCell && _is_list_field_type(list_types[i]) ?
+        :($(_wrap_list_value)($(list_types[i]), $(stored(i)))) : stored(i)
+    raw_wrap(i) = :($(def_types[i])($(raw_value(i))))
     rc_any   = fill(_REACTIVE_ANY, n)
     # A parameter binds from the argument that `find_cell_struct_parameter_slots`
     # gives, and the inferring outer constructor below is emitted. A schema with a
@@ -179,24 +254,35 @@ function _emit_autowrap_ctor(plan, arg_names; default = ReactiveCell)
     head = isempty(names) ? :($(plan.name)($(params...))) :
            Expr(:where, :($(Expr(:curly, plan.name, names...))($(params...))),
                 plan.parameters...)
+    # Each path checks each field of the new document against its declared type,
+    # one field at a time with its type known, so a field whose cell type already
+    # has the declared type costs nothing.
+    document = gensym(:document)
+    field_checks = [:($(_check_constructed_field)($document, $(QuoteNode(plan.field_names[i])),
+                                                   getfield($document, $i), $(list_types[i])))
+                    for i in 1:n]
+    checked(construct) = :(let $document = $construct; $(field_checks...); $document end)
     body = quote
         $fill_target
         if $all_rc
-            return $(Expr(:call, Expr(:curly, :new, up_rc..., rc_any...), arg_names...))
+            return $(checked(Expr(:call, Expr(:curly, :new, up_rc..., rc_any...), arg_names...)))
         elseif !($any_cell)
-            return $(Expr(:call, Expr(:curly, :new, up_raw..., def_types...),
-                          [raw_wrap(i) for i in 1:n]...))
+            return $(checked(Expr(:call, Expr(:curly, :new, up_raw..., def_types...),
+                                  [raw_wrap(i) for i in 1:n]...)))
         end
         $(wrap_stmts...)
-        $(Expr(:call, Expr(:curly, :new, up_mixed..., [:(typeof($w)) for w in wrapped]...), wrapped...))
+        $(checked(Expr(:call, Expr(:curly, :new, up_mixed..., [:(typeof($w)) for w in wrapped]...),
+                       wrapped...)))
     end
     # `Expr(:function, …)` and not `:(function $head … end)`: the parser will not
     # take an interpolated signature.
     inner = Expr(:function, head, body)
     # `Foo(raw…)` for a schema whose every parameter is some field's declared type:
     # bind each from its argument, then hand over to the explicit form.
+    bounds = inferrable ? get_cell_struct_parameter_bounds(plan) : Any[]
     bound = inferrable ?
-        [:($(get_cell_struct_argument_type)($(arg_names[i]))) for i in slots] : Any[]
+        [:($(get_cell_struct_argument_type)($(arg_names[i]), $(bounds[k])))
+         for (k, i) in enumerate(slots)] : Any[]
     outer = inferrable ?
         :($(plan.name)($(params...)) =
               $(Expr(:curly, plan.name, bound...))($(arg_names...))) :
@@ -216,14 +302,30 @@ reference while it is live and `nothing` once it is dormant. The read of every
 other field answers what the cell holds and makes no call for the selection.
 That call dispatches at run time, because a field of the reactive kind holds
 `Any`, and the test of the name is one comparison of two symbols.
+
+A write stores the [`get_document`](@ref) of its value, as the constructor does,
+so a document never holds a referenced document.
 """
 _emit_accessors(plan) = (
     :(Base.getproperty(obj::$(plan.name), name::Symbol) =
         name === :selection ? $(unwrap_selection)(getfield(obj, name)[]) :
                               getfield(obj, name)[]),
     :(Base.setproperty!(obj::$(plan.name), name::Symbol, val) =
-        (getfield(obj, name)[] = val)),
+        (getfield(obj, name)[] =
+             $(_check_declared_write)(obj, name,
+                 $(_wrap_list_write)(obj, name, $(_refuse_cell_value)(obj, name, $(get_document)(val)))))),
 )
+
+# The value of a write `document.f = v`. A field holds a value, and a cell is not
+# one, so a cell throws: two documents share a cell only through the constructor.
+# Where the compiler knows the type of `value`, the test costs nothing.
+function _refuse_cell_value(document, name::Symbol, value)
+    value isa AbstractCell && throw(ArgumentError(
+        "`$(name)` of a $(nameof(typeof(document))) holds a value, and a cell is not " *
+        "one. To share a cell, give it to the constructor; " *
+        "`getfield(document, :$(name))` is the cell of the field."))
+    value
+end
 
 """
     _emit_kind_aliases(plan, arg_names) -> Vector
@@ -278,13 +380,15 @@ function _emit_kind_aliases(plan, arg_names; schema::Symbol = plan.name,
     # parameter is not inferable from an untyped argument, so the head carries it
     # and the body names it, exactly as the bare constructor above does:
     # `ICFoo{A}(raw…)`. A schema with no parameter gets the plain `ICFoo(raw…)`.
+    kind_value(K, i, a) = _is_list_field_type(Tvals[i]) ?
+        :($(_wrap_list_value_of_kind)($K, $(Tvals[i]), $a)) : a
     kind_ctor(kname, K) = Expr(:(=),
         isempty(names) ? :($(kname)($(arg_names...))) :
             Expr(:where, :($(Expr(:curly, kname, names...))($(arg_names...))),
                  plan.parameters...),
         Expr(:call, isempty(names) ? plan.name :
                     Expr(:curly, plan.name, names...),
-            [:($a isa $(AbstractCell) ? $a : $(Expr(:curly, K, Tvals[i]))($a))
+            [:($a isa $(AbstractCell) ? $a : $(Expr(:curly, K, Tvals[i]))($(kind_value(K, i, a))))
              for (i, a) in enumerate(arg_names)]...))
     # A kind constructor also takes every field but the mouse target, which it
     # fills with `nothing`, as the bare name does: a caller that passes every
@@ -367,7 +471,10 @@ _has_keyword_ctors(plan) = plan.programmer_default_count > 0 || plan.declared_fi
 # which the type registers from its own package — so this macro names no concrete
 # collection type. See `_emit_collection_ctors`.
 function _collection_slot(plan)
-    hits = findall(t -> t isa Symbol && is_collection_field_type(Val(t)), plan.field_types)
+    hits = findall(plan.field_types) do t
+        name = _declared_type_name(t)
+        name !== nothing && is_collection_field_type(Val(name))
+    end
     length(hits) == 1 ? hits[1] : 0
 end
 

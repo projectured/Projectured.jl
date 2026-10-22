@@ -54,18 +54,25 @@ function test_kernel()
         test_fault_store()
         test_fault_cascade()
         test_fault_barrier()
+        test_fault_example()
         test_cell()
         test_cell_struct()
         test_cell_struct_plan()
         test_untracked_cell()
         test_cell_fault_scope()
+        test_cell_writer_check()
+        test_cell_example()
+        test_cell_struct_example()
+        test_clock_example()
         test_performance_counter()
+        test_performance_example()
         test_clock()
         test_printer_context_range()
         test_routed_change()
         test_introduced_path()
         test_projection_reference_step()
         test_projection_defaults()
+        test_provisional_output()
         test_projection_macro()
         test_document_contract()
         test_document_macro()
@@ -75,6 +82,7 @@ function test_kernel()
         test_referenced_document()
         test_type_reference()
         test_selection()
+        test_operations()
         test_rerooting()
         test_inversion()
         test_traversal()
@@ -89,12 +97,14 @@ function test_kernel()
         test_iomap_reconcile()
         test_iomap_defaults()
         test_headless_backend()
-        test_escape_quit()
+        test_window_quit()
         test_editor_inbox()
+        test_editor_held_frames()
         test_editor_frame_drain()
         test_editor_feeds()
         test_editor_wait()
         test_editor_timer()
+        test_editor_background_cell()
         test_build_editor()
         test_editor_fault_barriers()
         test_editor_document_edits()
@@ -104,12 +114,15 @@ function test_kernel()
         test_llm_defaults()
         test_agent_defaults()
         test_agent_loop()
+        test_agent_connection_event()
+        test_scripted_agent_connection()
         test_declared_api()
         test_search_query()
         test_meaning_search()
         test_relevance_search()
         test_search_answer()
         test_code_execution()
+        test_background_work()
         test_docstring_summary()
         test_construct_oracle()
     end
@@ -120,26 +133,28 @@ export test_kernel, test_kernel_layering
 export check_layering, check_slice_edges, get_package_source_root, test_layering_checkers
 # kernel unit suites
 export test_fault_defaults, test_fault_record, test_fault_store,
-       test_fault_cascade, test_fault_barrier,
-       test_cell, test_cell_struct, test_cell_struct_plan, test_untracked_cell, test_cell_fault_scope, test_performance_counter, test_clock, test_printer_context_range,
+       test_fault_cascade, test_fault_barrier, test_fault_example,
+       test_cell, test_cell_struct, test_cell_struct_plan, test_untracked_cell, test_cell_fault_scope, test_cell_example, test_cell_struct_example, test_clock_example, test_performance_counter, test_performance_example, test_clock, test_printer_context_range, test_provisional_output,
        test_routed_change, test_introduced_path,
        test_projection_reference_step, test_projection_defaults, test_projection_macro,
        test_document_contract, test_document_macro,
        test_reference_builder, test_reference_evaluation, test_reference_rules, test_referenced_document,
        test_type_reference, test_selection,
-       test_rerooting,
+       test_operations, test_rerooting,
        test_inversion, test_traversal, test_description, test_intent,
        test_event_module, test_gesture_module, test_gesture_recognition,
        test_gesture_pattern,
        test_device_module, test_gesture_binding,
        test_iomap_reconcile, test_iomap_defaults,
        test_headless_backend, test_llm_defaults, test_agent_defaults, test_agent_loop,
+       test_agent_connection_event, test_scripted_agent_connection,
        test_declared_api, test_search_query, test_meaning_search, test_relevance_search,
        test_search_answer,
-       test_code_execution,
+       test_code_execution, test_background_work,
        test_docstring_summary,
        test_editor_inbox, test_editor_frame_drain, test_editor_feeds,
-       test_editor_wait, test_editor_timer, test_build_editor, test_frame_measurements,
+       test_editor_wait, test_editor_timer, test_editor_background_cell, test_build_editor,
+       test_frame_measurements,
        test_editor_frame_performance,
        test_editor_fault_barriers, test_editor_document_edits, test_playback
 # generic drivers + walker internals reused by the higher test packages

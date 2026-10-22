@@ -14,7 +14,9 @@
 # The embedded code is **spliced verbatim**: a condition, an action, an iterable
 # is already a `JuliaDocument`, so it is placed into the realized tree as-is.
 # Nothing is stringified and re-parsed, and nothing is rewritten — what the
-# author sees in the notation is exactly what runs.
+# author sees in the notation is exactly what runs. A condition, an iterable and a
+# returned value go in without their comments, which stay in the process
+# (`get_julia_expression_without_comments`).
 #
 # ## The mapping
 #
@@ -37,8 +39,8 @@
 # it does. [`is_executable`](@ref) is the check to run *before* realizing;
 # `get_unrefined_nodes` says which boxes are still prose.
 #
-# Step descriptions do not survive into realized code — the julia domain has no
-# comment node — so the notation and the diagram are where the prose lives.
+# Step descriptions do not go into the realized code, so the notation and the
+# diagram are where the prose lives.
 # ── Small AST helpers ────────────────────────────────────────────────────────
 
 _id(name::AbstractString) = JuliaIdentifier(String(name))
@@ -120,7 +122,7 @@ _parameter_name(parameter) =
 function _assigned_names(document)
     names = String[]
     document === nothing && return names
-    for assignment in search_documents(document, x -> x isa JuliaAssignment)
+    for assignment in search_documents(document, x -> x isa JuliaAssignment; limit = nothing)
         target = assignment.target
         target isa JuliaIdentifier && push!(names, target.name)
     end
@@ -153,7 +155,7 @@ function realize_node(node, realization::_Realization = _realization(nothing, :n
         end
         return result
     elseif node isa ProcessDecision
-        condition = node.condition
+        condition = get_julia_expression_without_comments(node.condition)
         JuliaDocument[probe...,
                       JuliaIf(condition === nothing ? _unrefined("condition") : condition,
                               realize_body(node.then_branch, realization),
@@ -161,13 +163,13 @@ function realize_node(node, realization::_Realization = _realization(nothing, :n
                               JuliaBlock(JuliaDocument[]) :
                               realize_body(node.else_branch, realization))]
     elseif node isa ProcessWhile
-        condition = node.condition
+        condition = get_julia_expression_without_comments(node.condition)
         JuliaDocument[probe...,
                       JuliaWhile(condition === nothing ? _unrefined("condition") : condition,
                                  _loop_body(node.body, realization, probe))]
     elseif node isa ProcessForeach
-        variable = node.variable
-        iterable = node.iterable
+        variable = get_julia_expression_without_comments(node.variable)
+        iterable = get_julia_expression_without_comments(node.iterable)
         JuliaDocument[probe...,
                       JuliaFor(JuliaDocument[JuliaForIterator(
                                    variable === nothing ? _id("_") : variable,
@@ -179,7 +181,7 @@ function realize_node(node, realization::_Realization = _realization(nothing, :n
     elseif node isa ProcessContinue
         JuliaDocument[probe..., JuliaContinue()]
     elseif node isa ProcessReturn
-        value = node.value
+        value = get_julia_expression_without_comments(node.value)
         JuliaDocument[probe..., value === nothing ? JuliaReturn() : JuliaReturn(value)]
     elseif node isa ProcessSequence
         JuliaDocument[realize_body(node, realization)]
@@ -205,6 +207,8 @@ function _loop_body(body, realization::_Realization, leading, variable::Abstract
     block
 end
 
+# @optional: the realization follows the body, as the recursion's own context; a
+# first call needs none.
 """
     realize_body(body, realization; leading = JuliaDocument[]) -> JuliaBlock
 
@@ -213,8 +217,6 @@ pointless — thing to write, and realizes to an empty block rather than to an
 error. `leading` is prepended inside the block, which is how a loop's header
 probe reaches every iteration.
 """
-# @optional: the realization follows the body, as the recursion's own context; a
-# first call needs none.
 function realize_body(body, realization::_Realization = _realization(nothing, :none);
                       leading = JuliaDocument[])
     statements = JuliaDocument[leading...]

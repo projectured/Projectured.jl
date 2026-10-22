@@ -28,6 +28,8 @@ slice declares no operation of its own.
 """
 module PaneModule
 
+using ..AgentModule
+using ..ArrangementModule
 using ..CellModule
 using ..ClipboardModule
 using ..CollectionModule
@@ -48,6 +50,7 @@ using ..PrimitiveModule
 using ..ProjectionAlgebraModule
 using ..ProjectionModule
 using ..ReferenceModule
+using ..RosterModule
 using ..SelectionModule
 using ..ScreenModule
 using ..SerializationModule
@@ -59,19 +62,21 @@ using ..WidgetModule
 import ..ProjectionModule: print_document, read_intent, map_reference_forward, map_reference_backward
 import ..SelectionModule: has_dormant_selection
 import ..ClipboardModule: find_clipboard_document
-import ..DomainModule: accepts_pasted_replacement
+import ..DomainModule: accepts_pasted_replacement, acquire_document!, release_document!
 import ..DocumentModule: get_document_title, get_edited_field
-import ..SerializationModule: pred_arguments, make_pred_document
+import ..SerializationModule: pred_arguments, make_pred_document, is_pred_constructible
+import ..RosterModule: collect_roster_parts, collect_roster_items, get_roster_item_type
 import ..EditorModule: wrap_editor!, get_wrapper_layers, is_wrapper_default
 import ..ScreenModule: show_document!
 import ..OperationModule: find_drop_zone
+import ..GestureBindingModule: get_document_gesture_bindings_own
 
 export make_tabs_projection
 export PaneDocument, PaneTree, PaneSplit, PaneGroup, PaneTab, PaneTabTitle,
        make_pane_tab_title, get_pane_tab_title_string, default_new_pane_tab,
        get_opposite_pane_orientation, get_pane_split_axis,
        get_pane_weight, get_pane_weights, get_pane_normalized_weights,
-       get_pane_groups, get_pane_parent
+       get_pane_groups, get_pane_parent, collect_pane_tab_contents
 export get_pane_path, get_pane_collection_path,
        get_pane_focus, get_pane_focus_title, find_pane_content_selection, get_pane_focused_group,
        get_pane_focused_tab_index,
@@ -88,7 +93,7 @@ export show_layout, get_referenced_value, replace_referenced_value!,
        open_pane!, make_open_pane_operation, focus_pane!, make_focus_pane_operation,
        close_pane!, make_close_pane_operation, duplicate_pane!, make_duplicate_pane_operation,
        move_pane!, make_move_pane_operation, is_layout_line,
-       find_pane, find_pane_reference, find_pane_tree_reference, is_pane_search_step,
+       find_pane, find_focused_pane, find_pane_reference, find_pane_tree_reference, is_pane_search_step,
        post_pane_operation!,
        get_window_tree, describe_document,
        pane_group_to_avoid, make_pane_api, make_interface_api
@@ -98,6 +103,7 @@ export PaneTreeToWidget, PaneTreeToWidgetIoMap,
        PaneToWidget
 export save_user_interface, load_user_interface
 export get_pane_file_group
+export TabDocuments
 
 
 include("PaneDocument.jl")
@@ -106,9 +112,11 @@ include("PaneGeometry.jl")
 include("PaneProgram.jl")
 include("PaneGestures.jl")
 include("PaneToWidget.jl")
+include("PaneArrangement.jl")
 include("UserInterfaceFile.jl")
 include("PaneFile.jl")
 include("PaneTabsWrapper.jl")
+include("PaneRoster.jl")
 
 
 end # module

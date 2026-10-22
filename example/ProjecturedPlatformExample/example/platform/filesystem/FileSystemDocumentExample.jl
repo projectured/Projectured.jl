@@ -12,8 +12,10 @@ assertion counts with it. A fixture is fixed.
 """
 filesystem_example_root() = abspath(joinpath(@__DIR__, "fixture", "project"))
 
+# An example shows its folder with no editor, so it reads the whole fixture at
+# once, which no print does.
 make_filesystem_document_example(; root = filesystem_example_root()) =
-    make_filesystem_pathname(root)
+    read_filesystem_folder!(make_filesystem_pathname(root); depth = typemax(Int))
 
 # Atomic file-system leaf — a single file, for the catalog. A synthetic pathname
 # keeps the atom deterministic (independent of the on-disk tree); the leaf renders
@@ -24,3 +26,7 @@ make_filesystem_file_document_example() = FileSystemModule.FileSystemFile("/home
 # Minimal non-empty directory — one file child, for the catalog.
 make_filesystem_directory_document_example() =
     FileSystemModule.FileSystemDirectory("/home/user", [FileSystemModule.FileSystemFile("/home/user/notes.txt")])
+
+# A chooser over the directory above, with no name typed.
+make_filesystem_chooser_document_example() =
+    FileSystemChooser(make_filesystem_directory_document_example())

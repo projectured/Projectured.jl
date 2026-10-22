@@ -23,7 +23,7 @@ using ..KernelModule
 # The protocol has a `Tool` and a `Resource` of its own, so this module names
 # what it takes from the protocol, and `Tool` and `Resource` are the kernel's.
 import ModelContextProtocol
-using ModelContextProtocol: HttpTransport, MCPResource, MCPTool, Server, ServerConfig,
+using ModelContextProtocol: HttpTransport, ImageContent, MCPResource, MCPTool, Server, ServerConfig,
                             TextContent, TextResourceContents, ToolParameter, mcp_server,
                             register!, start!, stop!
 
@@ -32,7 +32,7 @@ using ..McpLogModule
 
 # Imported to extend: this module adds a method to each of these.
 import ..AgentModule: make_agent_server, start_agent_server!, stop_agent_server!,
-                      get_agent_server_access
+                      stop_agent_server_work!, get_agent_server_access
 import HTTP
 using Random: RandomDevice
 using Sockets: getaddrinfo, listenany

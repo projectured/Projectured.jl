@@ -37,6 +37,81 @@ function test_printers()
     end
 end
 
+# ── a text run holds no break, and a text block holds only lines ─────────────
+
+const _RUN_WALK_MAX_NODES = 200_000
+const _RUN_WALK_MAX_DEPTH = 300
+
+# A value that holds no text, and so ends the walk.
+const _RunWalkScalar = Union{Number, Symbol, AbstractString, Nothing, Function, Module, DataType, Char}
+
+# Each text document that `value` reaches — the documents, the output of each stage
+# and the IO maps between them — given to `visit`. The walk stops at a node it saw
+# and at a cap of nodes and of depth. A vector of scalars, such as a range, holds no
+# text, and its length can be any. A run is a leaf of the walk.
+function _visit_text_documents!(visit, value, visited::Set{UInt64}, depth::Int)
+    (depth > _RUN_WALK_MAX_DEPTH || length(visited) >= _RUN_WALK_MAX_NODES) && return
+    value isa _RunWalkScalar && return
+    value isa AbstractVector && eltype(value) <: _RunWalkScalar && return
+    id = objectid(value)
+    id in visited && return
+    push!(visited, id)
+    value isa TextDocument && visit(value)
+    if value isa TextString
+        return
+    elseif value isa Cell || value isa UntrackedCell
+        _visit_text_documents!(visit, value[], visited, depth + 1)
+    elseif value isa AbstractVector
+        for i in eachindex(value)
+            isassigned(value, i) && _visit_text_documents!(visit, value[i], visited, depth + 1)
+        end
+    else
+        for name in fieldnames(typeof(value))
+            isdefined(value, name) || continue
+            _visit_text_documents!(visit, getfield(value, name), visited, depth + 1)
+        end
+    end
+end
+
+# What `find` gives for each text document that the printer of each example reaches:
+# one test set for each example, which asserts that it gives nothing.
+function _test_example_texts(find, title::AbstractString)
+    @testset "$title" begin
+        for example in examples
+            @testset "$(example.name)" begin
+                found = String[]
+                iomap = print_document(example.projection, example.document)
+                _visit_text_documents!(document -> find(found, document), iomap, Set{UInt64}(), 0)
+                @test isempty(found)
+            end
+        end
+    end
+end
+
+# A text run holds no break, rule 1 of the text domain: a break is the start of a
+# line. The walk covers the document of every example and the output of every
+# stage that prints it; a run that holds a `'\n'` is reported by the head of its
+# text.
+test_text_runs_hold_no_break() =
+    _test_example_texts("A text run holds no break") do found, document
+        document isa TextString || return
+        content = document.content
+        (content isa AbstractString && occursin('\n', content)) && push!(found, first(content, 60))
+    end
+
+# A text block holds only lines (L1 of the text domain): the elements of a block are
+# `TextLine`s. A lazy list of lines is not walked, because it can be endless; an
+# element that is no line is reported by its type.
+test_text_blocks_hold_only_lines() =
+    _test_example_texts("A text block holds only lines") do found, document
+        document isa TextBlock || return
+        elements = document.elements
+        elements isa CellVector || return
+        for element in elements
+            element isa TextLine || push!(found, string(typeof(element)))
+        end
+    end
+
 # ── reader ───────────────────────────────────────────────────────────────────
 
 # @broken registry for the reader sweep. `reader_broken(name)` returns a
@@ -87,6 +162,11 @@ function repl_broken(name)
     name == "sql_update_syntax" && return (ev, msg) ->
         occursin("FieldError(Nothing, :output)", msg) ||
         (occursin("MethodError", msg) && occursin("read_intent", msg))
+    # @broken: Return on a node of a tree that no navigator holds opens its page
+    # in a new tab, and the editor of the sweep has no pane tree to open it in
+    # (`open_pane!` throws). A window of `run_example` has none either.
+    name in ("document_tree", "system_process_tree") &&
+        return (ev, msg) -> occursin("no pane tree has the focus", msg)
     nothing
 end
 
@@ -167,7 +247,20 @@ function test_position_navigations()
                              # `pivot` is a bar of widgets above a WidgetTable,
                              # here for the widget-container reason as well.
                              "pivot",
+                             # `workflow` is a card of widgets for each node, and
+                             # `workflow_journal` a WidgetTable, here for the
+                             # widget-container reason as well.
+                             "workflow", "workflow_journal",
+                             # `research` is a card of widgets for each item, here
+                             # for the widget-container reason as well.
+                             "research",
                              "assistant",
+                             # The tree of documents, the plan, the tree of
+                             # processes and the work page are a widget tree and
+                             # cards of widgets, here for the widget-container
+                             # reason as well.
+                             "document_tree", "work_plan", "system_process_tree",
+                             "assistant_work",
                              # `fsm` is the twelve-state TCP machine. It
                              # navigates correctly — it is simply far too big
                              # for an exhaustive caret walk (tens of minutes,
@@ -182,6 +275,10 @@ function test_position_navigations()
                              # above: the strip and the split pane hold the
                              # content, and Ctrl+Home reaches no caret in it.
                              "pane", "empty_pane", "pane_json",
+                             # `formula_report` is a Markdown page whose blocks
+                             # the natural renderer stacks, here for the
+                             # widget-container reason as well.
+                             "formula_report",
                              "dbcatalog", "sql_syntax", "sql_table") && continue
             @testset "$(example.name)" begin
                 sigs = posnav_seed_broken(example.name)
@@ -212,11 +309,11 @@ const _position_navigation_complete_examples = ["text", "json"]
 # placeholder insertion slot). `text` is the one exception: its default
 # projection routes the block's content through `WordWrapping` — the same
 # wrap/reorder the exclusion note above already flags — and the BFS never
-# canonicalizes a reached state to the ground truth's raw `.elements[1].content{…}`
-# path, so every position enumerated in that field comes back unreached. Cause
-# not investigated further.
+# canonicalizes a reached state to the ground truth's raw
+# `.elements[1].elements[1].content{…}` path, so every position enumerated in that
+# field comes back unreached. Cause not investigated further.
 _complete_unreached_broken(name) =
-    name == "text" ? (s -> startswith(s, ".elements[1].content{")) : nothing
+    name == "text" ? (s -> startswith(s, ".elements[1].elements[1].content{")) : nothing
 
 function test_position_navigations_complete()
     @testset "PositionNavigationComplete" begin
@@ -399,11 +496,8 @@ end
 
 # @broken: the leftward walk visits fewer carets than the rightward one
 # (`:same_length`) and does not arrive back at the start (`:left_reaches_start`).
-# Each remaining member fails for its own reason, none of them the shared
-# widened-indent round-trip (that one is handled in `_backward_zone`):
-#   * text / text_with_image — a left/right asymmetry in the plain Text pipeline,
-#     with no projection involved.
-const NAV_LEFT_WALK_STALLS = ("text", "text_with_image")
+# No example is known to.
+const NAV_LEFT_WALK_STALLS = ()
 
 # @broken: the rightward walk ends somewhere other than where Ctrl+End lands
 # (`:right_reaches_end`). No example is known to.

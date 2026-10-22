@@ -41,7 +41,7 @@ end
 
 function print_document(p::WindowManagingProjection, recursion, input, ctx)
     inner_iomap = print_document(p.inner, recursion, input, ctx)
-    WindowManagingIoMap(p, input, inner_iomap.output, inner_iomap)
+    WindowManagingIoMap(p, input, Cell(@computation inner_iomap.output), inner_iomap)
 end
 
 # ── Reader ────────────────────────────────────────────────────────────────
@@ -98,8 +98,9 @@ function read_intent(p::WindowManagingProjection, recursion, change::Intent, iom
         (win !== nothing && win.auto_dismiss === true) || _close_popup_windows!(iomap)
     end
     # A bare Escape closes the open popups and goes no further. The keyboard of a
-    # `:popup` stays in the window under it, and there an Escape that no reader
-    # claims closes the editor, so the answer is an operation that does nothing.
+    # `:popup` stays in the window under it, and there an `EscapeQuittingProjection`
+    # quits on an Escape that no reader claims, so the answer is an operation that
+    # does nothing.
     if window_input isa WindowInput && _is_bare_escape(window_input.event) &&
        _close_popup_windows!(iomap)
         return Intent(change.gesture, DoNothingOperation())

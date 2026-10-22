@@ -27,7 +27,6 @@ There are thirteen higher-order projections in ProjecturEd:
 | `FaultCatchingProjection` | passthrough printer for one part; a fault in a cell that the part built draws the `substitute` mark of the output domain in place of the part | `FaultCatching.jl` |
 | `TooltipDecoratorProjection` | dispatches on `TooltipSource`; reader runs a show/hide state machine | `TooltipDecorator.jl` |
 | `DraggingProjection` | dispatches on `DraggingState`; reader runs a press→drag→drop state machine emitting `MoveRangeOperation` | `Dragging.jl` |
-| `ProjectionConfiguringProjection` | extends the inner projection's output with an editable parameter-control bar | `ProjectionConfiguring.jl` |
 
 ## ChainingProjection
 
@@ -116,6 +115,14 @@ end)
 
 This is the mechanism by which a single projection can selectively apply a
 transformation to one part of a document and leave everything else alone.
+
+The path of a place can move after the print, such as the path of a row of a
+list counted from its head, which is a computation. The dispatch then chooses
+again in a computation of its own, and the inner IO map reads only a cell of the
+`objectid` of the choice. That cell holds plain data, so a new path with the
+same choice stops there: the inner IO map, its output and their readers stay. A
+new choice prints the input again. At a fixed path the IO map reads the choice
+itself, with no cell between.
 The compound projection `ApplyAtProjection` (see below) is built on top.
 
 ## RecursiveProjection

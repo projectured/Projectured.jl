@@ -728,9 +728,12 @@ function test_mcp_server()
                 run_editor!(editor; mcp = (; host = "127.0.0.1", port = port))
                 @test occursin("\"execute_julia_code\"", listing[])
                 @test occursin("\"probe_declared\"", listing[])
-                # The call ran on the task of the loop, which is this one.
+                # The call ran in a code unit of the editor: on a task of its own
+                # when the process has a thread for it, or else on the task of the
+                # loop, which is this one.
                 @test occursin("probed", answer[])
-                @test ran_on == [current_task()]
+                @test length(ran_on) == 1
+                @test (only(ran_on) === current_task()) == !_has_mcp_unit_thread()
             end
         finally
             Base.CoreLogging.global_logger(logger)
@@ -738,8 +741,14 @@ function test_mcp_server()
     end
 end
 
-# A tool that a client calls runs on the task that runs the editor's loop, in
-# the drain of the inbox, and the server task waits for its answer. The test
+# Whether this process can run a code unit on a thread other than the one of this
+# task.
+_has_mcp_unit_thread() =
+    any(thread -> thread != Threads.threadid(), Threads.threadpooltids(:default))
+
+# A tool that a client calls runs in the drain of the inbox, as a code unit of the
+# editor: on a task of its own when the process has a thread for it, or else on
+# the task that runs the loop. The server task waits for its answer. The test
 # plays the loop: it marks its own task as the loop's and drains by hand.
 function test_mcp_tool_runs_on_editor_task()
     @testset "a tool that a client calls runs on the editor task" begin
@@ -767,7 +776,8 @@ function test_mcp_tool_runs_on_editor_task()
         @test editor.document.value == "x"
         @test !istaskdone(call)
         @test drain_operations!(editor) == 1
-        @test ran_on == [current_task()]
+        @test length(ran_on) == 1 && only(ran_on) !== call
+        @test (only(ran_on) === current_task()) == !_has_mcp_unit_thread()
         @test editor.document.value == "written"
         @test fetch(call).text == "done"
         # A tool that throws answers its error, and the fault is recorded.
@@ -781,7 +791,73 @@ function test_mcp_tool_runs_on_editor_task()
         # With no loop, the call runs at once, on the task that calls.
         editor.loop_task = nothing
         @test handlers["probe_task"](Dict{String,Any}()).text == "done"
-        @test ran_on == [current_task(), current_task()]
+        @test length(ran_on) == 2 && ran_on[2] === current_task()
+        # A tool that reads no document answers at once, on a task of the default
+        # pool, while the loop drains nothing.
+        searcher = Tool("probe_search"; description = "Reads no document.",
+                        parameters = NamedTuple[], reads_documents = false,
+                        handler = (target, args) -> (push!(ran_on, current_task()); "found"))
+        search = only(render_mcp_tools(editor, [searcher])).handler
+        editor.loop_task = current_task()
+        @test search(Dict{String,Any}()).text == "found"
+        @test last(ran_on) !== current_task()
+        @test !isready(editor.inbox) && !isready(editor.owner_posts)
+        editor.loop_task = nothing
+        # A tool that answers background work answers its output once the work
+        # ends, and code that threw there marks the call as a fault.
+        register_default_tools!(editor.tools)
+        background(code) = only(render_mcp_tools(editor, [Tool("probe_background";
+            description = "Runs code in the background.", parameters = NamedTuple[],
+            handler = (target, args) -> call_tool(editor.tools, "execute_julia_code"; target,
+                args = Dict{String,Any}("code" => code, "background" => true)))])).handler
+        @test background("println(\"in the background\"); 1")(Dict{String,Any}()).text ==
+              "in the background\n1\n"
+        @test occursin("thrown in the background",
+                       background("error(\"thrown in the background\")")(Dict{String,Any}()).text)
+        # The cancel of the turn of an agent stops the background work of its calls.
+        server = McpServer(editor; port = 0)
+        sleeper = only(render_mcp_tools(editor, [Tool("probe_sleeper";
+            description = "Sleeps in the background.", parameters = NamedTuple[],
+            handler = (target, args) -> call_tool(editor.tools, "execute_julia_code"; target,
+                args = Dict{String,Any}("code" => "sleep(30)", "background" => true)))];
+            running = server.running)).handler
+        sleeping = @async sleeper(Dict{String,Any}())
+        @test timedwait(() -> !isempty(server.running.works), 10.0) === :ok
+        ProjecturedKernel.AgentModule.stop_agent_server_work!(server)
+        @test timedwait(() -> istaskdone(sleeping), 10.0) === :ok
+        @test occursin("InterruptException", fetch(sleeping).text)
+        @test isempty(server.running.works)
+        # A tool that answers a picture gives the client an image.
+        picture = Tool("probe_picture"; description = "Answers a picture.", parameters = NamedTuple[],
+                       handler = (target, args) -> LlmImage("image/png", UInt8[1, 2, 3]))
+        image = only(render_mcp_tools(editor, [picture])).handler(Dict{String,Any}())
+        @test image.type == "image"
+        @test (image.data, image.mime_type) == (UInt8[1, 2, 3], "image/png")
+    end
+end
+
+# A client that names its call in the `_meta` of the request, as Claude Code does,
+# gets the document that an evaluation returns kept under that name, so the turn
+# of an agent can show it live. A call with no name keeps nothing.
+function test_mcp_keeps_evaluated_document()
+    @testset "the document of an evaluation is kept under the id of its call" begin
+        editor = _mcp_editor()
+        register_default_tools!(editor.tools)
+        tools = Dict(t.name => t for t in render_mcp_tools(editor, list_tools(editor.tools)))
+        evaluate = tools["execute_julia_code"].handler
+        library = ProjecturedMCP.McpModule.ModelContextProtocol
+        server = library.mcp_server(name = "test", version = "0.0.1")
+        context(meta) = library.RequestContext(server = server, meta = meta)
+        evaluate(Dict{String,Any}("code" => "JsonString(\"made\")"),
+                 context(Dict{String,Any}("claudecode/toolUseId" => "toolu_1")))
+        @test take_tool_call_value!(editor.tools, "toolu_1") isa JsonString
+        @test take_tool_call_value!(editor.tools, "toolu_1") === nothing
+        # A value that is no document, a call with no id, and a context with no
+        # `_meta` keep nothing.
+        evaluate(Dict{String,Any}("code" => "1 + 1"), context(Dict{String,Any}("claudecode/toolUseId" => "toolu_2")))
+        evaluate(Dict{String,Any}("code" => "JsonString(\"again\")"))
+        evaluate(Dict{String,Any}("code" => "JsonString(\"again\")"), context(nothing))
+        @test isempty(editor.tools.call_values)
     end
 end
 
@@ -860,6 +936,7 @@ function test_mcp_tools()
         test_search_object()
         test_mcp_server()
         test_mcp_tool_runs_on_editor_task()
+        test_mcp_keeps_evaluated_document()
         test_mcp_log()
     end
 end

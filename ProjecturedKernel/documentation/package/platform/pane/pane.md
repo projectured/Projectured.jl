@@ -71,7 +71,7 @@ The rectangles ignore the pixels of a border and a divider. They are exact enoug
 ChainingProjection(RecursiveProjection(PaneToWidget(; new_tab = default_new_pane_tab)), renderer)
 ```
 
-A tab content passes through the first stage unchanged, so `renderer` draws each content. `PaneTreeToWidget` prints the tree as a `WidgetComposite`: slot 1 holds the layout and slot 2 holds the drop indicator. `PaneSplitToWidgetSplitPane` wraps each element in a `LayoutConstraint` whose weight is the normalized weight of the element. When the parent gives an available extent, each slot also has a preferred extent of 0, so the allocator divides the extent by the weights only. `PaneGroupToWidgetTabbedPane` makes a `WidgetTabbedPane` with `closable`, `new_tab`, `draggable` and `duplicable` set, and sets the `duplicable` flag of each page from `has_document_duplicate` of the content.
+A tab content passes through the first stage unchanged, so `renderer` draws each content. `PaneTreeToWidget` prints the tree as a `WidgetComposite`: slot 1 holds the layout and slot 2 holds the drop indicator. `PaneSplitToWidgetSplitPane` wraps each element in a `LayoutConstraint` whose weight is the normalized weight of the element. The weight is a computed cell of the constraint, and the list of slots reads only the elements, so a drag of a divider of the tree prints no group again, and the view state inside a tab, such as the place of a divider of an Explorer, stays. When the parent gives an available extent, each slot also has a preferred extent of 0, so the allocator divides the extent by the weights only. `PaneGroupToWidgetTabbedPane` makes a `WidgetTabbedPane` with `closable`, `new_tab`, `draggable` and `duplicable` set, and sets the `duplicable` flag of each page from `has_document_duplicate` of the content.
 
 Every edit reaches the screen through the IO maps that stand, with no new print of the tree. `test_pane_construct` checks this: after each structural edit, it compares the standing render with a fresh print of the same tree. A test that checks only the tree passes while the screen is stale.
 
@@ -108,6 +108,9 @@ The `@gestures PaneTree` table is in `PaneGestures.jl`:
 | `Alt+Left` and `Alt+Right` | from a whole tab, select the tab beside it |
 | `Alt+Down` | from a whole tab, select its content as a whole |
 | `F2` and `Escape` | put the caret in the tab name, and take it out |
+| the command "Add the tab to the explorer", with no key | add the document of the focused tab to the explorer of the editor |
+
+The command "Add the tab to the explorer" is a rule with no key. It adds the document of the focused tab (`_get_tab_document`) as an entry of the explorer. The document is read through the history of the tab and is not the file: a tab of a file adds the file document, not the data in it.
 
 Every chord has a modifier, because a plain key belongs to the content of the focused tab. Plain Alt and an arrow walk the structure of a document, so the moves between groups take Ctrl+Alt. Ctrl+Tab is an `override`, because the widget split pane answers every Tab with its own focus traversal.
 
@@ -131,7 +134,7 @@ A paste never replaces a pane node, and a pane node is never pasted: `accepts_pa
 
 The name in a tab title is a text document. A caret in the name is the edit state, so F2 and Escape only move the selection. The table gives each typed key, Backspace and Delete to `read_gesture` of the name, and the `@gestures` table of `PrimitiveString` makes the edit. `make_pane_retarget_title_operation` roots the answer at the tree, at `get_pane_tab_name_path`. The package has no code that edits text and no rename operation.
 
-A rename edits the name only. The icon, its role, the badges and the tooltip of the title stay, and a title whose parts are cells or functions follows the state they read with no write. The group draws each tab as a `WidgetTabLabel` whose icon, badges and tooltip read the title, so a change of them redraws the strip and builds no page again. A caret in the name, `tabs[i].title.name.value{k}`, maps to `selector_element_pairs[i].selector.text{k}` of the strip, and back.
+A rename edits the name only. The icon, its role, the badges and the tooltip of the title stay, and a title whose parts are cells or functions follows the state they read with no write. The group draws each tab as a `WidgetTabLabel` whose text, icon, badges and tooltip read the title, so a change of them redraws the strip and builds no page again. A title with an empty name shows the title of the document of its tab, which can follow a state too: a navigator tab shows the title of its page. A caret in the name, `tabs[i].title.name.value{k}`, maps to `selector_element_pairs[i].selector.text{k}` of the strip, and back.
 
 A file of a layout writes the name and the values that the four parts hold at the save. It builds a tab from a `PaneTabTitle`, or from a name with an `icon` beside it.
 
@@ -177,14 +180,15 @@ Each verb makes its edit at the pane tree and carries it to the root through the
   .content                                      ::ScreenDocument
     .windows[1]                                 ::WindowDocument        # title "ProjecturEd"
       .content.content.content.content          ::PaneTree              # inside ClipboardSlice › WidgetShell › UndoBuffer
-        .root                                   ::PaneSplit             # side by side: 20% | 80%
-          .elements[1]                          ::PaneGroup             # 1 tab
-            .tabs[1]                            ::PaneTab               # title "Files", shows Workspace (focused)
+        .root                                   ::PaneSplit             # side by side: 68% | 32%
+          .elements[1]                          ::PaneGroup             # 2 tabs
+            .tabs[1]                            ::PaneTab               # title "Explorer", shows Explorer
+            .tabs[2]                            ::PaneTab               # title "a.json", shows JsonFile (focused)
           .elements[2]                          ::PaneGroup             # 1 tab
-            .tabs[1]                            ::PaneTab               # title "a.json", shows JsonFile
+            .tabs[1]                            ::PaneTab               # title "Assistant", shows Assistant
 ```
 
-A line's steps are those after the nearest printed line whose path is a prefix of its own, so the path of a part is the steps of the lines on its branch, joined in order: `@reference(editor.document, content.windows[1].content.content.content.content.root.elements[2].tabs[1])`. To name a pane there is a shorter way: `find_pane_reference` answers the reference of a pane by its title. The type on each line is `nameof(typeof(node))`; the note gives the node's title after `title`, quoted as `find_pane` takes it (`get_document_title`), what it shows after `shows` (`describe_document`) when that says more than the type, the wrappers a line's steps pass through, and the deepest focused tab. `include(node)` says which nodes get a line and `descend(parent, child)` where the walk goes; the defaults show the windows, the pane trees, the splits, the groups and the tabs, and a pane tree inside a tab below that tab. It answers a `Text` and not a `String`, so the tree arrives as the lines it is and not as one line of `\n` escapes.
+A line's steps are those after the nearest printed line whose path is a prefix of its own, so the path of a part is the steps of the lines on its branch, joined in order: `@reference(editor.document, content.windows[1].content.content.content.content.root.elements[1].tabs[2])`. To name a pane there is a shorter way: `find_pane_reference` answers the reference of a pane by its title. The type on each line is `nameof(typeof(node))`; the note gives the node's title after `title`, quoted as `find_pane` takes it (`get_document_title`), what it shows after `shows` (`describe_document`) when that says more than the type, the wrappers a line's steps pass through, and the deepest focused tab. `include(node)` says which nodes get a line and `descend(parent, child)` where the walk goes; the defaults show the windows, the pane trees, the splits, the groups and the tabs, and a pane tree inside a tab below that tab. It answers a `Text` and not a `String`, so the tree arrives as the lines it is and not as one line of `\n` escapes.
 
 A path written by hand is typed against the tree it names a part of, then set after the path to that tree: resolve `find_pane_tree_reference()` to the tree object with `evaluate_reference`, type the rest with `@reference(tree, …)`, and join the two with `concat_references`:
 
@@ -216,7 +220,7 @@ The wrapper `tabs` of `build_editor` puts the root document in the one tab of a 
 
 `make_tabs_projection(projection)` draws the tree. `PaneToWidget` makes the widgets and leaves the content of each tab as it is. The stage after it draws every widget and layout with the widget renderer, and every other document with `projection`. So the tabs work with a projection that draws no widget, and a content that is itself a widget draws as a widget. A content can not be told by its place, because the widget printers hand their own context to a child.
 
-`show_document!(document; title)` of the screen package shows a later document. For a window whose content is a `PaneTree`, this package's method opens a tab named `title`, or focuses the tab that shows `document` already.
+`show_document!(document; title)` of the screen package shows a later document. For a window whose content is a `PaneTree`, this package's method opens a tab named `title`, or focuses the tab that shows `document` already. It finds that tab by what it shows, with `find_pane_tab_layer`, and not by its title, so two tabs of the same title are no problem. `collect_pane_tab_contents(tree, T)` answers the documents of type `T` that the tabs of a tree show, through the same layers; in a computation it depends only on the structure of the panes.
 
 ### Save and load of the whole editor
 
@@ -224,7 +228,7 @@ The wrapper `tabs` of `build_editor` puts the root document in the one tab of a 
 
 `pred_arguments` of `PaneTree` writes only `root`, because a drag is not layout. A `.pred` file builds `PaneTree`, `PaneSplit`, `PaneGroup` and `PaneTab` by their names, as it builds any loaded document type. The functions name no screen type, so an editor that holds a bare `PaneTree` saves and loads the same way.
 
-`get_pane_file_group()` returns the group for a newly opened file: a group that holds a file already, as the content of a tab or through a layer that `get_edited_field` names, such as the scroll pane of a file tab, else a group whose tabs all answer `accepts_opened_file`, the focused one first. The file-system package pairs its `OpenFileOperation` with this answer, because this package can not name a type of a package that it does not depend on.
+`get_pane_file_group()` returns the group for a newly opened file: a group that holds a file already, as the content of a tab or through a layer that `get_edited_field` names, such as the scroll pane of a file tab, else a group whose tabs all answer `accepts_opened_file`, the focused one first. The file-system slice pairs `OpenFileOperation` with this answer when it evaluates the open, because it reads the file into the document of its type.
 
 ## How it fits
 

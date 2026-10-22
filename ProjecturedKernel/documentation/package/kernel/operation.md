@@ -41,7 +41,7 @@ selection from Julia code.
 
 ### `QuitEditorOperation()`
 
-Produced when the user closes the window or presses Escape. Its evaluation
+Produced when the user closes the window, chooses File > Exit, or presses an Escape that an `EscapeQuittingProjection` answers. Its evaluation
 throws a `QuitEditorException`, which the `run_editor!` loop catches and uses to
 break out cleanly.
 
@@ -86,6 +86,17 @@ end
   `[start, stop)` with the items (zero-width range = insert, empty vector = delete).
 - empty `reference` (only meaningful when `document === nothing`) → **whole-root
   swap**: rebind `editor.document` and drop the cached iomap.
+
+**A write into a plain value** follows these rules, in this order. A plain value is a struct, a named tuple, a tuple or a vector that is no document and holds its fields with no cell. The write finds the nearest cell above the slot on the path from the root.
+
+1. A field of a document that holds the value in a cell, or an element of a document collection: the write sets the cell, as above.
+2. A root that is a cell, and an empty `reference`: the write sets the cell. `document` is the cell, and `reference` starts at the value that the cell holds.
+3. A field of a plain immutable parent, or an element of a tuple: the write makes a copy of the parent with the one field changed, and writes the copy into the slot one level up. That write follows these rules again. `with_object_field(parent, name, value)` makes the copy. The default calls the constructor of `typeof(parent)` with every field, and a `NamedTuple` merges. A type whose constructor does not take every field adds a method.
+4. A field of a plain mutable parent: the write sets the field in place, with a `convert` to the field type. Then it writes the nearest cell above with the value that the cell holds, so each reader of the cell reads again. A computed cell is not written again, because a write would end its computation.
+5. An element of a plain container, such as a `Vector`: the write changes the container in place and writes the nearest cell above in the same way. With no cell above, the element is still written.
+6. A plain field, mutable or immutable, with no cell above it: the write throws an exception whose message says to hold the value in a `Cell` and give the cell as the root.
+
+A field step on a plain `Dict` is refused. An immutable value is replaced by a new object at each write. A mutable value keeps its identity. A change of a mutable value that is no operation does not tell a reader; the author writes the cell with its own value to do that.
 
 **The write keeps the mouse target right.** Each document on the path of the part
 under the pointer holds its own part of that path (`replace_mouse_target!`), and a
@@ -491,7 +502,7 @@ order. For a `CompoundOperation` it inverts each member against the state that
 member sees, and runs the inverses in the opposite order. An operation that
 changes no document, such as a zoom, answers `DoNothingOperation()`. The inverse
 of a `ReplaceReferencedValueOperation` carries the object that it writes into, not
-a path, so it stays right when the document moves in the tree. `get_slot_at` is
+a path, so it stays right when the document moves in the tree. For a slot of a plain value, the inverse carries the holder of the nearest cell above the slot, and the path from that holder: the cell itself for a cell root, and the document for a cell field. A copy replaces an immutable parent, so that parent is gone when the inverse runs. Only a write that goes through the cell makes the readers of a mutable parent read again. So the inverse goes through the same rules as the write, and an undo shows in the form. With no cell above, the inverse names the parent. `get_slot_at` is
 the seam through which a collection of cells gives back the cell of an element
 for a splice, so the element that comes back is the same object. The operations
 of a higher package declare their inverses beside their own declarations.
@@ -518,7 +529,7 @@ to the document.
 
 ### Downward edges
 
-- `..FaultModule` — `is_passthrough_exception`, which `QuitEditorException`
+- `..FaultModule` — `is_fault_exception`, which `QuitEditorException`
   extends so that no fault barrier catches a request to quit
 - `..CellModule: Cell, AbstractCell`
 - `..DocumentModule: Document, get_edited_field, get_document_title`

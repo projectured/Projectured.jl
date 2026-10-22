@@ -96,15 +96,16 @@ export make_output_path_cells, set_output_path_computations!, map_mouse_target_f
 export read_move_answer
 export ProjectionReferenceStep, make_introduced_reference, is_introduced_reference,
        has_introduced_step, find_introduced_path, normalize_named_node_reference
-export PrinterContext, make_child_context, with_exact_size, with_bounded_size, with_size_range,
-       with_inner_size, get_exact_width, get_exact_height, with_free_axis, with_clock,
-       with_property, get_property
+export PrinterContext, make_child_context, make_element_context, make_reference_cell,
+       with_exact_size, with_bounded_size, with_size_range, with_inner_size, get_exact_width,
+       get_exact_height, with_free_axis, with_clock, with_property, get_property
 export make_children_container, get_children_container_type,
        get_projection_gesture_bindings
 export read_projection_gesture
+export make_final_holding_cell
 export TemplateIoMap, var"@projection_template"
 export print_template_document, read_template_intent, make_template_builder,
-       find_template_value_retype
+       find_template_value_retype, find_template_output_child
 
 include("PrinterContext.jl")
 include("ProjectionReferenceStep.jl")
@@ -114,5 +115,6 @@ include("OutputPaths.jl")
 include("ProjectionMacro.jl")
 include("ProjectionGestureBindings.jl")
 include("ProjectionTemplate.jl")
+include("ProvisionalOutput.jl")
 
 end # module

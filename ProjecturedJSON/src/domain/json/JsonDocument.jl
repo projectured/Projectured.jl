@@ -52,7 +52,7 @@ that holds an array of objects.
     end
 """
 @document struct JsonArray <: JsonDocument
-    elements::CellVector = CellVector()
+    elements::CellVector{Document} = CellVector{Document}()
     collapsed::Bool = false
 end
 
@@ -84,7 +84,7 @@ Use it to read the fields of a JSON record by their names.
     keys(item)                        # the names of its fields
 """
 @document struct JsonObject <: JsonDocument
-    entries::CellVector = CellVector()
+    entries::CellVector{Document} = CellVector{Document}()
     collapsed::Bool = false
 end    
 
@@ -106,6 +106,10 @@ _json_replaceable(doc, sel) =
 @insertion JsonObjectEntry = @selected JsonObjectEntry("", JsonInsertion()) key{0}
 @insertion JsonObject      = @selected JsonObject([JsonObjectEntry("", JsonInsertion())]) entries[1].key{0}
 
+# A number whose text does not parse yet, such as `-` or `1e`, is the insertion
+# of the domain with that text, until a key makes a number of it again.
+make_incomplete_number_document(::JsonNumber, text) = JsonInsertion(text)
+
 @gestures JsonDocument begin
     when(_json_replaceable(doc, sel))
     KeyPress('n') => "Replace with null"   => replace_selected_document(doc, @selected JsonNull())
@@ -121,9 +125,12 @@ end
 
 # A `,` on the closing bracket or brace of a container is the parent's: the caret
 # has left the container's content, so the container declines and its parent answers.
+# The closing delimiter starts with its break (`"\n]"`, `"\n}"`), so a caret before the
+# break stands at the end of the line of the last value, and the `,` there is the
+# container's.
 @gestures JsonArray begin
     KeyPress(',') => "Insert a new element" =>
-        is_on_closing_delimiter(get_selection(doc)) ? nothing :
+        is_on_closing_delimiter(get_selection(doc); from = 1) ? nothing :
         append_insertion_operation(doc, :elements, JsonInsertion)
 end
 
@@ -134,9 +141,9 @@ _json_entry_sort_key(entry) = entry isa JsonObjectEntry ? (0, entry.key) : (1, "
 
 @gestures JsonObject begin
     KeyPress(',') => "Insert a new entry" =>
-        is_on_closing_delimiter(get_selection(doc)) ? nothing :
+        is_on_closing_delimiter(get_selection(doc); from = 1) ? nothing :
         append_insertion_operation(doc, :entries, JsonObjectEntry)
-    KeyDown(:tab) => "Move from key to value" => move_to_field(doc; from = :key, to = :value)
+    KeyPress('\t') => "Move from key to value" => move_to_field(doc; from = :key, to = :value)
     # The way back has no key of its own. A rule with no gesture reaches the user by
     # name instead, through the command palette. The sort rule spends no key either.
     nothing       => "Move from value to key" => move_to_field(doc; from = :value, to = :key)

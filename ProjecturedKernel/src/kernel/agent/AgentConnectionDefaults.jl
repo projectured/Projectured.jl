@@ -13,6 +13,19 @@ function make_agent_connection(::Val{K}; kwargs...) where {K}
           "Load the opt-in package that provides :$(K).")
 end
 
+# A connection that does not say how to take a prompt into a turn that runs can not.
+has_agent_steering(connection) = false
+steer_agent_prompt!(connection, session_id, prompt) = false
+
+# A connection that does not say how to stop the work of a subagent or of a
+# background task can not.
+cancel_agent_subagent!(connection, session_id, subagent_id) = nothing
+stop_agent_background_task!(connection, session_id, task_id) = false
+
+# A connection that does not say how to sign out can not.
+has_agent_sign_out(connection) = false
+sign_out_agent!(connection) = false
+
 """
     get_agent_connection_names() -> Vector{Symbol}
 

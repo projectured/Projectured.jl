@@ -19,10 +19,11 @@ using ..SelectionModule
 using ..SerializationModule
 using ..StyleModule
 using ..TextModule
+using ..TooltipModule
 
 # Imported to extend: this module adds a method to each of these.
 import ..DocumentModule: get_document_title
-import ..DomainModule: get_insertion_aliases
+import ..DomainModule: get_insertion_aliases, get_document_decoration
 import ..ProjectionModule: print_document, map_reference_forward, map_reference_backward
 import ..SerializationModule: pred_arguments
 

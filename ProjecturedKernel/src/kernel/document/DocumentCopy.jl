@@ -1,5 +1,5 @@
-# Fragment of `DocumentModule` — deep copy of document subtrees. The Julia
-# counterpart of Lisp's `deep-copy`. Unlike `Base.deepcopy` it understands the
+# Fragment of `DocumentModule` — deep copy of document subtrees. Unlike
+# `Base.deepcopy` it understands the
 # Cell-wrapped field convention and allocates fresh `Cell`s, so the copy is
 # independent of the original's reactive graph. Two forms:
 #
@@ -106,7 +106,7 @@ function copy_document_fields(policy::CopyPolicy, document::Document; replacemen
     for name in field_names
         raw = getfield(document, name)
         push!(arguments, haskey(replacements, name) ?
-                             _make_replacement_field(raw, replacements[name]) :
+                             _make_replacement_field(raw, _wrap_replacement_list(T, name, raw, replacements[name])) :
                          name === :selection && raw isa AbstractCell ?
                              copy_selection_cell(policy, raw) :
                          name === :mouse_target && raw isa AbstractCell ?
@@ -129,6 +129,26 @@ function _apply_schema_parameters(base, T::DataType)
     cells = wrapper === get_document_native_type(T) ? 0 : fieldcount(T)
     count = length(T.parameters) - cells
     count == 0 ? base : base{Tuple(T.parameters)[1:count]...}
+end
+
+# A plain vector that replaces a list field becomes the list of the field, in the
+# kind of the cell that the field holds, as a constructor makes it.
+function _wrap_replacement_list(T, name, raw, value)
+    value isa AbstractVector || return value
+    declared_type = find_declared_field_type(T, name)
+    declared_type === nothing && return value
+    list = _wrap_list_value_of(declared_type, value)
+    list === value && return value
+    raw isa ImmutableCell ? copy_document(ImmutableCell, list) :
+    raw isa MutableCell   ? copy_document(MutableCell, list) : list
+end
+
+# A plain vector that a kinded copy puts into a list field of a cell layout becomes
+# the list of the field, in cells of the kind `K`, as a constructor of the layout
+# makes it. A native layout holds the plain vector that the copy starts from.
+function _wrap_copied_list(K, declared_type, value)
+    list = _wrap_list_value_of(declared_type, value)
+    (list === value || K === ReactiveCell) ? list : copy_document(K, list)
 end
 
 # A replacement for a field that holds a cell goes in a new cell of the same
@@ -275,6 +295,7 @@ function copy_document(K::Type{<:AbstractCell}, doc::Document, policy, depth::In
         v = inner isa Document && !is_descendable_for_sync(policy, depth + 1, nothing) ?
             make_unsynced_placeholder(policy, inner, nothing) :
             copy_document(K, inner, policy, depth + 1)
+        all_cells && (v = _wrap_copied_list(K, Ts[i], v))
         push!(args, all_cells || raw isa AbstractCell ?
                     K{_kinded_value_type(K, Ts, i, v)}(v) : v)
     end

@@ -140,6 +140,55 @@ ended. A kind with nothing to say answers none.
 """
 format_task_details(::AbstractTask, result) = String[]
 
+"""
+    get_task_links(task) -> Vector{NamedTuple}
+
+The links that a kind of task adds to the facts of a task, one a line: each is
+`(label = …, text = …, document = …, reference = …)`, the name of the fact, the
+text of the link, and the document and the path from it of the part that the
+link opens, as an `OpenPageOperation` names them. The navigator around the page
+opens the part where its content holds the document
+([`find_navigator_address`](@ref)). A kind with nothing to link answers none.
+
+# Example
+
+    get_task_links(task) = [(label = "configuration", text = config.name,
+                             document = config, reference = EmptyReference())]
+"""
+get_task_links(::AbstractTask) = NamedTuple[]
+
+"""
+    get_task_result_document(task, result) -> Document or nothing
+
+A document that shows what `task` ended with in more than lines of text, such as
+the table of the scalars that a statistical test compared. `result` is what the
+task ended with. The detail of the task shows the document below its facts. It
+draws by the method of `make_graphics_projection` for its type, as it draws in
+any document. A kind with no such document answers `nothing`.
+"""
+get_task_result_document(::AbstractTask, result) = nothing
+
+"""
+    find_task_output_mark(task, stream, line) -> Symbol or nothing
+
+The mark of one line that `task` printed on `stream`, `:output` or
+`:error_output`: `:error`, `:warning`, `:notice` or `:progress`, or `nothing` for a
+line with no mark. The stream counts the lines of each mark and keeps the number
+of the first line of each, and the page of a stream draws a mark in the colour of
+its role. It runs for each line under the lock of the execution, so a method
+answers from the line alone. A kind with no marks answers `nothing`.
+"""
+find_task_output_mark(::AbstractTask, stream::Symbol, line::AbstractString) = nothing
+
+"""
+    get_task_output_folder(task) -> String or nothing
+
+The folder where the streams of each execution of `task` are written, one file for
+each stream. `nothing`, the default, is the folder of the process
+([`get_session_output_folder!`](@ref)).
+"""
+get_task_output_folder(::AbstractTask) = nothing
+
 # ── Words ────────────────────────────────────────────────────────────────────
 
 """

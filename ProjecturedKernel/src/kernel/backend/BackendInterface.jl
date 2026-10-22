@@ -99,10 +99,58 @@ the editor task.
 function wake_backend! end
 
 """
+    shows_held_frames(backend) -> Bool
+
+Whether `backend` shows held frames while a code unit runs on a thread of its own.
+A backend that answers `false`, such as one that renders a video by a clock of its
+own, runs each unit on the thread of the loop and shows no held frame, so its
+frames keep their time. The default is `true`.
+"""
+function shows_held_frames end
+
+"""
+    prepare_held_frames!(backend, devices, descriptions)
+
+Make everything that the held frames of a code unit draw, before the unit starts:
+the busy bar with each of `descriptions`, its stop control, the notice that a stop
+has not acted, the question whether to quit without a save, and the digits of the
+time. A held frame makes no text, because the unit owns the text state of the
+backend while it runs.
+"""
+function prepare_held_frames! end
+
+"""
+    run_held_frame!(backend, devices, state::HeldFrameState) -> Symbol
+
+Run one held frame while a code unit runs, and answer what the person did:
+`:none`, `:stop`, `:close` or `:quit`.
+
+A held frame pumps the events of the window system, so the window answers it. It
+presents the last picture again where the window system asks for it, shows the
+busy pointer and, from half a second on, the busy bar of `state`. It keeps the keys
+and the window events for the frames after the unit, and drops the pointer input
+that starts during the hold, except a press on a control of the bar. `:stop` is
+the stop control, or Escape while the bar shows; `:close` is the close of a
+window; `:quit` is the confirm of the question that `state.is_quit_asked` shows.
+
+A held frame reads no document and makes no text. It waits for an event for one
+short slice at most, and [`wake_backend!`](@ref) ends the wait.
+"""
+function run_held_frame! end
+
+"""
+    end_held_frames!(backend, devices)
+
+End the held frames of a code unit: give the pointer back its shape, and free
+what [`prepare_held_frames!`](@ref) made.
+"""
+function end_held_frames! end
+
+"""
     get_pointer_position(::Backend) -> (x, y)
 
-The current global mouse pointer position in screen pixels, or `(-1, -1)` when
-the backend cannot find it. `(-1, -1)` is a legal answer, and the default gives
+The current global mouse pointer position in the logical pixels of the screen,
+the space of the place of a window, or `(-1, -1)` when the backend cannot find it. `(-1, -1)` is a legal answer, and the default gives
 it for a backend that adds no method of its own.
 """
 function get_pointer_position end

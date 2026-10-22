@@ -3,11 +3,11 @@
 # projection failed.
 
 # What a mark says about itself when the pointer rests on it: the whole fault,
-# as text, which is a document every host draws. The one line a mark draws is cut
-# where the mark ends, and a message is the part worth reading. A right click
+# as a note. The one line a mark draws is cut where the mark ends, and a message
+# is the part worth reading. A right click
 # opens its menu, which tries the part again, when the report came from a barrier.
 get_document_gesture_bindings_own(::Type{FaultReport}) = GestureBinding[
-    make_tooltip_binding(report -> TextString(format_fault_report_message(report));
+    make_tooltip_binding(make_fault_report_note;
                          description = "Show the fault"),
     make_context_menu_binding(_make_fault_report_menu;
                               description = "Show the menu of the fault")]
@@ -121,35 +121,47 @@ end
 get_document_title(::FaultLog) = "Faults"
 get_insertion_aliases(::Type{FaultLog}) = ["faults"]
 
-# A saved window keeps where the log was and how much it holds, never what it
-# held: the faults of one session say nothing about the next.
-pred_arguments(log::FaultLog) = (), Pair{Symbol,Any}[:capacity => log.capacity]
+# A file keeps that it shows the log of the session, and not what the log held:
+# the faults of one session say nothing about the next, and only the log of the
+# session fills. A load gives the log of the session of its editor, and a load with
+# no editor a new log.
+pred_arguments(::FaultLog) = (), Pair{Symbol,Any}[]
 
 # ── The session's log ────────────────────────────────────────────────────────
 
-# One log for the session, because there is one editor and one program that
-# fails in it. `FaultLog()` still builds an empty one, which a test and a
-# gallery window want.
-const _SESSION_FAULT_LOG = FaultLog()
-
 """
-    get_session_fault_log() -> FaultLog
+    get_session_fault_log(; editor = find_evaluation_editor()) -> FaultLog
 
-The one log of the session.
+The fault log of the session of `editor`: by default the editor of the
+evaluation, or of the loop that runs the calling code. Each editor has its own.
+With no editor, a new empty log, which nothing keeps and nothing fills.
 
 A window fills it once it is attached to the store of its editor:
 
-    attach_fault_target!(editor.faults, get_session_fault_log())
+    attach_fault_target!(editor.faults, get_session_fault_log(; editor))
 
-Every fault log a person opens is this document, so two of them show the same
-faults rather than two halves of them.
+Every fault log that a person opens in a window of the editor is this document,
+so two of them show the same faults rather than two halves of them.
+
+Use it to read what failed in the window: `print_natural_text` prints one line
+for each fault, with its place, its message and its count.
+
+# Example
+
+    println(print_natural_text(get_session_fault_log()))
+
+See also `get_session_message_log`, `get_session_gesture_log`.
 """
-get_session_fault_log() = _SESSION_FAULT_LOG
+function get_session_fault_log end
 
-# A person who types `faults` into an empty tab gets the session's log, not a
+get_session_fault_log(; editor = find_evaluation_editor()) =
+    editor isa Editor ? get_session_document!(FaultLog, editor, FaultLog) : FaultLog()
+
+# A person who types `faults` into an empty tab gets the log of the editor, not a
 # fresh empty one. A fresh one would never fill: what fills a log is the drain
 # of the store it is attached to.
 make_insertion_document(::Type{FaultLog}) = get_session_fault_log()
+make_pred_document(::Type{<:FaultLog}, positional, keywords) = get_session_fault_log()
 
 # ── The fault log of a window, as a wrapper of `build_editor` ────────────────
 
@@ -161,9 +173,30 @@ The wrapper of `build_editor` that attaches the fault log of the session
 step, so the log holds every fault that the editor catches. It is off by default.
 """
 function wrap_editor!(::Val{:fault_log}, layer::Symbol, argument, parts::EditorParts)
-    push!(parts.start_steps, editor -> (attach_fault_target!(editor.faults, get_session_fault_log());
+    push!(parts.start_steps, editor -> (attach_fault_target!(editor.faults, get_session_fault_log(; editor));
                                         nothing))
     parts
 end
 
 get_wrapper_layers(::Val{:fault_log}) = (:screen => 30,)
+
+# The fault log fails while it holds a fault, and counts its lines, until the
+# person clears it.
+function get_document_decoration(log::FaultLog)
+    faults = length(log.entries)
+    DocumentDecoration(; icon = :warning,
+                       conditions = faults == 0 ? DocumentCondition[] : [DocumentCondition(:failed; count = faults)],
+                       tooltip = () -> _make_fault_log_note(log))
+end
+
+# What a row of the log says when the pointer rests on it: what it holds, and how
+# many faults it keeps.
+_make_fault_log_note(log::FaultLog) =
+    TooltipNote(; title = "Faults", text = "What failed in this session, and how often.",
+                facts = ["Faults" => string(length(log.entries)), "Capacity" => string(log.capacity)])
+
+# The command of the log, with no key: a person runs it from the command palette
+# or the menu of its row, and the count of the faults goes back to zero.
+@gestures FaultLog begin
+    nothing => "Clear the fault log" => ReplaceReferencedValueOperation(doc, "entries", CellVector())
+end

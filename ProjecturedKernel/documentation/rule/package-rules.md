@@ -47,9 +47,13 @@ taste; it is the whole mechanism, and [the next section](#why-the-leaf-matters)
 says why. `test_package_graph()` asserts it, along with two more:
 
 - an example package is a dependency only of a leaf, an example or a test;
-- a `@compile_workload` lives in a leaf, or in the entry file of a package that
-  a user loads and whose first window it compiles (see
-  [the next section](#why-the-leaf-matters)).
+- a `@compile_workload` lives in a leaf, in the entry file of a package that a
+  user loads and whose first window it compiles, or in the entry file of a
+  package whose slice has natural rows (see
+  [the next section](#why-the-leaf-matters));
+- a package whose slice has natural rows compiles them with
+  `@compile_workload run_natural_rows_workload(<Domain>Module)` in its entry
+  file.
 
 ### A package with a third-party dependency is a stem, not a sub-stem
 
@@ -57,7 +61,7 @@ says why. `test_package_graph()` asserts it, along with two more:
 backends and the eighteen domain packages, none of which has a third-party
 dependency. It deliberately does not aggregate `ProjecturedSDL`, `ProjecturedODBC`, `ProjecturedTulip`,
 `ProjecturedVideo`, `ProjecturedAnthropic`, `ProjecturedOllama`, `ProjecturedACP`, `ProjecturedMCP`,
-`ProjecturedWeb`, `ProjecturedDataFrames` or
+`ProjecturedWeb`, `ProjecturedDataFrames`, `ProjecturedLanguageServer` or
 `ProjecturedAdaptagrams`, each of which owns one. The umbrella `Projectured`
 depends on `ProjecturedPlatform` and `AutoIntegration`, and re-exports only the
 names of `ProjecturedPlatform.EssentialsModule`. AutoIntegration loads each
@@ -109,6 +113,23 @@ the first window runs holds a `@compile_workload` in its entry file:
 `run_display_workload` of the platform, which runs the first window of
 `display_in_editor`, with a backend that has no device or with an offscreen SDL
 window, and gives it the gestures of a first look.
+
+Every first window builds the natural table of the display, with the rows of
+each domain that the session has loaded, also when it shows no document of that
+domain. A slice has natural rows when it calls a `register_natural_…!`
+function or defines a method of `make_graphics_projection` for a type. So a
+package whose slice has natural rows compiles them in its entry file too:
+
+```julia
+using PrecompileTools: @compile_workload
+@compile_workload run_natural_rows_workload(JsonModule)
+```
+
+`run_natural_rows_workload` runs the `__init__` of the module, where the domain
+registers its rows, and builds the table as the display does. The workload runs
+while the package precompiles, before that `__init__`, so without the call it
+would build no row of the domain. A package that only depends on such a domain,
+as `ProjecturedFSM` depends on `ProjecturedGraph`, needs no workload of its own.
 
 That code survives only where no package loaded later can invalidate it. Three
 rules keep it valid with any packages that a session loads after it:
@@ -217,8 +238,8 @@ needs each direct dependency in `[deps]`, and
 `ProjecturedTest.test_package_graph()` asserts that a package declares exactly
 the packages its own source names — no more and no less.
 
-The kernel depends on nothing. A row names it only where it is the one
-dependency.
+The kernel depends on one package, Preferences, which reads its compile-time
+switches. A row names the kernel only where it is the one dependency.
 
 ### The slices of the platform
 
@@ -254,6 +275,7 @@ guard of the platform checks every edge below against the code.
 | `gesturehelp` | Collection, Graphics, Projection, Screen, Style, Syntax, Text | — |
 | `gesturelog` | Collection, Domain, Graphics, Natural, Projection, Serialization, Style, Syntax, Text | — |
 | `mcplog` | Collection, Domain, Layout, Natural, Primitive, Projection, Serialization, Shell, Style, Widget | — |
+| `terminal` | Domain, Layout, Natural, Primitive, Projection, Style, Widget | — |
 | `task` | Collection, Domain, Focus, Graphics, Layout, Natural, Pane, Primitive, Projection, Style, Widget | — |
 | `fileformat` | Collection, Domain, Layout, Natural, Primitive, Projection, Serialization, Style, Syntax, Text, Widget | — |
 | `fault` | Collection, Domain, Graphics, Natural, Projection, Serialization, Style, Syntax, Text, Widget | — |
@@ -265,7 +287,7 @@ This is not every slice of the platform: `gesturetracking`, `dragtracking`,
 `assistant`, `appearance`, `settings`, `settingsmanaging` and `application` are
 the rest, and `PLATFORM_SLICE_EDGES` in
 [PlatformSuite.jl](../../test/platform/PlatformSuite.jl) has every one of the
-forty-two. `ProjecturedConsole` and `ProjecturedPDF` are backend packages,
+forty-eight. `ProjecturedConsole` and `ProjecturedPDF` are backend packages,
 not slices of the platform, even though neither carries a third-party
 dependency.
 
@@ -281,6 +303,7 @@ embeds. [domain-inventory.md](../design/domain-inventory.md) has the table.
 | `ProjecturedAnthropic` | Kernel | HTTP, JSON3 |
 | `ProjecturedOllama` | Kernel | HTTP, JSON3 |
 | `ProjecturedACP` | Kernel | JSON3 |
+| `ProjecturedLanguageServer` | Domain, Editor, FileFormat, Graphics, Projection, Serialization, Style, Text, Undo, Widget | JSON3 |
 | `ProjecturedOpenRouter` | Kernel | HTTP, JSON3 |
 | `ProjecturedMCP` | Kernel, McpLog | ModelContextProtocol |
 | `ProjecturedTulip` | Layout | MathOptInterface, Tulip |

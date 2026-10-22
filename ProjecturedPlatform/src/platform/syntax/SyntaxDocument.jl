@@ -162,8 +162,8 @@ bracket-style delimiters to any document type.
 - `SyntaxDelimitation(content; opening_delimiter=TextString(""), closing_delimiter=TextString(""))`
 """
 @document struct SyntaxDelimitation <: SyntaxWrapper
-    opening_delimiter::Union{TextString,Nothing} = nothing
-    closing_delimiter::Union{TextString,Nothing} = nothing
+    opening_delimiter::Union{TextString,TextBlock,Nothing} = nothing
+    closing_delimiter::Union{TextString,TextBlock,Nothing} = nothing
     content
 end
 
@@ -189,13 +189,14 @@ get_closing_delimiter(d::SyntaxDelimitation) =
 """
     SyntaxIndentation
 
-Wraps a document with a specific indentation level. Used to control
-pretty-printing indentation for structured documents.
+Wraps a document and moves each line that a break inside it starts by
+`indentation` levels, as the `nest` of a pretty printer does. It makes no break of
+its own: the line its content starts on stays where the break before it put it.
 
 # Fields
 
 - `content` — the wrapped document
-- `indentation::Int` — the indentation level (number of spaces/tabs)
+- `indentation::Int` — the levels, each `indent_size` wide
 
 # Constructor
 
@@ -336,7 +337,7 @@ a fatal method overwrite during precompilation. Leading with `separator` puts th
 required field last, so generation starts at arity 2 and the arity-1 form is ours.
 """
 @document struct SyntaxSeparation <: SyntaxSequence
-    separator::Union{TextString,Nothing} = nothing
+    separator::Union{TextString,TextBlock,Nothing} = nothing
     children::CellVector
 end
 
@@ -363,15 +364,38 @@ get_separator(s::SyntaxSeparation) =
 # delimiter is configuration (`open::String = ""` for YAML's block style, say)
 # stay written as it is and still emit no span.
 #
-# A `TextString` is passed through untouched, never inspected: its content is a
-# reactive cell, and one that is empty *now* may not be later (XmlElement's tag
-# close alternates between `" "` and `""` as attributes come and go). Dropping its
-# span on the strength of a momentary emptiness would mean it could never come
-# back — so an emptiable delimiter must be a `TextString`, and a statically absent
-# one must be `nothing`.
-_text(t::TextString) = t
-_text(s::AbstractString) = isempty(s) ? nothing : TextString(s)
+# A `TextString` is not dropped for its emptiness: its content is a reactive
+# cell, and one that is empty *now* may not be later (XmlElement's tag close
+# alternates between `" "` and `""` as attributes come and go). Dropping its span on
+# the strength of a momentary emptiness would mean it could never come back — so an
+# emptiable delimiter must be a `TextString`, and a statically absent one must be
+# `nothing`.
+#
+# A text holds no `'\n'`: a string with a break, such as `open = "[\n"`, becomes a
+# `TextBlock` of lines in the same style, and so does a `TextString` whose content is
+# a constant with a break. A `TextString` whose content is a computation is passed
+# through, because only its value now could be read.
+_text(t::TextString) = _has_constant_break(t) ? _make_text_lines(t) : t
+_text(t::TextBlock) = t
+_text(s::AbstractString) =
+    isempty(s) ? nothing : occursin('\n', s) ? make_text_block(s, _UNSTYLED_TEXT_STYLE) : TextString(s)
 _text(::Nothing) = nothing
+
+# The style of a `TextString` made from a bare string.
+const _UNSTYLED_TEXT_STYLE = StyleText(UNSTYLED_TEXT_FONT, color_default)
+
+# Whether the content of `t` is a constant that holds a `'\n'`.
+_has_constant_break(t::TextString) =
+    !is_computed_cell(getfield(t, :content)) && occursin('\n', t.content::AbstractString)
+
+# The lines of the text of `t`, in its font and its colour.
+_make_text_lines(t::TextString) =
+    make_text_block(t.content::AbstractString, StyleText(t.font, t.font_color))
+
+# The value of a leaf: a `TextString` whose content is a constant with a break
+# becomes its lines; any other value, such as a `bound(…)` marker, is kept.
+_make_value_text(t::TextString) = _has_constant_break(t) ? _make_text_lines(t) : t
+_make_value_text(value) = value
 
 # Normalize the `children` argument of `SyntaxNode` to the `CellVector` the inner
 # constructor stores. A `@projection_template` marker (e.g. `collection(:field)`)
@@ -405,13 +429,15 @@ _children(c) = c
 
 A leaf node with a content `value` and optional opening/closing delimiters.
 `value` is the sole positional argument (so the meaningful content leads); it is
-a `TextString`, a bare `String`/`Function` (auto-wrapped), or a
-`@projection_template` marker such as `bound(:value, …)`. Every delimiter /
-layout / selection field is an optional keyword:
+a `TextString`, a `TextBlock` of lines, a bare `String`/`Function` (auto-wrapped),
+or a `@projection_template` marker such as `bound(:value, …)`. A text holds no
+`'\n'`: a string, or a `TextString` with a constant content, that holds one
+becomes a `TextBlock` of lines in its style. Every delimiter / layout / selection
+field is an optional keyword:
 
-  - `open`, `close` — delimiter `TextString`s (a bare `String` is auto-wrapped),
-    or `nothing` for a leaf that has no such delimiter; default `nothing`. Each
-    is independently optional: an opening delimiter may be present while the
+  - `open`, `close` — delimiter texts (a bare `String` is auto-wrapped), or
+    `nothing` for a leaf that has no such delimiter; default `nothing`. Each is
+    independently optional: an opening delimiter may be present while the
     closing one is absent, and vice versa.
   - `indentation::Int` — pretty-print indentation; default `0`.
   - `collapsed::Bool` — collapsed state; default `false`.
@@ -430,9 +456,9 @@ The `selection` cell holds a path into the leaf's rendered span, or `nothing`:
   `.close{k}`  — cursor at boundary k of the close delimiter, if present
 """
 @document struct SyntaxLeaf <: SyntaxDocument
-    open::Union{TextString,Nothing} = nothing
-    close::Union{TextString,Nothing} = nothing
-    value::TextString
+    open::Union{TextString,TextBlock,Nothing} = nothing
+    close::Union{TextString,TextBlock,Nothing} = nothing
+    value::Union{TextString, TextGraphics, TextBlock}
     indentation::Int = 0
     collapsed::Bool = false
 end
@@ -444,7 +470,7 @@ end
 # `@document` keyword constructor, so every default is declared once — on the
 # field — and never restated here.
 SyntaxLeaf(value; open=nothing, close=nothing, kwargs...) =
-    SyntaxLeaf(; open=_text(open), close=_text(close), value=value, kwargs...)
+    SyntaxLeaf(; open=_text(open), close=_text(close), value=_make_value_text(value), kwargs...)
 
 # Bare-string / function content ergonomics route through the keyword form so
 # they inherit the same defaults.
@@ -463,10 +489,15 @@ separator. `children` is the sole positional argument; it is a
 `@projection_template` marker such as `collection(:field)`. Every delimiter /
 layout / selection field is an optional keyword:
 
-  - `open`, `close`, `sep` — `TextString`s (a bare `String` is auto-wrapped), or
+  - `open`, `close`, `sep` — texts (a bare `String` is auto-wrapped), or
     `nothing` for a node that has no such delimiter/separator; default `nothing`.
-    Each is independently optional.
-  - `indentation::Int` — pretty-print indentation; default `0`.
+    Each is independently optional. A break is text: a string with a `'\n'`, such
+    as `open = "[\n"`, becomes a `TextBlock` of lines.
+  - `indentation::Int` — the levels, each `indent_size` wide, by which the node
+    moves the lines that a break inside it starts: a break in `open` or `sep`
+    starts a line that many levels in, and a line that a break in a child starts
+    moves as much; a break in `close` starts a line at the level of the node.
+    Default `0`.
   - `collapsed::Bool` — collapsed state; default `false`.
   - `selection` — a `Reference`/`Cell`/`nothing`; default `nothing`.
 
@@ -484,9 +515,9 @@ The `selection` cell routes a cursor into the rendered node, or `nothing`:
                         clears all other children and propagates the rest into child i
 """
 @document struct SyntaxNode <: SyntaxSequence
-    open::Union{TextString,Nothing} = nothing
-    close::Union{TextString,Nothing} = nothing
-    sep::Union{TextString,Nothing} = nothing
+    open::Union{TextString,TextBlock,Nothing} = nothing
+    close::Union{TextString,TextBlock,Nothing} = nothing
+    sep::Union{TextString,TextBlock,Nothing} = nothing
     children::CellVector
     indentation::Int = 0
     collapsed::Bool = false
@@ -507,17 +538,26 @@ is_syntax_collapsible(::SyntaxNode)  = true
 const _CLOSING_DELIMITER_FIELDS = ("close", "closing_delimiter")
 
 """
-    is_on_closing_delimiter(selection) -> Bool
+    is_on_closing_delimiter(selection; from = 0) -> Bool
 
 Whether `selection`, the selection that a document holds, is a caret on the closing
 delimiter that the projection of that document to syntax printed, such as the `}`
-of an object. A container rule that leaves a key to its parent there asks this.
+of an object, at the offset `from` of the text of the delimiter or after it. A
+selection of the whole delimiter is on it. A container rule that leaves a key to
+its parent there asks this.
+
+A delimiter that starts with a break, such as `"\\n}"`, gives the length of the
+break as `from`. The caret before the break stands at the end of the line of the
+last child, so it is not on the `}`.
 """
-function is_on_closing_delimiter(selection)
+function is_on_closing_delimiter(selection; from::Integer = 0)
     is_introduced_reference(selection) || return false
     output = strip_reference_types(selection.head.output_path)
-    return output isa ConcreteReference && output.head isa FieldReferenceStep &&
-           output.head.name in _CLOSING_DELIMITER_FIELDS
+    (output isa ConcreteReference && output.head isa FieldReferenceStep &&
+     output.head.name in _CLOSING_DELIMITER_FIELDS) || return false
+    caret = output.tail
+    (caret isa ConcreteReference && caret.head isa ARangeReferenceStep) || return true
+    return caret.head.start >= from
 end
 
 # Canonical keyword constructor: `children` leads positionally. Its only job is to
@@ -538,6 +578,11 @@ SyntaxNode(children; open=nothing, close=nothing, sep=nothing, kwargs...) =
 # An absent delimiter contributes nothing to the rendered string.
 _delimiter_content(::Nothing) = ""
 _delimiter_content(t::TextString) = t.content
+_delimiter_content(t::TextBlock) = get_flat_string(t)
+
+# The rendered text of a leaf value: a block gives its flat string.
+_value_content(value::TextBlock) = get_flat_string(value)
+_value_content(value) = value.content
 
 """
     render(tree::SyntaxDocument) -> String
@@ -546,7 +591,7 @@ Recursively render the tree into a string. Reading cells during rendering
 registers reactive dependencies automatically.
 """
 function render(leaf::SyntaxLeaf)
-    string(_delimiter_content(leaf.open), leaf.value.content, _delimiter_content(leaf.close))
+    string(_delimiter_content(leaf.open), _value_content(leaf.value), _delimiter_content(leaf.close))
 end
 
 # Every compound renders the same way — its children, joined by whatever separator
@@ -555,11 +600,16 @@ end
 _span_of(::Nothing) = nothing
 _span_of(pair::Pair) = pair.second
 
+# The breaks of the delimiters frame the children: a node with no child renders
+# only the first line of its opening delimiter and the last line of its closing
+# delimiter.
 function render(c::SyntaxCompound)
-    parts = [render(child) for child in get_syntax_children(c)]
-    string(_delimiter_content(_span_of(get_opening_delimiter(c))),
-           join(parts, _delimiter_content(_span_of(get_separator(c)))),
-           _delimiter_content(_span_of(get_closing_delimiter(c))))
+    children = get_syntax_children(c)
+    opening = _delimiter_content(_span_of(get_opening_delimiter(c)))
+    closing = _delimiter_content(_span_of(get_closing_delimiter(c)))
+    isempty(children) && return string(first(split(opening, '\n')), last(split(closing, '\n')))
+    string(opening, join([render(child) for child in children], _delimiter_content(_span_of(get_separator(c)))),
+           closing)
 end
 
 # ── set_cell_computation! delegation ────────────────────────────────────────────────

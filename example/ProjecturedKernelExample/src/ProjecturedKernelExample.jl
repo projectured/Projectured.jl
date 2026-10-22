@@ -20,11 +20,21 @@ external-agent seam of `AgentModule`, and the in-memory `HeadlessBackend` for th
 `BackendModule.Backend` seam. They are doubles, so by architectural requirement
 they live in an example package, never in `main` — none is reachable from a
 production build.
+
+A kernel layer that a REPL session can show has a **walkthrough**: a function that
+runs the lines that a person types to try the layer, and prints each line with the
+value that it gives. `print_cell_example` shows the cell layer,
+`print_cell_struct_example` the struct layer, `print_clock_example` the clock
+layer, `print_fault_example` the fault layer, and `print_performance_example` the
+performance layer.
 """
 module ProjecturedKernelExample
 
 using ProjecturedKernel.CellModule
-using ProjecturedKernel.EventModule
+import ProjecturedKernel.CellStructModule
+import ProjecturedKernel.ClockModule
+using ProjecturedKernel.FaultModule
+using ProjecturedKernel.PerformanceModule
 using ProjecturedKernel.EventModule
 using ProjecturedKernel.BackendModule
 import ProjecturedKernel.ToolModule
@@ -38,7 +48,8 @@ import ProjecturedKernel.LlmModule: Llm, stream_turn, LlmRequest, LlmToolUse,
     LlmTurnEnd
 import ProjecturedKernel.AgentModule
 import ProjecturedKernel.AgentModule: AgentToolCallUpdate, AgentPermissionOption, AgentPermissionRequest,
-    AgentOption, AgentOptionValue, AgentOptionsUpdate
+    AgentOption, AgentOptionValue, AgentOptionsUpdate, AgentSignInMethod, AgentSignInException,
+    AgentQuestionField, AgentQuestionRequest, AgentEventQueue
 
 include("../example/kernel/Harness.jl")
 include("../example/kernel/LlmFake.jl")         # FakeLlm — canned-reply test double (no network)
@@ -49,12 +60,19 @@ include("../example/kernel/SearchScaleMeasurement.jl") # what a search costs on 
 include("../example/kernel/SearchCorpus.jl")           # the corpus of a whole application
 include("../example/kernel/CallSite.jl")               # where a caller writes each name
 include("../example/kernel/SearchRanking.jl")          # rankings of a search compared
+include("../example/kernel/Walkthrough.jl")            # a REPL session that shows a layer
+include("../example/kernel/CellExample.jl")            # the walkthrough of the cell layer
+include("../example/kernel/CellStructExample.jl")      # the walkthrough of the struct layer
+include("../example/kernel/ClockExample.jl")           # the walkthrough of the clock layer
+include("../example/kernel/FaultExample.jl")           # the walkthrough of the fault layer
+include("../example/kernel/PerformanceExample.jl")     # the walkthrough of the performance layer
 
 export Example, AtomicDocument, force_projected
 export write_example_image, record_example_video, make_typein_gestures
 export FakeLlm, ScriptedLlm,
        make_scripted_turn, make_scripted_think, make_scripted_say, make_scripted_run
-export ScriptedAgentConnection, make_scripted_permission_step, make_scripted_agent_options
+export ScriptedAgentConnection, make_scripted_permission_step, make_scripted_question_step,
+       make_scripted_agent_options
 export HeadlessBackend, rendered_output, push_event!
 export ScaleQuestion, measure_search_scale!
 export collect_package_modules, make_corpus_declaration, make_corpus_tool_set,
@@ -64,5 +82,7 @@ export CallSite, collect_call_sites, find_module_folder, rank_call_sites, format
 export SearchQuestion, make_search_question, make_candidate_text, SearchRanker,
        make_word_ranker, make_meaning_ranker, make_classifier_ranker, make_cascade_ranker,
        make_tree_ranker, measure_search_rankings, make_guide_units
+export print_cell_example, print_cell_struct_example, print_clock_example,
+       print_fault_example, print_performance_example
 
 end # module ProjecturedKernelExample

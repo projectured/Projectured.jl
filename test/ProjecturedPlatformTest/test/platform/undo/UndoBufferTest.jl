@@ -26,6 +26,33 @@ end
 
 _texts(list::UndoList) = [item.value for item in list.items]
 
+# Each text that a graphics output draws, with the place where it draws it.
+function _drawn_texts(node, found = Tuple{String,Float64,Float64}[], x = 0.0, y = 0.0)
+    node isa Cell && return _drawn_texts(node[], found, x, y)
+    if node isa GraphicsCanvas
+        foreach(element -> _drawn_texts(element, found, x + node.x, y + node.y), node.elements)
+    elseif node isa GraphicsViewport
+        _drawn_texts(node.content, found, x + node.x, y + node.y)
+    elseif node isa GraphicsText
+        push!(found, (String(node.text), x + node.x, y + node.y))
+    end
+    found
+end
+
+# Whether an IO map of type `T` is on the chain under `iomap`.
+function _has_iomap(iomap, ::Type{T}; depth = 12) where {T}
+    iomap isa T && return true
+    depth == 0 && return false
+    for name in fieldnames(typeof(iomap))
+        value = getfield(iomap, name)
+        value isa Cell && (value = value[])
+        (value isa Document || value isa Projection || value isa Number ||
+         value isa AbstractString || value === nothing) && continue
+        _has_iomap(value, T; depth = depth - 1) && return true
+    end
+    false
+end
+
 # A write into the first element of the list the buffer holds, in the content's
 # own frame — the frame the reader of the content answers in.
 _write_first(text) = ReplaceReferencedValueOperation(nothing,
@@ -86,6 +113,23 @@ function test_undo_buffer()
         @test !is_undo_step(nothing, ToggleCollapseOperation())
     end
 
+    @testset "the way back from an edit with view state takes back only the edit" begin
+        # A drop writes the document and ends the drag in one compound. Undo takes
+        # the write back and leaves the drag ended, because a history does not
+        # record view state.
+        edited = UndoLeaf("a", nothing)
+        held = UndoLeaf("held", nothing)
+        editor = _UndoEditor(edited)
+        drop = CompoundOperation(Any[
+            ReplaceReferencedValueOperation(edited, "value", "b"),
+            ReplaceViewStateOperation(ReplaceReferencedValueOperation(held, "value", "released"))])
+        inverse = evaluate_invertible_operation!(editor, drop)
+        @test inverse !== nothing
+        @test (edited.value, held.value) == ("b", "released")
+        evaluate_operation(editor, inverse)
+        @test (edited.value, held.value) == ("a", "released")
+    end
+
     @testset "an entry with no way back is a barrier" begin
         @test is_undo_barrier(UndoEntry("opaque", nothing, nothing))
         @test !is_undo_barrier(UndoEntry("plain", DoNothingOperation(), nothing))
@@ -98,6 +142,16 @@ function test_undo_buffer()
         iomap = print_document(projection, IdentityProjection(), buffer, PrinterContext())
         @test iomap.output === list
         @test iomap.content_iomap.input === list
+    end
+
+    @testset "the natural renderer draws a buffer as what it holds, and records through it" begin
+        renderer = NaturalToGraphics(; measure = FixedMeasure(8, 12, 4, 0))
+        offer = PrinterContext(EmptyReference(), Cell(800), Cell(600), Dict{Symbol,Any}())
+        held = print_document(renderer, nothing, UndoBuffer(PrimitiveString("held")), offer)
+        plain = print_document(renderer, nothing, PrimitiveString("held"), offer)
+        @test _drawn_texts(held.output) == _drawn_texts(plain.output)
+        @test first.(_drawn_texts(held.output)) == ["held"]
+        @test _has_iomap(held, UndoBufferToAnyIoMap)
     end
 
     @testset "a reference gains the content step going back and loses it going forward" begin
@@ -259,6 +313,28 @@ function test_undo_buffer()
               get_reference_steps(before)
     end
 
+    # A step that deletes the selected element and selects the one before it. The
+    # undo puts the element back first, and then the caret on it: the element does
+    # not exist before that, so the way back holds no move of the caret.
+    @testset "the caret of a step goes back after its edits" begin
+        list = _make_list(["a", "b", "c"])
+        buffer = UndoBuffer(list)
+        editor = _UndoEditor(buffer)
+        items = Reference(FieldReferenceStep("content"), FieldReferenceStep("items"))
+        third = Reference(FieldReferenceStep("content"), FieldReferenceStep("items"), RangeReferenceStep(2, 3))
+        second = Reference(FieldReferenceStep("content"), FieldReferenceStep("items"), RangeReferenceStep(1, 2))
+        replace_selection!(buffer, third)
+        evaluate_operation(editor, RecordUndoOperation(buffer, CompoundOperation(Any[
+            make_delete_elements_operation(items, 3), ReplaceSelectionOperation(second)])))
+        @test _texts(list) == ["a", "b"]
+        evaluate_operation(editor, UndoOperation(buffer))
+        @test _texts(list) == ["a", "b", "c"]
+        @test get_reference_steps(strip_reference_types(get_selection(buffer))) == get_reference_steps(third)
+        evaluate_operation(editor, RedoOperation(buffer))
+        @test _texts(list) == ["a", "b"]
+        @test get_reference_steps(strip_reference_types(get_selection(buffer))) == get_reference_steps(second)
+    end
+
     # A run of typed characters is one step. A caret move, a key that is not a
     # character, and a pause each end the run. The content is the identity, so a
     # "typed character" is a `KeyPress` gesture answered with a write of the value.
@@ -412,6 +488,37 @@ function test_undo_buffer()
         evaluate_operation(editor, read_intent(projection, iomap, _write_first("changed")))
         evaluate_operation(editor, read_intent(projection, iomap, KeyDown(:z, ctrl; time = 0.0)))
         @test length(buffer.undo_entries) == 0
+    end
+
+    @testset "has_unsaved_edits follows each change, and the same answer reaches no reader" begin
+        list = _make_list(["a"])
+        buffer = UndoBuffer(list)
+        projection = UndoBufferToAnyProjection()
+        iomap = print_document(projection, IdentityProjection(), buffer, PrinterContext())
+        editor = _UndoEditor(buffer)
+        make_write(text) = read_intent(projection, iomap, _write_first(text))
+        reader = Cell(Computation(() -> has_unsaved_edits(buffer)))
+        @test reader[] == false
+        evaluate_operation(editor, make_write("b"))
+        @test reader[] == true
+        # A new step of a history that has edits writes `true` again.
+        evaluate_operation(editor, make_write("c"))
+        @test is_cell_valid(reader)
+        record_saved_state!(buffer)
+        @test reader[] == false
+        evaluate_operation(editor, make_write("d"))
+        @test reader[] == true
+        evaluate_operation(editor, UndoOperation(buffer))
+        @test reader[] == false
+        evaluate_operation(editor, RedoOperation(buffer))
+        @test reader[] == true
+        # A typed character that joins the run of the newest step.
+        joined = RecordUndoOperation(buffer, get_wrapped_operation(make_write("de")), :continues)
+        evaluate_operation(editor, joined)
+        @test length(buffer.undo_entries) == 3
+        @test is_cell_valid(reader) && reader[] == true
+        clear_undo_history!(buffer)
+        @test reader[] == false
     end
 
     # The outermost buffer records every step a buffer below it records, so asking

@@ -81,7 +81,7 @@ struct PhraseToGraphics <: Projection
 end
 
 function print_document(p::PhraseToGraphics, recursion, document, ctx)
-    line = TextBlock(TextString(p.message(document), unwrap_cell(p.style)))
+    line = TextBlock(TextLine(TextString(p.message(document), unwrap_cell(p.style))))
     inner = print_document(p.text, recursion, line, ctx)
     SimpleIoMap(p, document, get_iomap_output(inner))
 end
@@ -120,6 +120,7 @@ function NaturalToGraphics(; measure::TextMeasure,
                            appearance::Appearance = Appearance())
     widget_theme = get_scaled_theme!(appearance, WidgetTheme)
     graphics_theme = get_scaled_theme!(appearance, GraphicsTheme)
+    tooltip_theme = get_scaled_theme!(appearance, TooltipTheme)
     w2g = WidgetToGraphics(; measure, theme = widget_theme, graphics_theme)
     text_theme = get_scaled_theme!(appearance, TextTheme)
     # Prose: a text document, at the prose spacing of the text theme.
@@ -147,6 +148,12 @@ function NaturalToGraphics(; measure::TextMeasure,
 
     table = vcat(
         Pair{Type,Any}[p for p in extra],
+        # A document that a person arranged prints its document with the
+        # arrangement in the context, through this renderer.
+        Pair{Type,Any}[ArrangementDocument => ArrangingProjection(),
+                       ArrangementChips => ArrangementChipsToGraphics(),
+                       CellVector{ArrangementGroupRow} => ChainingProjection(ArrangementGroupRowsToWidget(),
+                                                                             GridLayoutToGraphicsCanvas())],
         # layouts before widgets: a WidgetTable builds a GridLayout
         LayoutToGraphics(; theme = graphics_theme).dispatch,
         w2g.dispatch,                  # every widget node (incl. WidgetTable)
@@ -158,8 +165,8 @@ function NaturalToGraphics(; measure::TextMeasure,
         # node be a widget, a page hold a live card, and a number inside a
         # formula render through the shared primitive path. The rows of the
         # seam `make_graphics_projection` come first.
-        Pair{Type,Any}[type => make_graphics_projection(type; measure = measure,
-                                                        appearance = appearance)
+        Pair{Type,Any}[type => Base.invokelatest(make_graphics_projection, type; measure = measure,
+                                                 appearance = appearance)
                        for type in collect_graphics_projection_types()],
         get_natural_graphics_entries(measure = measure, appearance = appearance),
         # A primitive document that is no part of a syntax tree draws as plain
@@ -192,8 +199,11 @@ function NaturalToGraphics(; measure::TextMeasure,
                                                                             name = :collection_gap)),
                                                  stack()),
             # A tooltip window: a column of what the parts say, each in its own
-            # domain.
-            TooltipContent  => ChainingProjection(TooltipContentToVerticalLayout(; theme = widget_theme),
+            # domain, in a frame.
+            TooltipContent  => ChainingProjection(TooltipContentToVerticalLayout(; theme = tooltip_theme),
+                                                 stack()),
+            # What a part says about itself in a tooltip, piece by piece.
+            TooltipNote     => ChainingProjection(TooltipNoteToVerticalLayout(; theme = tooltip_theme),
                                                  stack()),
         ],
         # The fallback's own tail, then this one. A session that loaded a package
@@ -206,8 +216,11 @@ function NaturalToGraphics(; measure::TextMeasure,
     )
 
     # A barrier at the one recursion point: a fault costs one widget, one layout
-    # or one document of a domain, and it draws as a line of graphics.
-    RecursiveProjection(FaultCatchingProjection(inner = TypeDispatchingProjection(table),
+    # or one document of a domain, and it draws as a line of graphics. Inside it,
+    # the dispatch puts what a person arranged at a place before the row of the
+    # place, so a fault of a filter costs that place too.
+    RecursiveProjection(FaultCatchingProjection(inner = make_arranged_dispatch(TypeDispatchingProjection(table);
+                                                                               bar = ArrangementBarProjection),
                                                 substitute = FaultToGraphics()))
 end
 

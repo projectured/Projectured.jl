@@ -14,7 +14,7 @@ depend on the fault and not be a fixed fallback, catch in place and call
 
 What it does, in order:
 
-1. An exception that [`is_passthrough_exception`](@ref) names is re-raised at
+1. An exception that is not a fault ([`is_fault_exception`](@ref)) is re-raised at
    once. A request to quit must reach the loop that stops on it.
 2. The consecutive count for `counter` grows, so a circuit breaker above can
    read how long this has been going on. A run without a fault resets it.
@@ -26,9 +26,10 @@ What it does, in order:
 3. The fault goes in the store, keyed, so the thousands of nodes one bug fails
    at become one record with a number.
 4. Reporting is left to [`drain_faults!`](@ref), because the drain holds the
-   list of the new records, and every record in the store reaches it. One
-   reporter, one line per new fault. A barrier given no store has no drain
-   behind it, so that one reports for itself.
+   list of the new records, and every record in the store reaches it. It
+   reports a record when the record is new, and again each time its count
+   reaches a power of ten. A barrier given no store has no drain behind it, so
+   that one reports for itself.
 
 **`policy.is_barrier_enabled` false means it catches nothing.** An editor that a
 test makes has it false, so a broken projection fails its test rather than
@@ -36,9 +37,9 @@ passing quietly.
 
 # Example
 
-    run_fault_barrier!(editor.faults; policy = editor.fault_policy,
-                       backend = editor.backend, site = :print) do
-        run_print_stage!(editor)
+    count = run_fault_barrier!(store; policy, backend, site = :read,
+                               fallback = 0) do
+        parse(Int, text)
     end
 
 See also [`FaultPolicy`](@ref), [`record_fault!`](@ref) and
@@ -53,7 +54,7 @@ function run_fault_barrier!(body, store; policy::FaultPolicy, backend, site::Sym
         reset_consecutive_fault_count!(store, counter)
         value
     catch exception
-        is_passthrough_exception(exception) && rethrow()
+        is_fault_exception(exception) || rethrow()
         traceback = catch_backtrace()
         _count_fault!(store, counter)
         record_fault!(store, site; origin, reference, exception, traceback)

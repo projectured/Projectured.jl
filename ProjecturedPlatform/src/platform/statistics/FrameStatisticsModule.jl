@@ -9,7 +9,9 @@ documents of [`FrameStatisticsDocument.jl`](FrameStatisticsDocument.jl):
 `FrameStatistics`, a table of one summary for each measurement, and
 `FrameTimeSeries`, the times of the recent frames.
 [`FrameStatisticsToWidget`](FrameStatisticsToWidget.jl) draws the table as
-widgets: a summary table, a table of the recent frames and a Pause toggle. The
+widgets: a table of the parts of a frame, a table of the other measurements, a
+table of the recent frames, a choice of what two of them show, and a Pause
+toggle. The
 chart of the frame times is a projection of the chart domain,
 `FrameTimeSeriesToChart`, so this module depends on no domain.
 """
@@ -33,17 +35,21 @@ using ..PerformanceModule
 using ..ProjectionAlgebraModule
 using ..ProjectionModule
 using ..ReferenceModule
+using ..RosterModule
 using ..SerializationModule
 using ..StyleModule
+using ..TooltipModule
 using ..WidgetModule
 using ..EditorModule
+using ..ToolModule
 
 # Imported to extend: this module adds a method to each of these.
 import ..DocumentModule: get_document_title
-import ..DomainModule: get_insertion_aliases, make_insertion_document
+import ..DomainModule: get_insertion_aliases, make_insertion_document, get_document_decoration
 import ..FeedModule: drain_changes!, compute_wake_deadline
 import ..ProjectionModule: print_document, read_intent, map_reference_forward
-import ..SerializationModule: pred_arguments
+import ..SerializationModule: pred_arguments, make_pred_document
+import ..RosterModule: collect_roster_parts, collect_roster_items
 import ..EditorModule: wrap_editor!, get_wrapper_layers
 
 export FrameStatisticsRow, FrameStatistics, get_session_frame_statistics,
@@ -63,6 +69,9 @@ include("FrameStatisticsToWidget.jl")
 # projection instance. The widgets that the projection builds come back through
 # the renderer, which draws them with the rows of the widgets.
 function __init__()
+    # The recent frames of the session, as a source of a roster.
+    register_roster_source!(:frames, link -> _SessionFrames();
+                            description = "the recent frames of the session: frame, and the time of each stage in seconds")
     register_natural_graphics!(:statistics, (; measure, appearance) -> Pair{Type,Any}[
         FrameStatistics => ChainingProjection(
             make_frame_statistics_projection(;

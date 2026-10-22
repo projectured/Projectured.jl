@@ -9,9 +9,17 @@ j2s = RecursiveProjection(JsonToSyntax())
 @test render(print_document(j2s, JsonString("hi")).output) == "\"hi\""
 @test render(print_document(j2s, JsonString("a\"b")).output) == "\"a\\\"b\""
 
-# array
+# array: its texts hold its breaks, which `render` joins with no indentation
 ja = JsonArray([JsonNumber(1), JsonNumber(2)])
-@test render(print_document(j2s, ja).output) == "[1, 2]"
+@test render(print_document(j2s, ja).output) == "[\n1,\n2\n]"
+
+# The text of an array: each element on a line one level in, the `]` at the level
+# of the array, and an empty array on one line.
+_json_text(doc) = get_flat_string(print_document(RecursiveProjection(SyntaxToText()),
+                                                 print_document(j2s, doc).output).output)
+@test _json_text(ja) == "[\n  1,\n  2\n]"
+@test _json_text(JsonArray()) == "[]"
+@test _json_text(JsonArray([JsonObject("a" => JsonNumber(1))])) == "[\n  {\n    \"a\": 1\n  }\n]"
 
 # The part under the pointer reaches the syntax node of each array through the
 # forward map of the rule template: the pointer on the `2` of `[1, [2, 3]]`.
@@ -40,7 +48,7 @@ jout = Cell(@computation render(jtree))
 @test occursin("10", jout[])
 
 jdoc["x"].value = 99
-@test !is_cell_up_to_date(jout)
+@test !is_cell_valid(jout)
 @test occursin("99", jout[])
 
 # structural change
@@ -55,8 +63,8 @@ mutable struct _JsonReaderEditor
     iomap::Any
 end
 
-# Drive the JSON reader command set (the Lisp `json/read-command` plus the
-# array/object insert and Tab readers). Each JSON projection must work as the
+# Drive the JSON reader command set: the readers of the JSON values, and the
+# array/object insert and Tab readers. Each JSON projection must work as the
 # whole document on its own, so the cursor is placed with a whole-element
 # selection and a raw key gesture is fed straight to the root JSON reader.
 function test_json_to_syntax_reader()
@@ -154,11 +162,19 @@ end
         @test n.value === 42
         @test render(print_document(RecursiveProjection(JsonToSyntax()), n).output) == "42"
     end
-    # A key that can be part of a number stays an edit, also when the text does
-    # not parse yet.
+    # A key that can be part of a number, and makes a text that no number shows,
+    # replaces the number with an insertion of that text, so the text stays.
     n = JsonNumber(42)
-    @test type_key!(n, @reference(n, value{2}), 'e') isa ReplaceNumberRangeOperation
-    @test n.value === nothing
+    @test type_key!(n, @reference(n, value{2}), 'e') isa CompoundOperation
+    typed = JsonArray([JsonNumber(42)])
+    type_key!(typed, @reference(typed, elements[1].value{2}), '.')
+    @test typed[1] isa JsonInsertion
+    @test typed[1].value == "42."
+    # The key that makes a text that a number shows exactly turns it into the number.
+    type_key!(typed, @reference(typed, elements[1].value{3}), '5')
+    @test typed[1] isa JsonNumber
+    @test typed[1].value === 42.5
+    @test length(typed.elements) == 1
     # The number is in an array: the edit keeps the value, and the array its length.
     arr = JsonArray([JsonNumber(42)])
     type_key!(arr, @reference(arr, elements[1].value{2}), 'a')
@@ -166,6 +182,15 @@ end
     @test length(arr.elements) == 1
     type_key!(arr, @reference(arr, elements[1].value{2}), '5')
     @test arr[1].value === 425
+    # A bool takes no text edit: a key inside it makes no edit, and the key of a
+    # gesture of the domain still reaches the gesture.
+    flag = JsonArray([JsonBool(true)])
+    type_key!(flag, @reference(flag, elements[1].value{2}), 'x')
+    @test flag[1] isa JsonBool
+    @test flag[1].value === true
+    type_key!(flag, @reference(flag, elements[1].value{2}), 'f')
+    @test flag[1] isa JsonBool
+    @test flag[1].value === false
 end
 
 @testset "a digit typed into a cleared number in a container makes a number" begin
@@ -218,9 +243,40 @@ end
     @test selof(new_entry) isa ConcreteReference   # cursor in the key
 end
 
+@testset "a , before the closing break is the container's, on the } the parent's" begin
+    chain = ChainingProjection(RecursiveProjection(JsonToSyntax()),
+                               RecursiveProjection(SyntaxToText()),
+                               TextToGraphics(measure = FontFileMeasure()))
+    press!(document, key) = begin
+        op = read_intent(chain, print_document(chain, document), key)
+        op === nothing || evaluate_operation(_JsonReaderEditor(document, nothing), op)
+        op
+    end
+    right = KeyDown(:right, ModifierKeys(); time = 0.0)
+    # `{"a": {"b": "x"}}` with the caret at `"x│"`, and Right pressed `n` times.
+    function make_document(n)
+        root = JsonObject("a" => JsonObject("b" => JsonString("x")))
+        set_selection!(root, @reference(root, entries[1].value.entries[1].value.value{1}))
+        foreach(_ -> press!(root, right), 1:n)
+        (root, root.entries[1].value)
+    end
+    # One Right leaves the string for the end of its line, before the break that
+    # starts the closing delimiter of the nested object: still its content.
+    root, nested = make_document(1)
+    @test is_on_closing_delimiter(selof(nested))
+    @test !is_on_closing_delimiter(selof(nested); from = 1)
+    @test press!(root, KeyPress(','; time = 0.0)) isa CompoundOperation
+    @test (length(root.entries), length(nested.entries)) == (1, 2)
+    # Four stand on the nested `}`, after the break: the root adds the entry.
+    root, nested = make_document(4)
+    @test is_on_closing_delimiter(selof(nested); from = 1)
+    @test press!(root, KeyPress(','; time = 0.0)) isa CompoundOperation
+    @test (length(root.entries), length(nested.entries)) == (2, 1)
+end
+
 @testset "Tab moves from an entry key to its value" begin
     obj = JsonObject("a" => JsonNumber(1))
-    op = read_key(obj, @reference(obj, entries[1].key{0}), KeyDown(:tab, ModifierKeys(); time = 0.0))
+    op = read_key(obj, @reference(obj, entries[1].key{0}), KeyPress('\t'; time = 0.0))
     @test op isa ReplaceSelectionOperation
     # The Tab op selects the entry's value whole, carrying its folded types. The
     # terminal checkpoint is the value's *concrete* type, not the declared `Document`
@@ -229,7 +285,7 @@ end
     @test is_reference_equal(op.path,
           @reference ::JsonObject.entries::CellVector[1]::JsonObjectEntry.value::JsonNumber)
     # Tab outside a key does nothing.
-    @test read_key(obj, whole, KeyDown(:tab, ModifierKeys(); time = 0.0)) === nothing
+    @test read_key(obj, whole, KeyPress('\t'; time = 0.0)) === nothing
 end
 
 @testset "empty values render a muted placeholder hint" begin

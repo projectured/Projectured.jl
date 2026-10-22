@@ -43,7 +43,9 @@ that it declares, also when a sibling file holds the body. A fragment that
 defines no public name has no statement. Do not put a comment inside the block:
 the docstring of the module says what each fragment holds.
 [CellModule.jl](../../source/kernel/cell/CellModule.jl) shows the shape, and
-`test_exports()` checks it.
+`test_exports()` checks it. A module whose purpose is to export again what other
+modules define, such as `EssentialsModule`, includes no fragment, so the rule does
+not apply to it; the guard names such modules in `EXPORT_REEXPORTING`.
 
 **A fragment file opens with a one-line comment**, not a docstring:
 
@@ -98,7 +100,7 @@ the shape of a histogram. The frame decides the chart: …
 
 # Example
 
-    vectors = get_simulation_vector_results(get_project_result_directory())
+    vectors = get_simulation_vector_results(get_project_result_directory(project))
     open_pane!(make_result_plot(vectors; title = "Delay"))
 
 See also `make_result_table`, which shows the same frame as rows.
@@ -246,6 +248,10 @@ the definition:
 # @optional: the name of the example stands first, as at a command line.
 function run_example(name = "json"; backend = nothing)
 ```
+
+A documented definition has the marker above its docstring. Julia drops a
+docstring that a comment parts from its definition, so a marker between the two
+takes the docstring away from the definition.
 
 A short form of a protocol method is a method of its own, not a default value:
 `copy_document(K, value)` calls `copy_document(K, value, nothing, 0)`, so a type

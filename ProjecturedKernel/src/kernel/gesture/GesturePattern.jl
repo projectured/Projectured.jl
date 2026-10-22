@@ -188,7 +188,9 @@ function _get_key_label(key::Symbol)
     special = Dict(:period => ".", :space => "Space", :tab => "Tab", :return => "Return",
                    :home => "Home", :end => "End", :backspace => "Backspace",
                    :delete => "Delete", :escape => "Esc", :up => "↑", :down => "↓",
-                   :left => "←", :right => "→", :page_up => "PgUp", :page_down => "PgDn")
+                   :left => "←", :right => "→", :page_up => "PgUp", :page_down => "PgDn",
+                   :comma => ",", :left_bracket => "[", :right_bracket => "]", :backslash => "\\",
+                   :slash => "/", :asterisk => "*", :equals => "=", :minus => "-")
     get(special, key, uppercasefirst(string(key)))
 end
 
@@ -220,8 +222,13 @@ _describe(::Type{KeyDown}, pattern) = _describe_key(pattern)
 _describe(::Type{KeyUp}, pattern) = "release " * _describe_key(pattern)
 function _describe(::Type{KeyPress}, pattern)
     char = _get_field(pattern, :char)
-    _prefix_modifiers(pattern, char === nothing ? "character" : string(char))
+    _prefix_modifiers(pattern, char === nothing ? "character" : _get_character_label(char))
 end
+
+# The name of a typed character that shows nothing: the key that types it.
+_get_character_label(char::Char) =
+    char == '\n' ? "Return" : char == '\t' ? "Tab" : char == ' ' ? "Space" : string(char)
+_get_character_label(char) = string(char)
 _describe(::Type{KeyChord}, pattern) = "key chord"
 _describe(::Type{MouseClick}, pattern) = _describe_button(pattern)
 _describe(::Type{MouseDown}, pattern) =

@@ -1,16 +1,17 @@
 # Fragment of `SqlModule` — the theme of the SQL syntax: the text of a
-# keyword, of plain text, and of a table name.
+# keyword, of plain text, of a name and of a value of each kind.
 
 """
     SqlTheme
 
-The fonts and the colors of a SQL statement: its keywords, its table names and
-its other words.
+The fonts and the colors of a SQL statement: its keywords, its names, its
+values and its other words.
 
 The theme of the SQL projections. `@theme` declares it, so `ScaledSqlTheme`
 holds each value times its scale, and `SqlTheme()` is the default theme.
 
-The fields are the text styles of a keyword, plain text and a table name.
+The fields are the text styles of a keyword, plain text, a name of each kind
+and a value of each kind.
 Each field has a docstring that says what it draws, which the appearance tab
 shows under its name.
 
@@ -22,13 +23,27 @@ of the default theme.
     "The font that the texts of this theme follow: its family, its weight and its size."
     font::StyleFont = StyleFont("Ubuntu Mono", 14)
     "A reserved word, such as `SELECT`, `FROM`, `WHERE` or `AND`."
-    keyword_text::TextRole = TextRole(:keyword; weight = 700)
-    "A column, a value, a raw expression, a data type, or any other identifier that is not a keyword or a table name."
-    plain_text::TextRole   = TextRole(:text)
-    "A table name."
-    name_text::TextRole    = TextRole(:definition)
+    keyword_text::ThemeText = TextRole(:keyword; weight = 700)
+    "A raw expression, and any other text that is not a keyword, a name or a value."
+    plain_text::ThemeText   = TextRole(:text)
+    "A column, and the qualifier before it."
+    column_text::ThemeText  = TextRole(:field)
+    "An alias of a column or of a table."
+    alias_text::ThemeText   = TextRole(:variable)
+    "A data type."
+    type_text::ThemeText    = TextRole(:type_name)
+    "A boolean value: `TRUE` and `FALSE`."
+    bool_text::ThemeText    = TextRole(:boolean_literal)
+    "A number value."
+    number_text::ThemeText  = TextRole(:number_literal)
+    "A string value, with its quotes."
+    string_text::ThemeText  = TextRole(:string_literal)
+    "A table, with its schema and its alias."
+    table_text::ThemeText   = TextRole(:type_name)
+    "The name of a schema."
+    schema_text::ThemeText  = TextRole(:module_name)
     "The brackets, the commas, the spaces and the semicolons between the parts of a statement."
-    punctuation_text::TextRole = TextRole(:punctuation; weight = 700)
+    punctuation_text::ThemeText = TextRole(:punctuation; weight = 700)
 end
 
 # The plain font of a SQL projection that holds only a `StyleFont`, not a full

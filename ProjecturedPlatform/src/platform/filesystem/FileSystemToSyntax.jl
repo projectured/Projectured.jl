@@ -4,11 +4,11 @@
 # tree shapes:
 #
 #     FileSystemFile      → SyntaxLeaf  " <basename>"
-#     FileSystemDirectory → SyntaxNode  " <dirname>"  (children indented 2)
+#     FileSystemDirectory → SyntaxNode  " <dirname>"  (children one level in)
 #
 # The directory printer places a name leaf as children[1] and wraps all
-# recursively-projected element outputs in a body SyntaxNode (indentation=2)
-# as children[2], mirroring the Lisp file-system-to-syntax/indentation layout.
+# recursively-projected element outputs in a body SyntaxNode, which puts each on
+# a line of its own one level in, as children[2].
 #
 # When the downstream `SyntaxToText` is configured with expand/collapse markers,
 # pass `marker_eligible = is_filesystem_marker_eligible` so the fold marker lands on
@@ -79,7 +79,8 @@ read_intent(::FileSystemFileToSyntaxLeaf, iomap::SimpleIoMap, op::ReplaceStringR
 # Output shape:
 #   SyntaxNode (no delimiters — a bare, foldable node):
 #     children[1] = SyntaxLeaf(" <dirname>")          ← name leaf
-#     children[2] = SyntaxNode(indentation=2):         ← body node
+#     children[2] = SyntaxNode(open="\n", sep="\n", close="\n",
+#                              indentation=1):           ← body node
 #                     children[1..n] = projected element outputs
 #
 # Selection mapping (filesystem domain → syntax domain):
@@ -95,13 +96,15 @@ function print_document(p::FileSystemDirectoryToSyntaxNode, recursion, d::FileSy
                                   make_child_context(ctx, FieldReferenceStep("elements"), ElementReferenceStep(i)))
                                for (i, elem) in enumerate(d.elements)]))
 
+    # The view draws what the folder holds, and a folder that holds no entries yet
+    # says so on its name line: it is not read yet, or it can not be read.
     name_leaf = SyntaxLeaf(
-        TextString(() -> " " * _dir_name(d.pathname), p.directory_text);
+        TextString(() -> " " * _dir_name(d.pathname) * _format_folder_mark(d), p.directory_text);
         selection=d.selection)
 
     body_node = SyntaxNode(
         CellVector(@computation SyntaxDocument[im.output for im in child_iomaps[]]);
-        indentation=2)
+        open="\n", sep="\n", close="\n", indentation=1)
 
     # Wire the output selection canonically: map d.selection forward through this
     # projection's own map_reference_forward (School A — delegate the tail through
@@ -170,7 +173,7 @@ end
 #
 # `SyntaxCompoundToText`'s default rule marks every node with children. A directory
 # is projected as a header node (the name leaf, at indentation 0) wrapping an
-# indented body node (indentation 2) that holds the entries — so the default
+# indented body node (indentation 1) that holds the entries — so the default
 # rule would mark BOTH, producing a stray marker on the indented block. This
 # predicate restricts the marker to a non-empty directory header node:
 #
@@ -194,6 +197,13 @@ function is_filesystem_marker_eligible(node::SyntaxNode)
 end
 
 # ── Utility ───────────────────────────────────────────────────────────────────
+
+# The mark after the name of a folder that holds no entries yet.
+function _format_folder_mark(d::FileSystemDirectory)
+    isempty(d.elements) || return ""
+    d.state === :failed && return " (can not read)"
+    d.state === :read ? "" : " …"
+end
 
 function _dir_name(pathname::AbstractString)
     p = rstrip(pathname, '/')
@@ -230,6 +240,16 @@ function __init__()
     register_natural_syntax!(:filesystem, (; appearance) -> Pair{Type,Any}[
         FileSystemDocument => FileSystemToSyntax(; theme = get_scaled_theme!(appearance, FileSystemTheme))])
     register_natural_graphics!(:workspace, (; measure, appearance) -> Pair{Type,Any}[
+        # An explorer draws the folders of its workspace itself, with its own open
+        # folders, so it comes before the row of any workspace document.
+        WorkspaceExplorer => ChainingProjection(
+            RecursiveProjection(FaultCatchingProjection(inner = FileSystemToWidget(),
+                                                        substitute = FaultToWidget())),
+            RecursiveProjection(FaultCatchingProjection(
+                inner = WidgetToGraphics(; measure = measure,
+                                         theme = get_scaled_theme!(appearance, WidgetTheme),
+                                         graphics_theme = get_scaled_theme!(appearance, GraphicsTheme)),
+                substitute = FaultToGraphics()))),
         WorkspaceDocument => ChainingProjection(
             RecursiveProjection(WorkspaceToFileSystem()),
             RecursiveProjection(FaultCatchingProjection(inner = FileSystemToWidget(),

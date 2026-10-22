@@ -8,7 +8,7 @@ which an agent outside the process drives this editor. The **external** directio
 is the contract through which this editor drives an agent that runs its own loop
 in another process.
 
-Seven fragments share this namespace:
+Eight fragments share this namespace:
 
 - [`Agent.jl`](Agent.jl) — the `Agent` itself, and the `AgentToolResult` event it
   reports a completed tool call with.
@@ -18,17 +18,27 @@ Seven fragments share this namespace:
   `get_agent_server_access` and `run_on_editor_task!`, each a body-less generic.
 - [`AgentDefaults.jl`](AgentDefaults.jl) — the fallback behaviours for that
   contract, answered when no concrete server package is loaded.
+- [`EditorCallTimeoutException.jl`](EditorCallTimeoutException.jl) — the end of
+  the wait of a call that `run_on_editor_task!` posted and the editor did not
+  start in time, and how long that wait is by default.
 - [`AgentConnectionInterface.jl`](AgentConnectionInterface.jl) — the
   external-agent contract: `make_agent_connection`, `start_agent_connection!`,
   `open_agent_session!`, `set_agent_option!`, `send_agent_prompt!`,
-  `cancel_agent_prompt!`, `close_agent_session!` and `stop_agent_connection!`,
-  each a body-less generic.
+  `cancel_agent_prompt!`, `cancel_agent_subagent!`,
+  `stop_agent_background_task!`, `close_agent_session!`,
+  `stop_agent_connection!`, `has_agent_sign_out`, `sign_out_agent!`,
+  `has_agent_steering` and `steer_agent_prompt!`, each a body-less generic.
 - [`AgentConnectionDefaults.jl`](AgentConnectionDefaults.jl) — the fallback
   behaviours for that contract.
 - [`AgentConnectionEvent.jl`](AgentConnectionEvent.jl) — the events an external
   agent reports: `AgentToolCallUpdate`, `AgentPlanUpdate`,
-  `AgentPermissionRequest`, `AgentOptionsUpdate`, `AgentUsageUpdate`,
-  `AgentSessionInfoUpdate` and `AgentCommandsUpdate`.
+  `AgentPermissionRequest`, `AgentQuestionRequest` with its
+  `AgentQuestionField`s, `AgentOptionsUpdate`, `AgentUsageUpdate`,
+  `AgentSessionInfoUpdate`, `AgentCommandsUpdate`, and the work of the agent:
+  `AgentSubagentUpdate`, `AgentBackgroundTaskUpdate`, `AgentNoticeUpdate` and
+  `AgentCompactionUpdate`; the sign-in that an agent asks for:
+  `AgentSignInException` with its `AgentSignInMethod`s; and the
+  `AgentEventQueue` that holds the events of a session between two prompts.
 
 **What the loop owns, and what it does not.** It owns the *control flow* of an agent
 turn: stream a round, collect the tool calls the model made, dispatch them through
@@ -58,18 +68,26 @@ using ..LlmModule
 using ..ToolModule
 
 export Agent, run_turn!, AgentEvent, AgentToolResult
-export make_agent_server, start_agent_server!, stop_agent_server!, run_on_editor_task!
+export make_agent_server, start_agent_server!, stop_agent_server!, stop_agent_server_work!,
+       run_on_editor_task!, is_editor_loop_running,
+       EditorCallTimeoutException, EDITOR_CALL_TIMEOUT_SECONDS
 export get_agent_server_names, get_agent_server_access
 export make_agent_connection, start_agent_connection!, open_agent_session!,
-       set_agent_option!, send_agent_prompt!, cancel_agent_prompt!, close_agent_session!,
-       stop_agent_connection!, get_agent_connection_names
+       set_agent_option!, send_agent_prompt!, cancel_agent_prompt!, cancel_agent_subagent!,
+       stop_agent_background_task!, close_agent_session!,
+       stop_agent_connection!, get_agent_connection_names, has_agent_sign_out, sign_out_agent!,
+       has_agent_steering, steer_agent_prompt!
 export AgentToolCallUpdate, AgentPlanEntry, AgentPlanUpdate,
-       AgentPermissionOption, AgentPermissionRequest,
+       AgentPermissionOption, AgentPermissionRequest, AgentQuestionField, AgentQuestionRequest,
        AgentOptionValue, AgentOption, AgentOptionsUpdate, AgentUsageUpdate,
-       AgentSessionInfoUpdate, AgentCommand, AgentCommandsUpdate
+       AgentSessionInfoUpdate, AgentCommand, AgentCommandsUpdate,
+       AgentSubagentUpdate, AgentBackgroundTaskUpdate, AgentNoticeUpdate, AgentCompactionUpdate,
+       AgentSignInMethod, AgentSignInException,
+       AgentEventQueue, put_agent_event!, take_agent_events!
 
 include("AgentInterface.jl")
 include("AgentDefaults.jl")
+include("EditorCallTimeoutException.jl")
 include("Agent.jl")
 include("AgentLoop.jl")
 include("AgentConnectionInterface.jl")

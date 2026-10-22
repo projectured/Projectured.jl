@@ -12,23 +12,29 @@
 # - **Sizes.** `k`, the ideal distance, comes from the boxes, and the distances
 #   that the forces read are measured between the rims of two bodies, not
 #   between their centres, so a large card gets the room it needs.
-# - **Constraints.** A pinned vertex is a body that does not move. A cluster is
-#   one body that carries its members at their offsets.
+# - **Constraints.** A pinned vertex is a body that does not move. A vertex with
+#   a start position is a body that the forces do not move; only the pass that
+#   removes overlaps and the rule of the extent move it. A cluster is one body
+#   that carries its members at their offsets.
 # - **Parts that are not connected** feel a weak pull to the centre of the
 #   drawing, so no part drifts away from the others.
 # - **No overlap.** After the simulation, each pair of boxes that still overlap
 #   is pushed apart along the axis where they overlap less.
 #
-# The start is a sunflower spiral in the order of `layout_vertices`, so the
-# placement is a function of its input and needs no random numbers.
+# The start is the start position of a body that has one, and a sunflower spiral
+# in the order of `layout_vertices` for the other bodies, so the placement is a
+# function of its input and needs no random numbers.
 
 """
     FruchtermanReingoldLayout(; iterations = 300, spacing = 20)
 
 The force-directed engine of this package. `iterations` is the number of
 rounds of the simulation, and `spacing` the gap it keeps between two boxes.
-It implements `:pin`, `:fixed_size` and `:cluster`, and it routes edges as
-straight lines.
+It implements `:pin`, `:start`, `:fixed_size` and `:cluster`, and it routes
+edges as straight lines. A vertex with a `:start` stays at that corner: the
+forces do not move it, and only the pass that removes overlaps and the rule of
+the extent do, when another box overlaps it or it lies outside the extent. A
+vertex without a start is placed by the forces among the others.
 """
 struct FruchtermanReingoldLayout <: GraphLayoutEngine
     iterations::Int
@@ -39,7 +45,7 @@ FruchtermanReingoldLayout(; iterations::Integer = 300, spacing::Real = 20) =
     FruchtermanReingoldLayout(Int(iterations), Float64(spacing))
 
 get_supported_constraint_kinds(::FruchtermanReingoldLayout) =
-    (:pin, :fixed_size, :cluster)
+    (:pin, :start, :fixed_size, :cluster)
 layout_engine_name(::FruchtermanReingoldLayout) = :fruchterman_reingold
 
 # The angle between two neighbours on a sunflower spiral, in radians.
@@ -71,25 +77,31 @@ function layout_graph(engine::FruchtermanReingoldLayout, graph::GraphGraph, size
 
     widths, heights = get_vertex_sizes(vertices, sizes, constraints)
     pins = get_constraint_pins(constraints)
+    starts = get_constraint_starts(constraints)
     bodies, body_of = _make_layout_bodies(vertices, widths, heights, pins,
                                           get_constraint_clusters(constraints))
+    body_starts = [body.fixed ? nothing : _find_body_start(body, vertices, widths, heights, starts)
+                   for body in bodies]
     # The ideal distance between two bodies, from the mean size of a box.
     k = sum(sqrt(widths[i] * heights[i]) for i in 1:n) / n + engine.spacing
 
     x = zeros(Float64, length(bodies)); y = zeros(Float64, length(bodies))
-    _place_on_spiral!(x, y, bodies, vertices, widths, heights, pins, k)
+    _place_on_spiral!(x, y, bodies, vertices, widths, heights, pins, starts, body_starts, k)
     edges = _collect_body_edges(graph, vertices, body_of)
-    _simulate_forces!(x, y, bodies, edges, k, engine.iterations)
-    _remove_overlaps!(x, y, bodies, widths, heights, engine.spacing / 2)
+    _simulate_forces!(x, y, bodies, edges, k, engine.iterations, body_starts)
+    _remove_overlaps!(x, y, bodies, body_starts, widths, heights, engine.spacing / 2)
 
     cx = zeros(Float64, n); cy = zeros(Float64, n)
     _place_members!(cx, cy, x, y, bodies)
-    if extent !== nothing && isempty(pins)
+    # A pin and a start are places in the extent, so a drawing with either keeps
+    # its scale and its origin.
+    placed = !isempty(pins) || !isempty(starts)
+    if extent !== nothing && !placed
         _fit_bodies_into_extent!(x, y, cx, cy, bodies, widths, heights, extent, border)
     elseif extent !== nothing
         _keep_bodies_inside_extent!(x, y, bodies, widths, heights, extent, border)
-    elseif isempty(pins)
-        # With no box and no pin the placement has no origin of its own, so it
+    elseif !placed
+        # With no box and no place the placement has no origin of its own, so it
         # starts at the border.
         left = minimum(cx[i] - widths[i]/2 for i in 1:n)
         top = minimum(cy[i] - heights[i]/2 for i in 1:n)
@@ -139,18 +151,35 @@ function _make_layout_bodies(vertices, widths, heights, pins, clusters)
     (bodies, body_of)
 end
 
-# The start: pinned bodies at their pins, and every other body on a sunflower
-# spiral around the centre of the pins, in the order of its first vertex. A
-# spiral has no two bodies on one line, so the forces have a side to push to.
-function _place_on_spiral!(x, y, bodies, vertices, widths, heights, pins, k)
-    centre = (0.0, 0.0)
-    if !isempty(pins)
-        pinned = [(p[1] + widths[i]/2, p[2] + heights[i]/2)
-                  for (i, v) in enumerate(vertices)
-                  for p in (get(pins, objectid(v), nothing),)
-                  if p !== nothing]
-        centre = (sum(first, pinned) / length(pinned), sum(last, pinned) / length(pinned))
+# Where a body with a start position begins: the mean of the centres that the
+# start positions of its members give, less their offsets, or `nothing` when no
+# member has one.
+function _find_body_start(body::_LayoutBody, vertices, widths, heights, starts)
+    sx = sy = 0.0
+    count = 0
+    for (i, offset) in zip(body.members, body.offsets)
+        start = get(starts, objectid(vertices[i]), nothing)
+        start === nothing && continue
+        sx += start[1] + widths[i]/2 - offset[1]
+        sy += start[2] + heights[i]/2 - offset[2]
+        count += 1
     end
+    count == 0 ? nothing : (sx / count, sy / count)
+end
+
+# The start: pinned bodies at their pins, a body with a start position at that
+# position, and every other body on a sunflower spiral around the centre of the
+# placed vertices, in the order of its first vertex. A spiral has no two bodies
+# on one line, so the forces have a side to push to.
+function _place_on_spiral!(x, y, bodies, vertices, widths, heights, pins, starts,
+                           body_starts, k)
+    centre = (0.0, 0.0)
+    placed = [(p[1] + widths[i]/2, p[2] + heights[i]/2)
+              for (i, v) in enumerate(vertices)
+              for p in (get(pins, objectid(v), get(starts, objectid(v), nothing)),)
+              if p !== nothing]
+    isempty(placed) ||
+        (centre = (sum(first, placed) / length(placed), sum(last, placed) / length(placed)))
     turn = 0
     for (b, body) in enumerate(bodies)
         if body.fixed
@@ -158,6 +187,8 @@ function _place_on_spiral!(x, y, bodies, vertices, widths, heights, pins, k)
             pin = pins[objectid(vertices[i])]
             x[b] = pin[1] + widths[i]/2
             y[b] = pin[2] + heights[i]/2
+        elseif body_starts[b] !== nothing
+            x[b], y[b] = body_starts[b]
         else
             turn += 1
             radius = k * sqrt(turn)
@@ -188,10 +219,11 @@ end
 # The simulation of the paper: repulsion between every pair of bodies,
 # attraction along every edge, and a displacement capped by a temperature that
 # falls to nothing. The distances are measured between the rims of two bodies,
-# and a weak pull to the centre keeps the parts of a graph together.
-function _simulate_forces!(x, y, bodies, edges, k, iterations)
+# and a weak pull to the centre keeps the parts of a graph together. A body with
+# a start position pushes and pulls the others, and the forces do not move it.
+function _simulate_forces!(x, y, bodies, edges, k, iterations, body_starts)
     m = length(bodies)
-    movable = [b for b in 1:m if !bodies[b].fixed]
+    movable = [b for b in 1:m if !bodies[b].fixed && body_starts[b] === nothing]
     isempty(movable) && return nothing
     dx = zeros(Float64, m); dy = zeros(Float64, m)
     start_temperature = k * sqrt(length(movable))
@@ -243,10 +275,13 @@ function _place_members!(cx, cy, x, y, bodies)
 end
 
 # Push apart every two boxes of different bodies that overlap, with `margin`
-# around each box, along the axis where they overlap less. A pinned body does
-# not move, so its partner moves the whole way. It stops when nothing overlaps,
-# or after a bounded number of passes.
-function _remove_overlaps!(x, y, bodies, widths, heights, margin)
+# around each box, along the axis where they overlap less. The body that holds
+# its place less moves the whole way: a pinned body never moves, a body with a
+# start position yields only to a pin, and a free body yields first. Two bodies
+# that hold equally share the move. It stops when nothing overlaps, or after a
+# bounded number of passes.
+function _remove_overlaps!(x, y, bodies, body_starts, widths, heights, margin)
+    hold(b) = bodies[b].fixed ? 2 : body_starts[b] === nothing ? 0 : 1
     n = length(widths)
     cx = zeros(Float64, n); cy = zeros(Float64, n)
     owner = zeros(Int, n)
@@ -263,7 +298,7 @@ function _remove_overlaps!(x, y, bodies, widths, heights, margin)
             ox = (widths[i] + widths[j]) / 2 + 2margin - abs(cx[i] - cx[j])
             oy = (heights[i] + heights[j]) / 2 + 2margin - abs(cy[i] - cy[j])
             (ox > 0 && oy > 0) || continue
-            share_a = bodies[a].fixed ? 0.0 : bodies[b].fixed ? 1.0 : 0.5
+            share_a = hold(a) > hold(b) ? 0.0 : hold(a) < hold(b) ? 1.0 : 0.5
             if ox <= oy
                 direction = cx[i] < cx[j] || (cx[i] == cx[j] && i < j) ? -1.0 : 1.0
                 x[a] += direction * ox * share_a; x[b] -= direction * ox * (1 - share_a)

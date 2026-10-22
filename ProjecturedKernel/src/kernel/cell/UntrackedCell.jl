@@ -5,13 +5,12 @@
 
 A cell that runs its computation at each read. It keeps no value and records no
 reader, and no read inside its computation records one, because the computation
-runs with `run_untracked`. So nothing depends on an untracked cell, and a change
-of what its computation reads reaches no computation that read it.
+runs with `run_without_cell_tracking`. So nothing depends on an untracked cell, and a
+change of what its computation reads reaches no computation that read it.
 
-Use it for a value that something else owns, when one place decides when the
-readers compute again: a style field of a projection that reads its theme, where
-the whole view prints again when the theme changes. When the readers must follow
-the value on their own, use a reactive cell instead.
+Use it for a value that other code owns, when that code makes the readers compute
+again itself. When the readers must follow the value on their own, use a reactive
+cell instead.
 
 # Example
 
@@ -24,9 +23,8 @@ the value on their own, use a reactive cell instead.
     background[]               # :dark, computed at this read
 
 A value that is not a `Computation` makes a constant: `UntrackedCell{Int}(3)`
-reads `3`, and it is what a struct of cells stores for a field that its
-constructor got as a plain value. There is no `setindex!`: a write is a
-`MethodError`, as for an `ImmutableCell`.
+reads `3`. There is no `setindex!`: a write is a `MethodError`, as for an
+`ImmutableCell`.
 
 See also `ReactiveCell`, which keeps its value and records its readers, and
 `ImmutableCell`, which holds one value.
@@ -34,22 +32,30 @@ See also `ReactiveCell`, which keeps its value and records its readers, and
 struct UntrackedCell{T} <: AbstractCell{T}
     computation::Function
     UntrackedCell{T}(marker::Computation) where {T} = new{T}(marker.computation)
-    UntrackedCell{T}(value) where {T} = new{T}(Returns(convert(T, value)))
+    UntrackedCell{T}(value) where {T} =
+        new{T}(_UntrackedValue(value isa T ? value : Base.invokelatest(convert, T, value)))
 end
+
+# The computation of an untracked cell that a value made. Its own type tells the
+# constant from a computation, also from one that always returns the same value.
+struct _UntrackedValue{V} <: Function
+    value::V
+end
+
+(constant::_UntrackedValue)() = constant.value
 
 UntrackedCell(marker::Computation) = UntrackedCell{Any}(marker)
 UntrackedCell(value::T) where {T} = UntrackedCell{T}(value)
 
-Base.getindex(c::UntrackedCell{T}) where {T} = run_untracked(c.computation)::T
+Base.getindex(c::UntrackedCell{T}) where {T} = run_without_cell_tracking(c.computation)::T
 
-is_cell_up_to_date(::UntrackedCell) = true
+is_cell_valid(::UntrackedCell) = true
 Base.peek(c::UntrackedCell) = c[]
 
-is_computed_cell(c::UntrackedCell) = !(c.computation isa Returns)
-make_similar_cell(::UntrackedCell{T}, v) where {T} = UntrackedCell{T}(v)
+get_cell_fault_scope(c::UntrackedCell) = _get_computation_fault_scope(c.computation)
 
 function Base.show(io::IO, c::UntrackedCell{T}) where {T}
-    if c.computation isa Returns
+    if c.computation isa _UntrackedValue
         print(io, "UntrackedCell{", T, "}(")
         show(io, c.computation.value)
         print(io, ")")

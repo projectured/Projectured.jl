@@ -6,7 +6,7 @@
 # its chevron is clicked. Here we drive the WidgetTree projection directly with a
 # deterministic text measure so row geometry is exact.
 
-using ProjecturedKernel.CellModule: Cell, Computation, is_cell_up_to_date
+using ProjecturedKernel.CellModule: Cell, Computation, is_cell_valid
 using ProjecturedKernel.SelectionModule: replace_selection!, get_selection
 using ProjecturedKernel.ReferenceModule: evaluate_reference
 
@@ -125,15 +125,31 @@ end
     @test op isa ReplaceSelectionOperation
 end
 
-@testset "each row draws its light band and its selection band" begin
+@testset "a rest of the pointer on a row shows the tooltip of its node" begin
+    w = WidgetTree(Any[WidgetTreeNode(:file, "notes", Any[]; tooltip = "unsaved edits"), "README"])
+    io = print_document(_treeproj, w)
+    op = _readop(io, MouseDwell(30, 2, _mods; time = 0.0))
+    @test op isa OpenTooltipOperation
+    @test op.layers[1][1] == "notes" && op.layers[1][2].text == "unsaved edits"
+    # A row whose node has no tooltip says nothing.
+    @test _readop(io, MouseDwell(30, 22, _mods; time = 0.0)) === nothing
+end
+
+@testset "each row draws its light band, its selection band and the mark of the current page" begin
     w, io = _fresh()
     bands = _bands(io, 1)
-    @test length(bands) == 2                            # light + selection bands
-    @test all(Int(r.h[]) == 0 for r in bands)           # neither active yet
+    @test length(bands) == 3                            # light + selection bands + current mark
+    @test all(Int(r.h[]) == 0 for r in bands)           # none active yet
     # Row 1 the part under the pointer → one of its bands gains the row's height.
     getfield(w, :mouse_target)[] = _node([1])
     @test any(Int(r.h[]) == 20 for r in _bands(io, 1))
     @test all(Int(r.h[]) == 0 for r in _bands(io, 2))   # the next row stays dark
+    # The row that the tree names as current gets the mark: a narrow bar as high as
+    # the row, and no other row does.
+    w.current = io.geometry.rows[2].path
+    marks = [r for r in _bands(io, 2) if Int(r.w[]) < 10 && Int(r.h[]) == 20]
+    @test length(marks) == 1
+    @test all(Int(r.h[]) == 0 for r in _bands(io, 3))
 end
 
 @testset "a toggle keeps the canvas of each row that stays, and changes only its chevron" begin
@@ -151,8 +167,8 @@ end
     getfield(w, :expanded)[] = Set([[1]])
     # The content of a folder row that did not toggle is not computed again: only
     # the glyph of its chevron reads the set of open folders.
-    @test is_cell_up_to_date(getfield(getfield(before[2], :elements)[], :elements))
-    @test !is_cell_up_to_date(getfield(doc_chevron, :text))
+    @test is_cell_valid(getfield(getfield(before[2], :elements)[], :elements))
+    @test !is_cell_valid(getfield(doc_chevron, :text))
     # The rows of the folder are new, the rows that stay keep their canvas, and
     # the rows under the folder move down by its two rows.
     after = collect(_rows_canvas(io).elements)
@@ -161,6 +177,25 @@ end
     @test Int(after[4].y) == 3 * 20
     @test chevron(after[1]).text == down
     @test doc_chevron.text == right
+end
+
+@testset "a node that answers whether it has children reads no children while it is closed" begin
+    reads = Ref(0)
+    counted(names...) = CellVector(@computation((reads[] += 1; Any[names...])); element = name -> name)
+    full = WidgetTreeNode("", "full", counted("a", "b"); has_children = () -> true)
+    empty = WidgetTreeNode("", "empty", counted("c"); has_children = () -> false)
+    w = WidgetTree(Any[full, empty]; expanded = Set{Vector{Int}}())
+    io = print_document(_treeproj, w)
+    marks = (string(WidgetModule.find_icon_character(:chevron_right)),
+             string(WidgetModule.find_icon_character(:chevron_down)))
+    chevrons(row) = [e for e in row.elements if e isa GraphicsText && e.text in marks]
+    rows = collect(_rows_canvas(io).elements)
+    @test length(chevrons(rows[1])) == 1 && isempty(chevrons(rows[2]))
+    @test reads[] == 0
+    # An open node reads its children, to draw the rows under it.
+    getfield(w, :expanded)[] = Set([[1]])
+    @test length(_rows_canvas(io).elements) == 4
+    @test reads[] == 1
 end
 
 @testset "the whole tree canvas is a hit target (nested routability)" begin
@@ -205,6 +240,252 @@ end
         @test e > 0     # a move lights a row of the tree
         @test c > 0     # MouseClick selects a tree node through the container
     end
+end
+
+# A tree that prints as the rows of its own pane makes its rows as a lazy list: a
+# walk from the head, as the renderer and the readers walk, makes each row that it
+# reaches and no other.
+_print_tree_rows(w; width = 300, height = 200) =
+    print_document(_treeproj, _w2g, w,
+                   ProjecturedKernel.ProjectionModule.with_property(
+                       ProjecturedKernel.ProjectionModule.with_exact_size(
+                           PrinterContext(); width = Cell(Int32(width)), height = Cell(Int32(height))),
+                       :rows_of, w))
+
+# The count of the rows that a walk down `height` pixels from the head reaches.
+function _walk_tree_rows(io, height)
+    link, walked = _rows_canvas(io).elements, 0
+    while link !== nothing && Int(link.value.y) < height
+        (link, walked) = (link.next, walked + 1)
+    end
+    walked
+end
+
+@testset "a tree that scrolls itself makes only the rows that a walk reaches" begin
+    made = Ref(0)
+    runs = make_index_list(10_000_000, 1, k -> (made[] += 1; WidgetTreeNode("", "Run $(k - 1)", Any[])))
+    sweep = WidgetTreeNode("", "Sweep", runs; has_children = () -> true)
+    w = WidgetTree(Any[WidgetTreeNode("", "project", Any[sweep])]; expanded = Set([[1], [1, 1]]))
+    io = _print_tree_rows(w)
+    @test io.geometry isa WidgetModule.WTreeListGeometry
+    # An open node holds a lazy list of children, so the rows declare no height,
+    # and the pane walks to the ends of the list.
+    @test _rows_canvas(io).elements isa ListNode && Int(_rows_canvas(io).h) == 0
+    @test WidgetModule._has_no_extent_along(io.output, :y)
+    # A walk down one viewport of 200 pixels reaches its ten rows of 20 pixels.
+    @test _walk_tree_rows(io, 200) == 10 && made[] <= 20
+    # A click on the fourth row selects the second run.
+    op = _readop(io, MouseClick(:left, 100, 3 * 20 + 5, _mods; time = 0.0))
+    @test op isa ReplaceSelectionOperation && WidgetModule._wtree_ref_path(op.path) == [1, 1, 2]
+    # The keys step one row from the selected row.
+    replace_selection!(w, _node([1, 1, 2]))
+    @test WidgetModule._wtree_ref_path(_readop(io, KeyDown(:down, _mods; time = 0.0)).path) == [1, 1, 3]
+    @test WidgetModule._wtree_ref_path(_readop(io, KeyDown(:up, _mods; time = 0.0)).path) == [1, 1, 1]
+    # The chevron of the open node, and a click on it, need no count of its children.
+    @test _has_children(w, [1, 1])
+    chevron = WidgetModule._wtree_row_at(io.geometry, 20)
+    toggle = _readop(io, MouseClick(:left, (chevron.chevron_x0 + chevron.chevron_x1) ÷ 2, 20 + 5, _mods;
+                                    time = 0.0))
+    # The close writes the open nodes, and the row stays where it was pressed.
+    @test toggle isa CompoundOperation
+    write = get_wrapped_operation(first(toggle.operations))
+    @test write isa ReplaceReferencedValueOperation && !([1, 1] in write.value)
+    # The close leaves no open lazy list, so the rows become laid out: the anchor
+    # goes, and the offset keeps the row at its place.
+    evaluate_operation(nothing, toggle)
+    @test w.anchor === nothing && Int(w.scroll_position.y[]) == 0
+    @test made[] <= 20
+end
+
+@testset "a lazy list of rows finds a neighbour from the nodes, and has no row below its last" begin
+    made = Ref(0)
+    runs = make_index_list(10_000_000, 1, k -> (made[] += 1; WidgetTreeNode("", "Run $(k - 1)", Any[])))
+    sweep = WidgetTreeNode("", "Sweep", runs; has_children = () -> true)
+    # An open path deep inside the lazy list makes no walk to it.
+    w = WidgetTree(Any[WidgetTreeNode("", "project", Any[sweep])];
+                   expanded = Set([[1], [1, 1], [1, 1, 400_000]]))
+    io = _print_tree_rows(w)
+    @test io.geometry isa WidgetModule.WTreeListGeometry && made[] <= 2
+    # The keys step from a row that no walk made, to the rows beside it.
+    replace_selection!(w, _node([1, 1, 300]))
+    @test WidgetModule._wtree_ref_path(_readop(io, KeyDown(:down, _mods; time = 0.0)).path) == [1, 1, 301]
+    @test WidgetModule._wtree_ref_path(_readop(io, KeyDown(:up, _mods; time = 0.0)).path) == [1, 1, 299]
+    @test made[] <= 400
+    # A point below the last row of a short lazy list names no row.
+    short = WidgetTree(Any[WidgetTreeNode("", "folder", make_index_list(3, 1, k -> "file $k");
+                                          has_children = () -> true)];
+                       expanded = Set([[1]]))
+    short_io = _print_tree_rows(short)
+    @test _readop(short_io, MouseClick(:left, 100, 3 * 20 + 5, _mods; time = 0.0)) isa ReplaceSelectionOperation
+    @test _readop(short_io, MouseClick(:left, 100, 4 * 20 + 5, _mods; time = 0.0)) === nothing
+end
+
+# A tree in a slot, which prints its rows in a pane of its own.
+_print_tree_pane(w; width = 300, height = 200) =
+    print_document(_treeproj, _w2g, w,
+                   ProjecturedKernel.ProjectionModule.with_exact_size(
+                       PrinterContext(); width = Cell(Int32(width)), height = Cell(Int32(height))))
+
+@testset "a far scroll moves the head of a lazy list of rows to the row at the top" begin
+    made = Ref(0)
+    runs = make_index_list(10_000_000, 1, k -> (made[] += 1; WidgetTreeNode("", "Run $(k - 1)", Any[])))
+    sweep = WidgetTreeNode("", "Sweep", runs; has_children = () -> true)
+    w = WidgetTree(Any[WidgetTreeNode("", "project", Any[sweep])]; expanded = Set([[1], [1, 1]]))
+    io = _print_tree_pane(w)
+    @test io isa WidgetModule.WidgetRowsPaneIoMap
+    rows = io.pane.content_iomap
+    head_path() = rows.geometry.head.value.row.path
+    replace_selection!(w, _node([1, 1, 2]))
+    # The wheel turns down, a notch at a time, until the head moves.
+    turn!(notches, time) = (op = read_intent(_treeproj, io, MouseScroll(0, notches, 20, 60; time));
+                            op === nothing || evaluate_operation(nothing, op))
+    time = 0.0
+    while w.anchor === nothing && time < 2000
+        turn!(-3, time += 1.0)
+    end
+    @test w.anchor isa WidgetModule.WTreeListRow
+    # The head is the row at the top, and the offset counts from it. Two rows lie
+    # above the runs, so the head is run 199 or later.
+    first_move = head_path()
+    @test first_move[1:2] == [1, 1] && first_move[3] >= 199
+    @test 0 <= Int(w.scroll_position.y[]) < 20
+    # The rows of the new head that a walk made are few, and the selection stays.
+    @test length(rows.geometry.built) <= 3
+    @test WidgetModule._wtree_ref_path(w.selection) == [1, 1, 2]
+    # A click at the top names the row of the head.
+    time += 1.0
+    click = read_intent(_treeproj, io, MouseClick(:left, 100, 5, _mods; time))
+    @test click isa ReplaceSelectionOperation && WidgetModule._wtree_ref_path(click.path) == first_move
+    # Down again: the head moves on, each time by about the distance.
+    while head_path() == first_move && time < 4000
+        turn!(-3, time += 1.0)
+    end
+    second_move = head_path()
+    @test second_move[3] > first_move[3] + 200
+    # Up past the head: the rows before it come from the links back, and the head
+    # moves up.
+    while head_path() == second_move && time < 6000
+        turn!(3, time += 1.0)
+    end
+    @test head_path()[3] < second_move[3]
+    @test made[] < second_move[3] + 300
+end
+
+@testset "a toggle in a lazy list of rows keeps the toggled row where it was pressed" begin
+    logs = WidgetTreeNode("", "Logs", Any["log $k" for k in 1:50])
+    items = make_index_list(10_000_000, 1, k -> WidgetTreeNode("", "item $k", Any["a$k", "b$k"]))
+    sweep = WidgetTreeNode("", "Sweep", items; has_children = () -> true)
+    w = WidgetTree(Any[logs, sweep]; expanded = Set([[2]]))
+    io = _print_tree_pane(w)
+    rows = io.pane.content_iomap
+    # The head is item 100, two rows below the roots, and Logs is 101 rows above it
+    # at the top of the view.
+    link = rows.geometry.head
+    for _ in 1:101
+        link = link.next
+    end
+    @test link.value.row.path == [2, 100]
+    getfield(w, :anchor)[] = link.value
+    getfield(w, :scroll_position)[] = Point2D(0, -101 * 20)
+    @test rows.geometry.head.value.row.path == [2, 100]
+    chevron = WidgetModule._wtree_row_at(rows.geometry, -101 * 20)
+    @test chevron.path == [1]
+    open = read_intent(_treeproj, io, MouseClick(:left, (chevron.chevron_x0 + chevron.chevron_x1) ÷ 2, 5, _mods;
+                                                 time = 0.0))
+    evaluate_operation(nothing, open)
+    # Logs is the head now, at the top of the view, and its logs follow it.
+    @test [1] in w.expanded && rows.geometry.head.value.row.path == [1]
+    @test Int(w.scroll_position.y[]) == 0
+    @test rows.geometry.head.next.value.row.path == [1, 1]
+    # A close of an item above the head keeps the item at its place too.
+    replace_selection!(w, _node([2, 5]))
+    getfield(w, :expanded)[] = Set([[1], [2], [2, 5]])
+    item = WidgetModule._find_wtree_list_row_at(rows.geometry, (50 + 1 + 4 + 1) * 20)
+    @test item.row.path == [2, 5]
+    getfield(w, :scroll_position)[] = Point2D(0, item.row.y0)
+    close = read_intent(_treeproj, io, MouseClick(:left, (item.row.chevron_x0 + item.row.chevron_x1) ÷ 2, 5,
+                                                  _mods; time = 1.0))
+    evaluate_operation(nothing, close)
+    @test !([2, 5] in w.expanded) && rows.geometry.head.value.row.path == [2, 5]
+    @test Int(w.scroll_position.y[]) == 0
+end
+
+@testset "the row before the head of a lazy list of children is its parent" begin
+    # A lazy list whose head has nodes before it: its children start at its head.
+    w = WidgetTree(Any[WidgetTreeNode("", "folder", make_index_list(1000, 300, k -> "item $k");
+                                      has_children = () -> true)];
+                   expanded = Set([[1]]))
+    io = _print_tree_rows(w)
+    first_child = io.geometry.head.next.value
+    @test first_child.row.path == [1, 1]
+    # With the first child at the head, the row before it is made by the rule of the
+    # rows: its parent, and no node before the head of the list.
+    getfield(w, :anchor)[] = first_child
+    @test io.geometry.head.value.row.path == [1, 1]
+    @test io.geometry.head.prev.value.row.path == [1]
+    @test io.geometry.head.prev.prev === nothing
+end
+
+@testset "a tree that scrolls itself writes the rows that its view shows" begin
+    runs = make_index_list(10_000_000, 1, k -> WidgetTreeNode("", "Run $(k - 1)", Any[]))
+    sweep = WidgetTreeNode("", "Sweep", runs; has_children = () -> true)
+    w = WidgetTree(Any[WidgetTreeNode("", "project", Any[sweep])]; expanded = Set([[1]]))
+    io = _print_tree_pane(w)
+    rows = io.pane.content_iomap
+    # A press on the chevron of Sweep opens it: the view of 200 pixels then shows
+    # the project, Sweep, and the runs below Sweep down to the bottom of the view.
+    chevron = WidgetModule._wtree_row_at(rows.geometry, 20)
+    @test chevron.path == [1, 1]
+    open = read_intent(_treeproj, io, MouseClick(:left, (chevron.chevron_x0 + chevron.chevron_x1) ÷ 2, 25,
+                                                 _mods; time = 0.0))
+    evaluate_operation(nothing, open)
+    @test w.shown == Set([[1], [1, 1], ([1, 1, k] for k in 1:8)...])
+    # A wheel turn down writes the rows of the view at the new offset.
+    turn = read_intent(_treeproj, io, MouseScroll(0, -3, 20, 60; time = 1.0))
+    evaluate_operation(nothing, turn)
+    top = Int(w.scroll_position.y[])
+    @test top > 0
+    @test w.shown == WidgetModule._collect_wtree_view_paths(rows.geometry, top, 200)
+    @test 10 <= length(w.shown) <= 11 && !([1] in w.shown)
+    # A plain tree, whose rows are laid out, writes the rows of its view too.
+    files = WidgetTree(Any[WidgetTreeNode("", "folder", Any[WidgetTreeNode("", "f$k", Any[]) for k in 1:500])];
+                       expanded = Set([[1]]))
+    files_io = _print_tree_pane(files)
+    evaluate_operation(nothing, read_intent(_treeproj, files_io, MouseScroll(0, -3, 20, 60; time = 2.0)))
+    files_top = Int(files.scroll_position.y[])
+    first_row = fld(files_top, 20) + 1
+    @test [1, first_row - 1] in files.shown && length(files.shown) in 10:11
+    # Through the fault barriers of a window, a wheel turn writes the rows of the
+    # view, and a far scroll moves the head of a lazy list of rows.
+    barrier = RecursiveProjection(FaultCatchingProjection(
+        inner = WidgetToGraphics(StyleFont("Ubuntu", 20); measure = _det),
+        substitute = ProjecturedPlatform.GraphicsModule.FaultToGraphics()))
+    items = make_index_list(10_000_000, 1, k -> "Run $k")
+    deep = WidgetTree(Any[WidgetTreeNode("", "Sweep", items; has_children = () -> true)];
+                      expanded = Set([[1]]))
+    context = ProjecturedKernel.ProjectionModule.with_exact_size(PrinterContext();
+                                                                 width = Cell(Int32(300)),
+                                                                 height = Cell(Int32(200)))
+    deep_io = print_document(barrier, nothing, deep, context)
+    time = 10.0
+    while deep.anchor === nothing && time < 1000
+        time += 1.0
+        op = read_intent(barrier, deep_io, MouseScroll(0, -3, 20, 60; time))
+        op === nothing || evaluate_operation(nothing, op)
+    end
+    @test deep.anchor isa WidgetModule.WTreeListRow
+    @test length(deep.shown) in 10:11 && !([1] in deep.shown)
+end
+
+@testset "a tree whose open nodes count their children lays out its rows and has their height" begin
+    files = Any[WidgetTreeNode("", "file$(k).txt", Any[]) for k in 1:5000]
+    w = WidgetTree(Any[WidgetTreeNode("", "folder", files)]; expanded = Set([[1]]))
+    io = _print_tree_rows(w)
+    # The folder and its 5,000 files: the renderer starts at the rows in view, and
+    # the pane clamps to the rows and its bar shows them.
+    @test io.geometry isa WidgetModule.WTreeGeometry && length(io.geometry.rows) == 5001
+    @test Int(_rows_canvas(io).h) == 5001 * 20 && Int(io.output.h) == 5001 * 20
+    @test !WidgetModule._has_no_extent_along(io.output, :y)
 end
 
 end # @testset

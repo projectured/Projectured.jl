@@ -187,6 +187,13 @@ end
 _object_delimiter(p::ObjectNodeToSyntaxNode, text::AbstractString) =
     isempty(text) ? text : TextString(text, p.delimiter)
 
+# The texts of a node of `levels`: with levels, each child is on a line of its own,
+# so the opening delimiter ends in a break, the separator is a break, and the
+# closing delimiter starts with one; with none, the node is inline.
+_make_open_text(text::AbstractString, levels::Int) = levels == 0 ? text : text * "\n"
+_make_sep_text(text::AbstractString, levels::Int) = levels == 0 ? text : rstrip(text) * "\n"
+_make_close_text(text::AbstractString, levels::Int) = levels == 0 ? text : "\n" * text
+
 # Unwrap a Cell for predicate/filter testing; pass non-cells through.
 _unwrap_cell(x) = x isa Cell ? x[] : x
 
@@ -260,15 +267,17 @@ function print_document(p::ObjectNodeToSyntaxNode, recursion, obj, ctx)
     # struct branch below cannot reflect over them (e.g. an RGBA color stored
     # as NTuple{4,UInt8}).
     if is_element_collection(obj) || obj isa AbstractArray || obj isa Tuple
-        # Reconcile the element IoMaps by identity: unchanged elements reuse theirs, a
-        # new/moved slot rebuilds. The output cell re-derives the braced list when the
-        # element set changes (append/pop/reassign).
+        # Reconcile the element IoMaps by identity: an element that stays keeps its
+        # IoMap, also when an insert or a delete moves it, and its path follows its
+        # index; only a new element prints. The output cell re-derives the braced
+        # list when the element set changes (append/pop/reassign).
         elem_ims = make_reconciled_child_iomaps_cell(
             () -> _visible_elements(p, obj),
-            (i, x) -> print_child(recursion, x, make_child_context(ctx, ElementReferenceStep(i))))
+            (index, x) -> print_child(recursion, x, make_element_context(ctx, index, i -> (ElementReferenceStep(i),))))
         output = Cell(@computation(SyntaxNode(SyntaxDocument[im.output for im in elem_ims[]];
-            open = _object_delimiter(p, p.open_delimiter), close = _object_delimiter(p, p.close_delimiter),
-            sep = _object_delimiter(p, " "), indentation = ind)))
+            open = _object_delimiter(p, _make_open_text(p.open_delimiter, ind)),
+            close = _object_delimiter(p, _make_close_text(p.close_delimiter, ind)),
+            sep = _object_delimiter(p, _make_sep_text(" ", ind)), indentation = ind)))
         return SimpleIoMap(p, _get_object_input(obj), output)
     end
 
@@ -289,9 +298,9 @@ function print_document(p::ObjectNodeToSyntaxNode, recursion, obj, ctx)
         field_nodes = SyntaxDocument[
             SyntaxNode(SyntaxDocument[nl, _field_value(p, fim)]; sep = _object_delimiter(p, " "))
             for (nl, fim) in entries]
-        fields_block = SyntaxNode(field_nodes; open = _object_delimiter(p, p.open_delimiter),
-            close = _object_delimiter(p, p.close_delimiter), sep = _object_delimiter(p, " "),
-            indentation = ind)
+        fields_block = SyntaxNode(field_nodes; open = _object_delimiter(p, _make_open_text(p.open_delimiter, ind)),
+            close = _object_delimiter(p, _make_close_text(p.close_delimiter, ind)),
+            sep = _object_delimiter(p, _make_sep_text(" ", ind)), indentation = ind)
         SyntaxNode(SyntaxDocument[type_leaf, fields_block]; sep = _object_delimiter(p, " "))
     end)
     SimpleIoMap(p, _get_object_input(obj), output)
@@ -324,7 +333,7 @@ function ObjectToSyntax(; theme = nothing,
         Number         => NumberToSyntaxLeaf(style=style(:number_text, nothing, number_color), include_selection=include_selection),
         AbstractString => StringToSyntaxLeaf(; theme, value=style(:string_text, nothing, string_color), include_selection=include_selection),
         Symbol         => SymbolToSyntaxLeaf(style=style(:symbol_text, nothing, symbol_color), include_selection=include_selection),
-        Char           => CharToSyntaxLeaf(; theme, value=style(:string_text, nothing, char_color), include_selection=include_selection),
+        Char           => CharToSyntaxLeaf(; theme, value=style(:char_text, nothing, char_color), include_selection=include_selection),
         Any            => ObjectNodeToSyntaxNode(; theme,
                                                  type_name=style(:type_name_text, type_name_font, type_name_color),
                                                  field_name=style(:field_name_text, field_name_font, field_name_color),

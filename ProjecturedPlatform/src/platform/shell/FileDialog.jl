@@ -33,9 +33,11 @@ It opens the dialog; the path is taken when the person confirms, and
 exactly as a file opened from the explorer does.
 """
 function open_file_dialog!(; directory::AbstractString = pwd(), editor = get_evaluation_editor())
-    dialog, chooser = make_file_dialog(directory, "Open", "Open")
-    _show_file_dialog!(editor, dialog, chooser) do path
-        isfile(path) ? OpenFileOperation(path) : nothing
+    run_on_editor_task!(editor; description = "open_file_dialog!") do
+        dialog, chooser = make_file_dialog(directory, "Open", "Open")
+        _show_file_dialog!(editor, dialog, chooser) do path
+            isfile(path) ? OpenFileOperation(path) : nothing
+        end
     end
 end
 
@@ -44,18 +46,32 @@ end
 
 Give `file` a name and write it there.
 
-`file` is the `FileDocument` a tab holds. Saving it under a new name is two
-things and this does both in order: the file takes the name, and then it is
-written, by the one operation that writes a file.
+`file` is the `FileDocument` a tab holds, or the [`FilePage`](@ref) that holds
+it. Saving it under a new name is two things and this does both in order: the
+file takes the name, and then it is written, by the one operation that writes a
+file. A page writes with no check of the disk, because the person chose the name,
+and keeps the hash of the text that it wrote.
 """
 function save_file_dialog!(file; directory::AbstractString = pwd(),
                            editor = get_evaluation_editor())
-    dialog, chooser = make_file_dialog(directory, "Save as", "Save")
-    _show_file_dialog!(editor, dialog, chooser) do path
-        isempty(basename(path)) && return nothing
-        file.filename = path
-        SaveFileOperation(file)
+    run_on_editor_task!(editor; description = "save_file_dialog!") do
+        dialog, chooser = make_file_dialog(directory, "Save as", "Save")
+        _show_file_dialog!(editor, dialog, chooser) do path
+            isempty(basename(path)) && return nothing
+            _make_save_as_operation(file, path)
+        end
     end
+end
+
+# The file takes the name, and the save of what the dialog was given writes it.
+function _make_save_as_operation(file, path)
+    file.filename = path
+    SaveFileOperation(file)
+end
+
+function _make_save_as_operation(page::FilePage, path)
+    find_page_file(page).filename = path
+    SaveFilePageOperation(page; force = true)
 end
 
 # The dialog is a window of its own, as every popup here is (`PAR-MANY-WINDOWS`).

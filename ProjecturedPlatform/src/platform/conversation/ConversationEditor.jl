@@ -231,6 +231,19 @@ struct ComposerInsertPartOperation <: Operation
 end
 
 """
+    InsertDraftDocumentOperation(draft, document)
+
+Put `document` into `draft` as a part before the last one, the text that the
+person types, and keep the caret in that text. A paste of a document that has no
+text form, such as a plot, gives it, and so does the "Picture" button of an
+assistant.
+"""
+struct InsertDraftDocumentOperation <: Operation
+    draft::ConversationDraft
+    document::Document
+end
+
+"""
 ENTER in the kind chooser: if the value names a known kind, commit it to that
 domain's insertion via the factory; otherwise a no-op (keep editing).
 """
@@ -275,7 +288,7 @@ OperationModule.is_self_contained_operation(::Union{
     ComposerInputOperation, ComposerBackspaceOperation, ComposerNewlineOperation,
     ComposerInsertPartOperation, ComposerCommitChooserOperation,
     ComposerCommitSourceOperation, ComposerEvaluateOperation,
-    ComposerRevertOperation, ComposerSubmitOperation}) = true
+    ComposerRevertOperation, ComposerSubmitOperation, InsertDraftDocumentOperation}) = true
 
 # ═══════════════════════════════════════════════════════════════════════
 # evaluate_operation
@@ -306,6 +319,28 @@ function evaluate_operation(editor, op::ComposerBackspaceOperation)
     sync_draft_selection!(editor, op.draft)
 end
 
+function evaluate_operation(editor, op::InsertDraftDocumentOperation)
+    d = op.draft
+    insert!(d.parts, max(length(d.parts), 1), ConversationPart(op.document))
+    sync_draft_selection!(editor, d)
+end
+
+# A draft takes a pasted document with no text form as a part of its own; a
+# document with a text form goes into the text that the person types, as text.
+make_pasted_document_operation(d::ConversationDraft, path, value) =
+    has_text_form(value) ? nothing : InsertDraftDocumentOperation(d, value)
+
+"""
+    has_text_form(content) -> Bool
+
+Whether a model reads `content`, a part of a conversation, as text: text, a form,
+a thought, or a document with a `:string` natural projection, such as code or
+JSON. A part with none, such as a plot or a picture, goes to a model as a picture.
+"""
+has_text_form(content) =
+    content isa Union{TextBlock, PrimitiveString, EvaluatorForm, ConversationThinking} ||
+    make_natural_projection(content, :string) !== nothing
+
 function evaluate_operation(editor, op::ComposerInsertPartOperation)
     d = op.draft
     p = _active_part(d)
@@ -314,7 +349,7 @@ function evaluate_operation(editor, op::ComposerInsertPartOperation)
         if isempty(strip(v))
             deleteat!(d.parts, length(d.parts))    # drop the blank typein
         else
-            p.content = TextBlock(TextString(v))    # commit the prose
+            p.content = make_text_block(v)    # commit the prose
         end
     end
     ins = DocumentInsertion("")
@@ -408,7 +443,8 @@ end
     finalize_draft!(draft) -> Bool
 
 Normalize a draft for submission: drop a trailing blank text typein and convert
-every remaining `PrimitiveString` part to committed `TextBlock` prose. Returns
+every remaining `PrimitiveString` part to committed prose (`make_prose_document`),
+so a typed message draws in the font and with the wrapping of a reply. Returns
 whether the draft still has any parts (i.e. is worth submitting).
 """
 function finalize_draft!(d::ConversationDraft)
@@ -419,22 +455,9 @@ function finalize_draft!(d::ConversationDraft)
     for i in eachindex(d.parts)
         part = d.parts[i]
         part.content isa PrimitiveString &&
-            (part.content = _prose_document(_value(part.content)))
+            (part.content = make_prose_document(_value(part.content)))
     end
     !isempty(d.parts)
-end
-
-# A committed paragraph is a markdown document when a markdown parser is loaded,
-# so a typed message draws in the font and with the wrapping of a reply. With no
-# parser it stays a text block, which is what an environment without the markdown
-# package can draw. The model receives the source either way.
-function _prose_document(text::AbstractString)
-    has_natural_parser(:md) || return TextBlock(TextString(String(text)))
-    try
-        parse_natural_text(:md, String(text))
-    catch
-        TextBlock(TextString(String(text)))
-    end
 end
 
 function evaluate_operation(editor, op::ComposerSubmitOperation)
@@ -498,6 +521,7 @@ as the root projection, chained through the widget→graphics pipeline (wrap in
 """
 @projection UntrackedCell struct ConversationComposerToWidget
     part_gap::Int = get_conversation_style(nothing, :part_gap)
+    picture_height::Int = get_conversation_style(nothing, :picture_height)
     code_font::StyleFont = get_conversation_style(nothing, :code_font)
     kind_text::StyleText = get_conversation_style(nothing, :kind_text)
     section_text::StyleText = get_conversation_style(nothing, :section_text)
@@ -532,15 +556,6 @@ end
 
 const _PLACEHOLDER = "type here…"
 
-# A range at offsets `s..e` inside span `span` (1-based) of a body `TextBlock`, in
-# the `.elements[span].content{s:e}` shape `TextToGraphics` reads. `s == e` is its
-# thin-line caret.
-_body_range_selection(span::Int, s::Int, e::Int) =
-    ConcreteReference(FieldReferenceStep("elements"),
-        ConcreteReference(RangeReferenceStep(span - 1, span),
-            ConcreteReference(FieldReferenceStep("content"),
-                ConcreteReference(RangeReferenceStep(s, e), EmptyReference()))))
-
 # ── Editable (active) part body — its value, drawn with the draft's selection.
 
 # A `DocumentInsertion` keeps its "Insert a new <value> here" decoration: static
@@ -548,9 +563,13 @@ _body_range_selection(span::Int, s::Int, e::Int) =
 const _INS_PREFIX = "Insert a new "
 const _INS_SUFFIX = " here"
 
-# Which span of the rendered body carries the editable value.
+# Which run of the first line of the rendered body starts the editable value, and
+# the flat offset where the value starts: after the prefix of a kind chooser, and
+# at the start of a plain value, which fills every line of the body.
 _value_span(::DocumentInsertion) = 2
 _value_span(::Any) = 1
+_value_offset(::DocumentInsertion) = length(_INS_PREFIX)
+_value_offset(::Any) = 0
 
 function _editable_body(p, c::DocumentInsertion)
     # The value span carries the live commitability colour (green = names a
@@ -566,34 +585,34 @@ function _editable_body(p, c::DocumentInsertion)
         state === :invalid ? p.invalid_color :
         state === :empty   ? p.plain_color  : p.valid_color
     end)
-    TextBlock([
+    TextBlock(TextLine(TextDocument[
         TextString(_INS_PREFIX, p.code_font, p.placeholder_color),
         value_span,
         TextString(() -> name_completion(c).hint, p.code_font, p.completion_hint_color),
         TextString(_INS_SUFFIX, p.code_font, p.placeholder_color),
-    ])
+    ]))
 end
 
-# Plain editable text (a `PrimitiveString` or a domain's insertion): one span, and
-# a pale placeholder while empty.
+# Plain editable text (a `PrimitiveString` or a domain's insertion): a line of one
+# run for each line of the value, and one pale placeholder line while it is empty.
+# The break before a line counts one flat offset, as the `'\n'` of the value does,
+# so a flat offset of the body is an offset of the value.
 function _editable_body(p, c)
-    show() = (v = _value(c); isempty(v) ? _PLACEHOLDER : v)
-    # reactive font_color (set below); font stays immutable.
-    ts = TextString(Cell(Computation(show)), p.code_font, Cell(p.plain_color), nothing, nothing, nothing, nothing)
-    set_cell_computation!(getfield(ts, :font_color),
-           () -> isempty(_value(c)) ? p.placeholder_color : p.plain_color)
-    TextBlock(ts)
+    hint = TextLine(TextString(_PLACEHOLDER, p.code_font, p.placeholder_color))
+    TextBlock(function ()
+        v = _value(c)
+        isempty(v) && return TextDocument[hint]
+        TextDocument[TextLine(TextString(String(line), p.code_font, p.plain_color)) for line in split(v, '\n')]
+    end)
 end
 
-# The body's selection for the value range `s..e` of the active part `c`. While a
-# kind chooser's value is empty, the caret sits at the end of the prefix span:
-# `TextToGraphics` can not place a caret in a zero-width span, and this lands at
-# the same x, just after "Insert a new ".
+# The body's selection for the value range `s..e` of the active part `c`: a flat
+# range of its line, past the runs before the value. While a kind chooser's value
+# is empty, the caret is at the end of its prefix, just after "Insert a new ".
 function _body_selection(c, s::Int, e::Int)
-    (c isa DocumentInsertion && isempty(_value(c))) &&
-        return _body_range_selection(1, length(_INS_PREFIX), length(_INS_PREFIX))
     n = length(_value(c))
-    _body_range_selection(_value_span(c), clamp(s, 0, n), clamp(e, 0, n))
+    base = _value_offset(c)
+    make_flat_range_reference(base + clamp(s, 0, n), base + clamp(e, 0, n))
 end
 
 # A widget that follows the draft's paths (the selection, the mouse target). Each
@@ -619,6 +638,7 @@ end
 # dispatch, so committed code renders as a parsed Julia document, prose as text,
 # and an evaluation as its form stacked over its result.
 _committed_body(p, c::EvaluatorForm) = _eval_sections(p, c, nothing)
+_committed_body(p, c::ImageFile) = _make_picture_body(c, p.picture_height)
 _committed_body(p, c) = c
 
 # The composer draws the chrome the transcript draws, for the same reason: the
@@ -632,6 +652,7 @@ _committed_body(p, c) = c
 # not a card would drop that step and the maps below would stop finding it.
 _part_chrome(content) =
     content isa EvaluatorForm ? (:muted, get_evaluation_kind_label(content)) :
+    content isa ImageFile     ? (:muted, "picture")                 :
     _is_code(content)         ? (:muted, _kind_label(content))     :
     (:plain, nothing)
 
@@ -767,45 +788,31 @@ end
 
 # The value range of the active part `c` that a place in its `body` names:
 # `(start, stop)`, `nothing` for a range that leaves the value, or `:other` for a
-# reference that names no place in the text.
+# reference that names no place in the text. The value is a run of the one line of
+# a kind chooser, or every line of a plain value; `get_flat_range` reads a place in
+# either form that a text takes. A caret before the value is at its start, and one
+# after it at its end.
 function _map_body_to_value(c, body::TextBlock, reference)
-    r = strip_reference_types(reference)
+    range = get_flat_range(body, reference)
+    range === nothing && return :other
     span = _value_span(c)
     n = length(_value(c))
-    if r isa ConcreteReference && r.head isa TextRangeReferenceStep && r.tail isa EmptyReference
-        base = get_flat_base(body, Int[span])
-        base === nothing && return :other
-        shown = length(body.elements[span].content::AbstractString)
-        inside(f) = base <= f <= base + shown
-        place(f) = f < base ? 0 : f > base + shown ? n : clamp(f - base, 0, n)
-        s, e = r.head.start, r.head.stop
-        s == e && return (place(s), place(s))
-        (inside(s) && inside(e)) || return nothing
-        return (clamp(s - base, 0, n), clamp(e - base, 0, n))
-    end
-    parsed = _parse_body_span_range(r)
-    parsed === nothing && return :other
-    k, a, b = parsed
-    k == span && return (clamp(a, 0, n), clamp(b, 0, n))
-    a == b || return nothing
-    k < span ? (0, 0) : (n, n)
+    base = get_flat_base(body, Int[1, span])
+    base === nothing && return :other
+    shown = _shown_length(c, body)
+    inside(f) = base <= f <= base + shown
+    place(f) = f < base ? 0 : f > base + shown ? n : clamp(f - base, 0, n)
+    s, e = range
+    s == e && return (place(s), place(s))
+    (inside(s) && inside(e)) || return nothing
+    (clamp(s - base, 0, n), clamp(e - base, 0, n))
 end
 
-# The `(k, s, e)` of an `elements[k].content{s:e}` path, or `nothing` when the
-# reference is not one.
-function _parse_body_span_range(reference)
-    reference isa ConcreteReference || return nothing
-    (reference.head isa FieldReferenceStep && reference.head.name == "elements") || return nothing
-    span = reference.tail
-    (span isa ConcreteReference && span.head isa RangeReferenceStep) || return nothing
-    inner = span.tail
-    (inner isa ConcreteReference && inner.head isa FieldReferenceStep &&
-     inner.head.name == "content") || return nothing
-    range = inner.tail
-    (range isa ConcreteReference && range.head isa RangeReferenceStep &&
-     range.tail isa EmptyReference) || return nothing
-    (span.head.stop, range.head.start, range.head.stop)
-end
+# How many flat offsets of the rendered body show the value, or the placeholder
+# while it is empty: the value run of a kind chooser, or the whole body.
+_shown_length(c::DocumentInsertion, body::TextBlock) =
+    length(body.elements[1].elements[_value_span(c)].content::AbstractString)
+_shown_length(::Any, body::TextBlock) = length(get_flat_string(body))
 
 # ═══════════════════════════════════════════════════════════════════════
 # Reader: gesture → composer operation, dispatched on the active part's state
@@ -816,11 +823,12 @@ end
 # with the assistant card) is the set the gesture-help window shows
 # (`get_projection_gesture_bindings`) — fire == show. The text keys are the text
 # layer's; the Return / Shift+Return / Alt+Return / Tab / Esc meaning is
-# mode-specific. ModifierKeys are matched as the old `@gesture_case` did: `[:shift]`/`[:alt]`
-# are exact, a bare key (`mods=nothing`) matches any modifiers, and the exact-modifier
-# rows precede the bare one so Shift/Alt+Return win over plain Return (first match).
+# mode-specific, and Return and Tab are the `KeyPress` of `'\n'` and `'\t'`.
+# ModifierKeys: `[:shift]`/`[:alt]` are exact, a bare key (`mods=nothing`) matches any
+# modifiers, and the exact-modifier rows precede the bare one so Shift/Alt+Return win
+# over plain Return (first match).
 function _composer_bindings(draft::ConversationDraft)
-    newline = GestureBinding(KeyDownPattern(:return; modifiers = [:shift]),
+    newline = GestureBinding(KeyPressPattern('\n'; modifiers = [:shift]),
                              (d, e) -> _make_newline_operation(d);
                              description = "New line", domain = "composer")
     revert = GestureBinding(KeyDownPattern(:escape),
@@ -830,10 +838,10 @@ function _composer_bindings(draft::ConversationDraft)
     if c isa PrimitiveString
         GestureBinding[
             newline,
-            GestureBinding(KeyDownPattern(:return),
+            GestureBinding(KeyPressPattern('\n'),
                            (d, e) -> ComposerSubmitOperation(d); description = "Submit",
                            domain = "composer"),
-            GestureBinding(KeyDownPattern(:tab),
+            GestureBinding(KeyPressPattern('\t'),
                            (d, e) -> ComposerInsertPartOperation(d);
                            description = "Add a structured part", domain = "composer"),
             GestureBinding(KeyDownPattern(:insert),
@@ -842,7 +850,7 @@ function _composer_bindings(draft::ConversationDraft)
         ]
     elseif c isa DocumentInsertion
         GestureBinding[
-            GestureBinding(KeyDownPattern(:return),
+            GestureBinding(KeyPressPattern('\n'),
                            (d, e) -> ComposerCommitChooserOperation(d);
                            description = "Choose insertion kind", domain = "composer"),
             revert,
@@ -851,11 +859,11 @@ function _composer_bindings(draft::ConversationDraft)
         # Julia source: ENTER commits it, and ALT+ENTER runs it. Running is
         # Julia's alone, which is why this arm names the format.
         GestureBinding[
-            GestureBinding(KeyDownPattern(:return; modifiers = [:alt]),
+            GestureBinding(KeyPressPattern('\n'; modifiers = [:alt]),
                            (d, e) -> ComposerEvaluateOperation(d);
                            description = "Evaluate", domain = "composer"),
             newline,
-            GestureBinding(KeyDownPattern(:return),
+            GestureBinding(KeyPressPattern('\n'),
                            (d, e) -> ComposerCommitSourceOperation(d);
                            description = "Commit source", domain = "composer"),
             revert,
@@ -866,7 +874,7 @@ function _composer_bindings(draft::ConversationDraft)
         # key-driven insertion (`[` → JsonArray, …) is still future work.
         GestureBinding[
             newline,
-            GestureBinding(KeyDownPattern(:return),
+            GestureBinding(KeyPressPattern('\n'),
                            (d, e) -> ComposerCommitSourceOperation(d);
                            description = "Commit source", domain = "composer"),
             revert,
@@ -973,6 +981,13 @@ end
 
 read_intent(::ConversationComposerToWidget, iomap::SimpleIoMap, evt::KeyPress) =
     read_composer_gesture(iomap.input, evt)
+
+# The composer owns Return: a plain Return submits the draft, and Shift+Return
+# breaks the line of its value (`_composer_bindings`). The text under a card reads
+# Return as a break of its line; the composer declines that edit, so the key goes
+# on to its own bindings.
+read_intent(p::ConversationComposerToWidget, iomap::SimpleIoMap, op::ReplaceRangeOperation) =
+    occursin('\n', op.replacement) ? nothing : invoke(read_intent, Tuple{Projection,Any,Any}, p, iomap, op)
 
 read_intent(::ConversationComposerToWidget, iomap::SimpleIoMap, evt::KeyDown) =
     (d = iomap.input; resolve_composer_host_operation(d.assistant, read_composer_gesture(d, evt)))

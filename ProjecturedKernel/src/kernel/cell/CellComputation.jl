@@ -25,7 +25,7 @@ The cell keeps the function and not the marker. Only a `ReactiveCell` and an
 
 A marker made inside a fault scope keeps the scope with its function, so the
 function that the cell keeps hands its fault to that scope; see
-`run_in_fault_scope`.
+`run_in_cell_fault_scope`.
 
 See also `@computation`, and `set_cell_computation!`, which gives a computation
 to a cell that exists.
@@ -46,9 +46,9 @@ read, and again on the first read after a cell that it read was written.
 
 Use it to state a derived value where it belongs, beside the thing that has it,
 instead of computing it again at every place that needs it. It goes into a
-reactive cell: a new cell, a typed cell, a write into a cell, or a reactive field
-of a struct of cells. A `MutableCell` or an `ImmutableCell` throws an
-`ArgumentError` for it.
+reactive cell or an untracked cell: a new cell, a typed cell, or a write into a
+reactive cell. A `MutableCell` or an `ImmutableCell` throws an `ArgumentError` for
+it.
 
 # Example
 

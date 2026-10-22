@@ -131,7 +131,9 @@ end
 function _make_view_table(p::DataFrameViewToWidget, view::DataFrameView, bar::WidgetScrollBar)
     headers = CellVector(@computation Any[_make_filter_header(p, view, name)
                                           for name in _get_shown_columns(view)])
-    rows = Cell(@computation _make_row_list(view, _get_shown_columns(view), view.kept_rows, view.anchor))
+    made = _MadeRows()
+    rows = Cell(@computation _make_row_list(view, _get_shown_columns(view), view.kept_rows, view.anchor,
+                                            nothing, made))
     row_headers, corner = _make_row_numbers(p, view)
     # The data of the shown columns. A column that a person gave a width has it,
     # and the others share the rest.
@@ -148,7 +150,7 @@ function _make_view_table(p::DataFrameViewToWidget, view::DataFrameView, bar::Wi
                         Cell(_COLUMN_POLICY), Cell(Fixed(p.row_height)), Cell(:clip),
                         Cell(true), Cell(nothing), Cell(nothing), Cell(nothing),
                         Cell(nothing), getfield(view, :scroll_position),
-                        getfield(view, :top_row), Cell(nothing), Cell(bar), Cell(:auto),
+                        getfield(view, :top_row), Cell(nothing), Cell(nothing), Cell(bar), Cell(:auto),
                         Cell(@computation _get_table_open_cells(view, false)), Cell(nothing),
                         Cell(@computation _get_table_selection(view, false)))
     set_cell_computation!(getfield(table, :mouse_target), () -> _get_table_mouse_target(view))
@@ -217,8 +219,9 @@ function _make_column_list_table(p::DataFrameViewToWidget, view::DataFrameView, 
     # keys itself, and a new sort builds the list again.
     headers = Cell(@computation (view.query.sort_keys; columns = _get_shown_columns(view);
         make_index_list(length(columns), view.column_anchor, c -> _make_filter_header(p, view, columns[c]))))
+    made = _MadeRows()
     rows = Cell(@computation _make_row_list(view, _get_shown_columns(view), view.kept_rows, view.anchor,
-                                            view.column_anchor))
+                                            view.column_anchor, made))
     # The width that a person gave a column, else none, which leaves the
     # column at the width of the list and at least as wide as its header.
     column_of = _make_column_documents(view, nothing)
@@ -231,7 +234,7 @@ function _make_column_list_table(p::DataFrameViewToWidget, view::DataFrameView, 
                         Cell(Fixed(p.list_column_width)), Cell(Fixed(p.row_height)), Cell(:clip),
                         Cell(true), Cell(nothing), Cell(nothing), Cell(nothing),
                         Cell(nothing), getfield(view, :scroll_position),
-                        getfield(view, :top_row), Cell(nothing), Cell(bar), Cell(:auto),
+                        getfield(view, :top_row), Cell(nothing), Cell(nothing), Cell(bar), Cell(:auto),
                         Cell(@computation _get_table_open_cells(view, true)), Cell(nothing),
                         Cell(@computation _get_table_selection(view, true)))
     set_cell_computation!(getfield(table, :mouse_target), () -> _get_table_mouse_target(view))
@@ -433,8 +436,10 @@ _make_shape_step(operation::InsertDataFrameRowOperation) = _make_row_insert_step
 _make_shape_step(operation::DeleteDataFrameRowOperation) = _make_row_delete_step(operation)
 _make_shape_step(operation::_DataFrameColumnOperation) = _make_column_step(operation)
 
-# A key that the table does not take: the gestures of the view answer it.
-read_intent(::DataFrameViewToWidget, iomap::DataFrameViewToWidgetIoMap, event::KeyDown) =
+# A key that the table does not take: the gestures of the view answer it, Return
+# by its KeyPress.
+read_intent(::DataFrameViewToWidget, iomap::DataFrameViewToWidgetIoMap,
+            event::Union{KeyDown, KeyPress}) =
     read_gesture(iomap.input, event)
 
 # A selection in the table selects in the view: a header selects its column, a

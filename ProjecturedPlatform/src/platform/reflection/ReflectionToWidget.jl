@@ -64,7 +64,8 @@ function print_document(p::ReflectionToWidget, recursion, node, ctx)
     end)
     # Positional, so every declared field is named here in order: position,
     # roots, visible, margin, border, padding, style, expanded, gestures,
-    # scroll_position, vertical_scroll_bar, horizontal_scroll_bar, tooltip.
+    # scroll_position, vertical_scroll_bar, horizontal_scroll_bar, tooltip; the
+    # anchor and the shown rows take their defaults.
     output = WidgetTree(Cell(Point2D(0, 0)), CellVector(@computation Any[tree[].root]),
                         Cell(true), Cell(nothing), Cell(nothing), Cell(nothing), Cell(nothing),
                         Cell(@computation tree[].expanded),
@@ -181,10 +182,23 @@ function read_intent(p::ReflectionToWidget, iomap::ReflectionToWidgetIoMap,
 end
 
 # A move answers the leave of a part and the part under the pointer together; each
-# goes back as this view reads it alone.
+# goes back as this view reads it alone. A chevron of a tree that scrolls itself
+# answers the open rows with the rows of its view; each part goes back alone too.
 function read_intent(p::ReflectionToWidget, iomap::ReflectionToWidgetIoMap, op::CompoundOperation)
+    if any(member -> _is_disclosure_write(iomap, member), op.operations)
+        parts = Any[read_intent(p, iomap, member) for member in op.operations]
+        return CompoundOperation(Any[part for part in parts if part !== nothing])
+    end
     has_mouse_target(op) || return op
     join_move_answers((read_intent(p, iomap, member) for member in op.operations)...)
+end
+
+# Whether `op` writes the open rows of the widget of this view, as view state.
+function _is_disclosure_write(iomap::ReflectionToWidgetIoMap, op)
+    op isa ReplaceViewStateOperation || return false
+    inner = get_wrapped_operation(op)
+    inner isa ReplaceReferencedValueOperation && inner.document === iomap.output &&
+        _field_name(inner) == "expanded"
 end
 
 read_intent(::ReflectionToWidget, ::ReflectionToWidgetIoMap, op) = op

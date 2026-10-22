@@ -12,13 +12,16 @@ end
 PaneModule.make_pane_tab_title(::ReferencedTitledNote, name::AbstractString) =
     PaneTabTitle(name; icon = :loader, tooltip = "a note")
 
-function _make_referenced_application(directory; paths = nothing)
+# The window opens on the Explorer; with `focus_file`, the first file is in front
+# and has the keys, as a press on its tab gives them.
+function _make_referenced_application(directory; paths = nothing, focus_file::Bool = false)
     if paths === nothing
         write(joinpath(directory, "people.json"),
               "[{\"name\": \"Cleo\", \"age\": 29}, {\"name\": \"Ada\", \"age\": 36}]")
         paths = [joinpath(directory, "people.json")]
     end
     document, projection = make_application_window(paths; root = directory, assistant = nothing)
+    focus_file && _app_focus_first_file!(document)
     editor = build_editor(document, projection; backend = HeadlessBackend(), tabs = false,
                           window = (; title = "ProjecturEd", width = 1280, height = 720,
                                     opened_window_projections = make_opened_window_projections(;
@@ -186,7 +189,7 @@ function test_referenced_document_editor()
     end
 
     @testset "the application declares the new names, and a search finds them" begin
-        set = ToolSet(; api = make_application_api())
+        set = ToolSet(; api = make_editor_api())
         register_default_tools!(set)
         description = only([t for t in set.tools if t.name == "execute_julia_code"]).description
         @test occursin("replace_referenced_value!(part, new_value)", description)
@@ -198,7 +201,9 @@ function test_referenced_document_editor()
         @test first(first_names("find pane"; mode = "keywords")) == "find_pane"
         @test "ReferencedDocument" in first_names("a document and where it is"; mode = "description")
         @test first(first_names("the address of a document"; mode = "description")) == "DocumentLocator"
-        @test first(first_names("the fields of a JSON object"; mode = "description")) == "JsonObject"
+        # A domain with a parser is written as its text, so its constructors are
+        # not declared, and a search for a document from text finds the parser.
+        @test first(first_names("make a document of a domain from its text"; mode = "description")) == "parse_natural_text"
         @test first(first_names("open a pane under another pane"; mode = "description")) == "open_pane!"
     end
 
@@ -287,7 +292,7 @@ function test_referenced_document_editor()
     @testset "an operation routed into a file tab is recorded in the file's history" begin
         people_tab = find_pane("people.json"; editor)
         people = get_edited_document(people_tab)
-        file_history = get_document(people_tab).content.content.content   # the scroll pane, the file, its history
+        file_history = get_file_content(find_page_file(get_document(people_tab).content))   # the history of the file of the page
         steps = (length(history.undo_entries), length(file_history.undo_entries))
         name = extend_reference(EmptyReference(), ElementReferenceStep(2), FieldReferenceStep("entries"),
                                 ElementReferenceStep(1), FieldReferenceStep("value"))
@@ -303,7 +308,7 @@ function test_referenced_document_editor()
     @testset "the editing verbs record an edit in the history of the file, and an undo takes it back" begin
         people_tab = find_pane("people.json"; editor)
         people = get_edited_document(people_tab)
-        file_history = get_document(people_tab).content.content.content
+        file_history = get_file_content(find_page_file(get_document(people_tab).content))
         count = length(get_document(people))
         steps = (length(history.undo_entries), length(file_history.undo_entries))
         frank = JsonObject("name" => JsonString("Frank"), "age" => JsonNumber(30))
@@ -336,14 +341,18 @@ function test_referenced_document_editor()
         @test occursin("hello", repr(text))
     end
 
-    # A file tab shows its file in a scroll pane, made where the tab is made.
+    # A file tab shows the page of its file, and the page holds the file in a scroll
+    # pane, made where the tab is made.
     @testset "a long file tab scrolls, and an edit, a save and an open go through its scroll pane" begin
         long_directory = mktempdir()
         long_path = joinpath(long_directory, "long.json")
         write(long_path, "[" * join(("{\"n\": $i}" for i in 1:60), ", ") * "]")
-        long_editor = _make_referenced_application(long_directory; paths = [long_path])
+        long_editor = _make_referenced_application(long_directory; paths = [long_path],
+                                                   focus_file = true)
         long_tab = find_pane("long.json"; editor = long_editor)
-        pane = get_document(long_tab).content
+        page = get_document(long_tab).content
+        @test page isa FilePage
+        pane = page.content
         @test pane isa WidgetScrollPane && is_file_document(pane.content)
         items = get_edited_document(long_tab)
         @test get_document(items) isa JsonArray

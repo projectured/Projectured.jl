@@ -23,6 +23,8 @@ using ProjecturedXMLTest
 using ProjecturedMarkdownTest
 using ProjecturedRSTTest
 using ProjecturedBookTest
+using ProjecturedWorkflowTest
+using ProjecturedResearchTest
 using ProjecturedMathTest
 using ProjecturedJuliaTest
 using ProjecturedSQLTest
@@ -38,7 +40,7 @@ using ProjecturedPivotTest
 
 # Re-export every lower tier's test functions, so `using ProjecturedTest` alone
 # gives a REPL `test_json()` and `test_platform()` as well as `test_all()`.
-for _src in (ProjecturedBookTest, ProjecturedChartTest, ProjecturedPlatformTest, ProjecturedDatabaseTest, ProjecturedDBCatalogTest, ProjecturedFormulaTest, ProjecturedFSMTest, ProjecturedGraphTest, ProjecturedJSONTest, ProjecturedJuliaTest, ProjecturedKernelTest, ProjecturedMarkdownTest, ProjecturedMathTest, ProjecturedProcessTest, ProjecturedPivotTest, ProjecturedRSTTest, ProjecturedSequenceChartTest, ProjecturedSQLTest, ProjecturedXMLTest, ProjecturedYAMLTest)
+for _src in (ProjecturedBookTest, ProjecturedWorkflowTest, ProjecturedResearchTest, ProjecturedChartTest, ProjecturedPlatformTest, ProjecturedDatabaseTest, ProjecturedDBCatalogTest, ProjecturedFormulaTest, ProjecturedFSMTest, ProjecturedGraphTest, ProjecturedJSONTest, ProjecturedJuliaTest, ProjecturedKernelTest, ProjecturedMarkdownTest, ProjecturedMathTest, ProjecturedProcessTest, ProjecturedPivotTest, ProjecturedRSTTest, ProjecturedSequenceChartTest, ProjecturedSQLTest, ProjecturedXMLTest, ProjecturedYAMLTest)
     for _n in names(_src)
         _n === nameof(_src) && continue
         isdefined(_src, _n) || continue
@@ -52,9 +54,9 @@ import ProjecturedPlatformTest: test_projection_template_hygiene,
                               test_layout_constraint_helpers, test_primitive,
                               test_syntax_to_text, test_primitive_to_text,
                               test_text_to_graphics, test_word_wrapping,
-                              test_text_filtering, test_text_highlighting,
+                              test_filtered_text_to_text, test_highlighted_text_to_text,
                               test_selection_inverting,
-                              test_object_to_widget, test_projection_configuring,
+                              test_object_to_widget, test_find_bar_view_to_widget,
                               test_widget_text_editing, test_widget_button_behavior,
                               test_widget_gestures, test_widget_select_dropdown,
                               test_widget_menu, test_widget_context_menu,
@@ -112,6 +114,9 @@ using ProjecturedOllamaTest
 # The suite of the ACP client. It talks to a fake agent in this process and to a
 # small child process, so it needs no Node.js and no sign-in.
 using ProjecturedACPTest
+# The suite of the language server adapter. A server in this process answers it;
+# its tests with `clangd` skip themselves when it is not installed.
+using ProjecturedLanguageServerTest
 # The suite of the data frame view. It prints its views without a window.
 using ProjecturedDataFramesTest
 # A pivot of a data frame names two packages that do not depend on each other.
@@ -157,16 +162,21 @@ include("backend/AssistantConversationVideoTest.jl")
 include("backend/BackendChoiceTest.jl")
 include("document/SelectionEnumeration.jl")
 include("document/PivotDataFrameTest.jl")
+include("document/FormulaExampleTest.jl")
 include("editor/ConstructTest.jl")
 include("editor/ConversationPanelTest.jl")
 include("editor/ConversationParsingTest.jl")
 include("editor/ConversationSerializationTest.jl")
 include("editor/AssistantMvpTest.jl")
+# After the file above: it uses the scripted rounds that the file above makes.
+include("editor/AssistantStreamTest.jl")
 include("editor/MessageLogFeedTest.jl")
 include("editor/FrameStatisticsFeedTest.jl")
 include("editor/AssistantDuplicateTest.jl")
 include("editor/ApplicationTest.jl")
+include("editor/PointedPartTest.jl")
 include("editor/HistorySweepTest.jl")
+include("editor/FileWatchWindowTest.jl")
 include("editor/InsertionInTabTest.jl")
 include("projection/ToolViewTest.jl")
 include("projection/FileTabTest.jl")
@@ -175,6 +185,7 @@ include("editor/EvaluatorToplevelTest.jl")
 include("editor/EvaluatorDuplicateTest.jl")
 include("editor/ValueViewerTest.jl")
 include("editor/ReferencedDocumentEditorTest.jl")
+include("editor/AssistantVerbsTest.jl")
 include("editor/GalleryWrapperTest.jl")
 include("projection/CommandPaletteTest.jl")
 include("projection/DocumentInsertionTest.jl")
@@ -194,6 +205,8 @@ include("projection/TableNavigationTest.jl")
 include("projection/TableSelectionTest.jl")
 include("projection/TableCellEditingTest.jl")
 include("serializer/FileProjectTest.jl")
+include("serializer/WorkflowFileTest.jl")
+include("editor/ResearchCombinationTest.jl")
 include("serializer/MarkerVocabularyTest.jl")
 include("serializer/SerializationTest.jl")
 include("editor/ExampleTest.jl")
@@ -217,7 +230,10 @@ function test_documents()
     @testset "Documents" begin
         test_constraint_solver()     # Tulip-backed LP constraint layout
         test_serialization()         # round-trips the ProjecturedExample fixtures
+        test_workflow_file()         # a workflow in a .pred file, with markers into other files
+        test_research_combinations() # the items of a study in a report, a workflow card and a window
         test_pivot_data_frame()      # a pivot of a data frame, against DataFrames
+        test_formula_examples()      # the formula examples take a key and Enter
     end
 end
 
@@ -346,6 +362,31 @@ function test_arguments()
             @test find_evaluation_editor_reads(fixture) ==
                   ["source/Verbs.jl:4", "source/Verbs.jl:6", "source/Verbs.jl:7"]
         end
+        # A marker stands above the docstring of its definition, and so marks
+        # the definition, which a marker between the two would part from it.
+        mktempdir() do fixture
+            mkpath(joinpath(fixture, "source"))
+            write(joinpath(fixture, "source", "Marked.jl"), """
+                # @optional: the count stands second, as at a command line.
+                \"\"\"
+                    take_first(items, count = 1; editor = nothing)
+
+                The first `count` items.
+                \"\"\"
+                take_first(items, count = 1; editor = nothing) = items[1:count]
+                unmarked(items, count = 1; editor = nothing) = items
+                # @optional: the count stands second, as at a command line.
+                \"\"\"
+                    take_last(items, count = 1; editor = nothing)
+
+                The last `count` items.
+                \"\"\"
+                function take_last end
+
+                take_last(items, count = 1; editor = nothing) = items[end - count + 1:end]
+                """)
+            @test [d.name for d in find_argument_definitions(fixture) if d.marked] == ["take_first", "take_last"]
+        end
     end
 end
 
@@ -443,6 +484,8 @@ function test_all()
     test_markdown()
     test_rst()
     test_book()
+    test_workflow()
+    test_research()
     test_math()
     test_julia()
     test_sql()
@@ -458,6 +501,7 @@ function test_all()
     test_anthropic()
     test_ollama()
     test_acp()
+    test_languageserver()
     test_dataframes()
     test_integration()
     end
@@ -520,6 +564,8 @@ function test_integration()
     test_natural_notation()
     test_natural_registry()
     test_printers()
+    test_text_runs_hold_no_break()
+    test_text_blocks_hold_only_lines()
     test_readers()
     test_position_navigations()
     test_position_navigations_complete()
@@ -543,13 +589,16 @@ function test_integration()
     test_first_window_compiles_little()
     # Every gesture that changes no document leaves the history as it was.
     test_history_sweep()
+    test_file_watch_window()
     test_julia_typein()
     test_conversation_editor()
     test_assistant_mvp()
+    test_assistant_stream()
     test_assistant_duplicate()
     test_message_log_feed()
     test_frame_statistics_feed()
     test_application()
+    test_pointed_part()
     test_insertion_in_tab()
     test_tool_views()
     test_selection_inspector()
@@ -561,6 +610,8 @@ function test_integration()
     test_evaluator_duplicate()
     test_value_viewer()
     test_referenced_document_editor()
+    test_assistant_verbs()
+    test_assistant_documentation()
     test_gallery_wrappers()
     test_mouse_clicks()
     test_click_roundtrips()
@@ -602,12 +653,13 @@ export test_type_reference, test_gesture_pattern, test_gesture_binding, test_foc
        test_console_backend, test_message_log_feed, test_frame_statistics_feed
 export test_json_document, test_syntax, test_text, test_graphics, test_affine_transform, test_graphics_layout, test_layout_allocator, test_layout_constraint_helpers, test_constraint_solver, test_collection, test_primitive, test_json_parser, test_xml_parser, test_sql_parser, test_serialization
 export test_formula_to_syntax, test_projection_template_hygiene
-export test_json_to_syntax, test_json_to_syntax_reader, test_json_gesture_collection, test_gesture_map, test_gesture_help, test_syntax_to_text, test_syntax_tree_selection, test_filesystem_to_syntax, test_primitive_to_text, test_text_to_graphics, test_word_wrapping, test_text_filtering, test_text_highlighting, test_selection_inverting, test_object_to_widget, test_projection_configuring, test_widget_text_editing, test_widget_button_behavior, test_widget_gestures, test_widget_select_dropdown, test_widget_menu, test_widget_context_menu, test_widget_dialog, test_widget_action, test_widget_icon, test_widget_tree, test_widget_toolbar, test_widget_table, test_layout_closeout, test_widget_forms, test_widget_popup_example, test_copying_projection, test_clipboard, test_versioning_to_any, test_write_image, test_record_video, test_tooltip, test_reference_inspector_text, test_text_ink_inside_viewports, test_split_pane_drag, test_widget_transform_pane, test_dragging, test_anchor_point, test_write_pdf, test_dirty_rect, test_web_backend, test_backend_choice
+export test_json_to_syntax, test_json_to_syntax_reader, test_json_gesture_collection, test_gesture_map, test_gesture_help, test_syntax_to_text, test_syntax_tree_selection, test_filesystem_to_syntax, test_primitive_to_text, test_text_to_graphics, test_word_wrapping, test_filtered_text_to_text, test_highlighted_text_to_text, test_selection_inverting, test_object_to_widget, test_find_bar_view_to_widget, test_widget_text_editing, test_widget_button_behavior, test_widget_gestures, test_widget_select_dropdown, test_widget_menu, test_widget_context_menu, test_widget_dialog, test_widget_action, test_widget_icon, test_widget_tree, test_widget_toolbar, test_widget_table, test_layout_closeout, test_widget_forms, test_widget_popup_example, test_copying_projection, test_clipboard, test_versioning_to_any, test_write_image, test_record_video, test_tooltip, test_reference_inspector_text, test_text_ink_inside_viewports, test_split_pane_drag, test_widget_transform_pane, test_dragging, test_anchor_point, test_write_pdf, test_dirty_rect, test_web_backend, test_backend_choice
 export test_table, test_table_selection, test_table_navigation, test_table_cell_editing, explore_table_selections
-export test_pivot_data_frame
+export test_pivot_data_frame, test_formula_examples
 export test_graph_projection, test_conversation_transcript, test_assistant_conversation_video
 export test_examples, test_position_navigations, test_position_navigations_complete
-export test_printer, test_printers, test_example, test_position_navigation
+export test_printer, test_printers, test_text_runs_hold_no_break, test_text_blocks_hold_only_lines,
+       test_example, test_position_navigation
 export measure_printer_locality, explore_selection_locality, test_selection_locality, test_selection_localities, LocalityReport, LocalityCell, is_selection_cell
 export explore_structural_locality, report_structural_locality, test_template_structural_locality, test_graphics_structural_locality
 export explore_value_locality, test_value_locality, test_value_localities
@@ -626,13 +678,14 @@ export test_click_roundtrip, test_click_roundtrips, test_text_navigation_invaria
 export test_json_content_clicks_clean, test_json_content_clicks_clean_all
 export test_collapse_roundtrip
 export test_tree_navigation, test_tree_navigations, test_tree_navigations_complete, explore_tree_selections
-export test_assistant_mvp, make_assistant_mvp_setup, make_assistant_mvp_projection
+export test_assistant_mvp, test_assistant_stream, make_assistant_mvp_setup, make_assistant_mvp_projection
 export test_conversation_editor, test_conversation_serialization, test_parse_markdown_blocks
 export test_undo_round_trip
-export test_application, test_history_sweep, test_insertion_in_tab,
+export test_application, test_pointed_part, test_history_sweep, test_file_watch_window, test_insertion_in_tab,
        test_tool_views, test_selection_inspector, test_gesture_log_in_tab, test_message_log,
        test_file_tab, test_user_interface_file, test_evaluator_toplevel, test_evaluator_duplicate,
-       test_value_viewer, test_referenced_document_editor,
+       test_value_viewer, test_referenced_document_editor, test_assistant_verbs,
+       test_assistant_documentation,
        test_gallery_wrappers
 export test_odbc_database_connection, test_odbc_database, test_odbc_database_no_db
 export test_db_catalog, test_db_catalog_syntax, test_db_catalog_sql
@@ -648,5 +701,5 @@ export test_pane_tab_b1, test_print_object_options, test_search_object
 export test_execute_julia_code, test_assistant_editor_reference, test_function_availability
 export test_base_extensions, test_mcp_resources, test_mcp_tools
 export test_command_palette, test_command_palette_decorator, test_document_insertion
-export test_gesture_log, test_file_project
+export test_gesture_log, test_file_project, test_workflow_file, test_research_combinations
 export test_marker_vocabulary

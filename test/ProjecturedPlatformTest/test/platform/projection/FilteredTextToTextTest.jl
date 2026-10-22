@@ -1,0 +1,189 @@
+# The editor that an operation is applied against: whatever holds the document.
+mutable struct _FilterEditor
+    document::Any
+end
+
+function test_filtered_text_to_text()
+
+# Build the standard fixture: three logical lines, the first and third
+# containing "dolor". Lines are 1-based element indices of the block:
+#   1: "alpha dolor"   2: "beta gamma"   3: "delta dolor"
+function _fixture()
+    TextBlock(
+        TextLine(TextString("alpha dolor", StyleFont("Ubuntu Mono", 20), color_default)),
+        TextLine(TextString("beta gamma", StyleFont("Ubuntu Mono", 20), color_default)),
+        TextLine(TextString("delta dolor", StyleFont("Ubuntu Mono", 20), color_default)),
+    )
+end
+
+# `elements[line].elements[run].content[start:stop]` range path.
+_range(line, run, start, stop) = TextModule._text_replace_path(Int[line, run], start, stop)
+
+_text(reference) = ConcreteReference(FieldReferenceStep("text"), reference)
+
+_contents(text) = [run.content for line in text.elements for run in line.elements if run isa TextString]
+
+# The text stage: a filter, a highlight, and a plain block as it is.
+_stage() = RecursiveProjection(TypeDispatchingProjection(
+    FilteredText    => FilteredTextToText(),
+    HighlightedText => HighlightedTextToText(color = color_red),
+    TextBlock       => IdentityProjection()))
+
+_print(document) = (stage = _stage(); print_document(stage, stage, document, PrinterContext()))
+
+@testset "FilteredTextToText keeps matching lines" begin
+    iomap = _print(FilteredText(text = _fixture(), pattern = "dolor"))
+    out = iomap.output
+    @test _contents(out) == ["alpha dolor", "delta dolor"]
+    @test iomap.kept == [1, 3]              # both matching lines
+    @test length(out.elements) == 2
+end # @testset
+
+@testset "FilteredTextToText invert keeps the complement" begin
+    iomap = _print(FilteredText(text = _fixture(), pattern = "dolor", invert = true))
+    @test _contents(iomap.output) == ["beta gamma"]
+    @test iomap.kept == [2]
+end # @testset
+
+@testset "FilteredTextToText with an empty pattern is a pass-through" begin
+    iomap = _print(FilteredText(text = _fixture()))
+    @test length(iomap.output.elements) == 3
+    @test iomap.kept == [1, 2, 3]
+    @test _contents(iomap.output) == ["alpha dolor", "beta gamma", "delta dolor"]
+end # @testset
+
+@testset "FilteredTextToText selection round-trip through the step text" begin
+    stage = _stage()
+    block = _fixture()
+    iomap = print_document(stage, stage, FilteredText(text = block, pattern = "dolor"),
+                           PrinterContext())
+    out = iomap.output
+    # Flat caret at (line, char); the fixture has breaks between its lines, so the
+    # flat offset is not the raw char index.
+    fin(line, char)  = TextModule.make_flat_caret_reference(get_flat_base(block, Int[line, 1]) + char)
+    fout(line, char) = TextModule.make_flat_caret_reference(get_flat_base(out, Int[line, 1]) + char)
+    # Kept line 1 (output line 1) and line 3 (output line 2) round-trip; dropping
+    # the middle line shifts line 3's flat offset back by its length.
+    for (in_line, out_line, char) in ((1, 1, 3), (3, 2, 2))
+        fwd = map_reference_forward(stage, iomap, _text(fin(in_line, char)))
+        @test strip_reference_types(fwd) == strip_reference_types(fout(out_line, char))
+        @test strip_reference_types(map_reference_backward(stage, iomap, fwd)) ==
+              strip_reference_types(_text(fin(in_line, char)))
+    end
+    # A cursor on the filtered-out middle line goes to the start of the next kept
+    # line, as a caret in no run of the flat offsets does.
+    @test strip_reference_types(map_reference_forward(stage, iomap, _text(fin(2, 2)))) ==
+          strip_reference_types(fout(2, 0))
+end # @testset
+
+@testset "FilteredTextToText maps a whole-element box past a dropped line" begin
+    box(s, e) = ConcreteReference(TextSpanReferenceStep(s, e), EmptyReference())
+    stage = _stage()
+    document = FilteredText(text = _fixture(), pattern = "dolor")
+    iomap = print_document(stage, stage, document, PrinterContext())
+    # "delta dolor" is 23:34 in the block and 12:23 in the output, because the
+    # dropped line "beta gamma" ⏎ is 11 characters long.
+    @test map_reference_forward(stage, iomap, _text(box(23, 34))) == box(12, 23)
+    @test strip_reference_types(map_reference_backward(stage, iomap, box(12, 23))) == _text(box(23, 34))
+    # A box on a kept line before the dropped one does not move.
+    @test map_reference_forward(stage, iomap, _text(box(6, 11))) == box(6, 11)
+    # A box on the dropped line has no image.
+    @test map_reference_forward(stage, iomap, _text(box(12, 22))) === nothing
+    # A box over all three lines keeps the part that is shown.
+    @test map_reference_forward(stage, iomap, _text(box(0, 34))) == box(0, 23)
+    # The output selection is the mapped box.
+    set_selection!(document, _text(box(23, 34)))
+    @test strip_reference_types(iomap.output.selection) == box(12, 23)
+end # @testset
+
+@testset "FilteredTextToText reader remaps element index" begin
+    stage = _stage()
+    block = _fixture()
+    iomap = print_document(stage, stage, FilteredText(text = block, pattern = "dolor"),
+                           PrinterContext())
+    out = iomap.output
+    # ReplaceSelectionOperation on output line 2 → line 3 of the block, char
+    # preserved, under the step `text`.
+    sel = read_intent(stage, iomap, ReplaceSelectionOperation(
+        TextModule.make_flat_caret_reference(get_flat_base(out, Int[2, 1]) + 2)))
+    @test sel isa ReplaceSelectionOperation
+    @test strip_reference_types(sel.path) ==
+          _text(TextModule.make_flat_caret_reference(get_flat_base(block, Int[3, 1]) + 2))
+    # ReplaceStringRangeOperation on output line 2 → line 3, range preserved.
+    edit = read_intent(stage, iomap, ReplaceStringRangeOperation(_range(2, 1, 1, 4), "XYZ"))
+    @test edit isa ReplaceStringRangeOperation
+    @test strip_reference_types(edit.reference) == _text(_range(3, 1, 1, 4))
+    @test edit.replacement == "XYZ"
+end # @testset
+
+@testset "FilteredTextToText filters again when a field of the document changes" begin
+    document = FilteredText(text = _fixture(), pattern = "dolor")
+    iomap = _print(document)
+    @test iomap.kept == [1, 3]
+    document.pattern = "gamma"
+    @test iomap.kept == [2]
+    @test _contents(iomap.output) == ["beta gamma"]
+    document.pattern = "GAMMA"
+    @test iomap.kept == Int[]              # case matters: no line matches
+    document.case_insensitive = true
+    @test iomap.kept == [2]
+    document.invert = true
+    @test iomap.kept == [1, 3]             # keep the complement
+    document.invert = false
+    document.pattern = "^delta"
+    @test iomap.kept == Int[]              # literal text: no line holds "^delta"
+    document.regex = true
+    @test iomap.kept == [3]                # the last line starts with "delta"
+    document.pattern = "delta("
+    @test iomap.kept == [1, 2, 3]          # does not compile: keep every line
+end # @testset
+
+@testset "a filter around a highlight keeps the highlighted lines" begin
+    stage = _stage()
+    block = _fixture()
+    highlighted = HighlightedText(text = block, pattern = "dolor")
+    document = FilteredText(text = highlighted, pattern = "delta")
+    iomap = print_document(stage, stage, document, PrinterContext())
+    @test _contents(iomap.output) == ["delta ", "dolor"]
+    fills = [run.fill_color for run in iomap.output.elements[1].elements if run isa TextString]
+    @test fills == [nothing, color_red]
+    # A caret in the output maps back through both wrappers.
+    caret = TextModule.make_flat_caret_reference(8)
+    back = strip_reference_types(map_reference_backward(stage, iomap, caret))
+    @test back == _text(_text(TextModule.make_flat_caret_reference(
+                     get_flat_base(block, Int[3, 1]) + 8)))
+    # An edit in the highlighted part writes the block.
+    edit = read_intent(stage, iomap, ReplaceStringRangeOperation(_range(1, 2, 0, 5), "X"))
+    evaluate_operation(_FilterEditor(document), edit)
+    @test _contents(block) == ["alpha dolor", "beta gamma", "delta X"]
+end # @testset
+
+@testset "FilteredTextToText keeps the matching lines of a block of lines" begin
+
+    font = StyleFont("Ubuntu Mono", 20)
+    lines = TextBlock(TextDocument[TextLine(TextString("lorem", font, color_default)),
+                                   TextLine(TextString("dolor", font, color_default); indentation = 2),
+                                   TextLine(TextString("dolor sit", font, color_default))])
+    stage = _stage()
+    iomap = print_document(stage, stage, FilteredText(text = lines, pattern = "dolor"), PrinterContext())
+    out = iomap.output
+    # The kept lines are the same objects.
+    @test length(out.elements) == 2
+    @test out.elements[1] === lines.elements[2]
+    @test out.elements[2] === lines.elements[3]
+    # The first line is dropped, so a caret in the second line moves back by its
+    # text and its break: "lorem" and a break are six offsets.
+    @test strip_reference_types(map_reference_forward(stage, iomap, _text(make_flat_caret_reference(9)))) ==
+          make_flat_caret_reference(3)
+    @test strip_reference_types(map_reference_backward(stage, iomap, make_flat_caret_reference(3))) ==
+          _text(make_flat_caret_reference(9))
+    # An edit of a kept line maps back to its input line.
+    edit = ReplaceStringRangeOperation(TextModule._text_replace_path(Int[2, 1], 0, 1), "D")
+    @test strip_reference_types(read_intent(stage, iomap, edit).reference) ==
+          _text(TextModule._text_replace_path(Int[3, 1], 0, 1))
+    # With no pattern every line stays.
+    @test length(print_document(stage, stage, FilteredText(text = lines), PrinterContext()).output.elements) == 3
+
+end # @testset
+
+end # test_filtered_text_to_text

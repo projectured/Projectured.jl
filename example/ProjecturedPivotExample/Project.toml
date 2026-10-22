@@ -1,6 +1,6 @@
 name = "ProjecturedPivotExample"
 uuid = "c240cc06-6e4d-439e-be67-95ca4b8cf959"
-version = "0.1.0"
+version = "0.1.1"
 authors = []
 
 [deps]
@@ -14,12 +14,12 @@ ProjecturedPlatform = "b21cb890-5227-4e91-ae0e-8ab4d844f9f7"
 ProjecturedPlatformExample = "5049da3f-9201-47d6-95d8-24bb99c7096c"
 
 [compat]
-ProjecturedChart = "0.1.1"
-ProjecturedConsole = "0.1.1"
-ProjecturedKernel = "0.1.1"
-ProjecturedKernelExample = "0.1.1"
-ProjecturedPDF = "0.1.1"
-ProjecturedPivot = "0.1.0"
-ProjecturedPlatform = "0.2.0"
-ProjecturedPlatformExample = "0.1.1"
+ProjecturedChart = "0.1.2"
+ProjecturedConsole = "0.1.2"
+ProjecturedKernel = "0.2.0"
+ProjecturedKernelExample = "0.1.2"
+ProjecturedPDF = "0.1.2"
+ProjecturedPivot = "0.1.1"
+ProjecturedPlatform = "0.3.0"
+ProjecturedPlatformExample = "0.1.2"
 julia = "1.12"

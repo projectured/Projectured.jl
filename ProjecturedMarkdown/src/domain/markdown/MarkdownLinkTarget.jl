@@ -22,7 +22,7 @@ _make_link_binding(modifiers::Vector{Symbol}, place::Symbol, description::String
 const _MARKDOWN_LINK_BINDINGS = GestureBinding[
     _make_link_binding([:ctrl], :here, "Follow the link"),
     _make_link_binding([:ctrl, :shift], :new_tab, "Open the link in a new tab"),
-    make_tooltip_binding(link -> isempty(link.url) ? nothing : PrimitiveString(link.url);
+    make_tooltip_binding(link -> isempty(link.url) ? nothing : TooltipNote(; title = "Link", facts = ["Target" => link.url]);
                          description = "Show the target of the link")]
 
 @gestures MarkdownLink begin
@@ -55,6 +55,17 @@ function compute_markdown_heading_slug(heading::MarkdownHeading)
         end
     end
     String(take!(buffer))
+end
+
+# A heading says its anchor and its level when the pointer rests on it.
+const _MARKDOWN_HEADING_BINDINGS = GestureBinding[
+    make_tooltip_binding(heading -> TooltipNote(; title = "Heading",
+                             facts = ["Anchor" => "#" * compute_markdown_heading_slug(heading),
+                                      "Level" => string(heading.level)]);
+                         description = "Show the anchor of the heading")]
+
+@gestures MarkdownHeading begin
+    splice(_MARKDOWN_HEADING_BINDINGS)
 end
 
 # A page names its headings; it has no file, so it names no file.

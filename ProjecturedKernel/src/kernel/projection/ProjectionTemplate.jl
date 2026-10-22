@@ -49,13 +49,16 @@ function make_template_builder(expr)
 end
 
 # ── Markers (build-time only; stripped before the output reaches the API) ─────
+#
+# A marker stands in a typed field of the output until the print replaces it, so
+# each one is a `PendingValue`, which the check of a declared type leaves alone.
 
-struct Bound;      input::Symbol; type::Any; render::Any; retype::Any; end
+struct Bound <: PendingValue;      input::Symbol; type::Any; render::Any; retype::Any; end
 # override: the `as=` projection, a thunk that picks one, or nothing
-struct Project;    input::Symbol; override::Any; end
-struct Collection; input::Symbol; element::Any; end
-struct Tokens;     thunk::Any; end                  # computed inline token leaves
-struct Sections;   specs::Vector{Any}; end          # grouped per-field sub-collections
+struct Project <: PendingValue;    input::Symbol; override::Any; end
+struct Collection <: PendingValue; input::Symbol; element::Any; end
+struct Tokens <: PendingValue;     thunk::Any; end                  # computed inline token leaves
+struct Sections <: PendingValue;   specs::Vector{Any}; end          # grouped per-field sub-collections
 
 bound(input::Symbol, T, render; retype=nothing) = Bound(input, T, render, retype)
 # `project(:f)` delegates the child to its type-dispatched projection; `project(:f;
@@ -72,6 +75,29 @@ tokens(thunk) = Tokens(thunk)                   # tokens(() -> [leaf, bound-leaf
 # the per-section wrapper node. Empty sections are skipped; index is dynamic.
 sections(specs) = Sections(Any[specs...])
 
+# The context of a child of `doc`: its reference ends in the steps to the child, and
+# the first of them records the type of `doc`, so the reference names the type of the
+# place that the child fills.
+# The type comes from `doc` itself and no field is read, so the print of the child
+# depends on no more cells than before. An input that is no document gives untyped
+# steps.
+function _make_template_child_context(context, doc::Document, first::ReferenceStep,
+                                      rest::ReferenceStep...)
+    relative = ConcreteReference(typeof(doc), first, Reference(rest...))
+    path = make_reference_cell(reference -> concat_references(reference, relative), context)
+    make_child_context(context, path)
+end
+_make_template_child_context(context, doc, steps::ReferenceStep...) =
+    make_child_context(context, steps...)
+
+# The context of the element at the index cell `index` of the field that `field`
+# names, typed as `_make_template_child_context` types it, with a path that follows
+# the index.
+_make_template_element_context(context, doc::Document, field::ReferenceStep, index::AbstractCell) =
+    _make_element_context(context, index, i -> ConcreteReference(typeof(doc), field, Reference(ElementReferenceStep(i))))
+_make_template_element_context(context, doc, field::ReferenceStep, index::AbstractCell) =
+    make_element_context(context, index, i -> (field, ElementReferenceStep(i)))
+
 # Resolve a `project(:f; as=…)` override for a concrete child value.
 _override(as, v) = as === nothing ? nothing : (as isa Function ? as(v) : as)
 
@@ -80,7 +106,7 @@ _override(as, v) = as === nothing ? nothing : (as isa Function ? as(v) : as)
 _project_child_cell(doc, prj::Project; recursion, context) =
     make_reconciled_child_iomap_cell(() -> getproperty(doc, prj.input),
         v -> begin
-            cctx = make_child_context(context, FieldReferenceStep(String(prj.input)))
+            cctx = _make_template_child_context(context, doc, FieldReferenceStep(String(prj.input)))
             ov = _override(prj.override, v)
             ov === nothing ? print_child(recursion, v, cctx) :
                              ProjectionModule.print_document(ov, recursion, v, cctx)
@@ -501,9 +527,9 @@ _project_output_cell(child_cell) = Cell(@computation child_cell[].output)
 # The child IoMaps of the collection `doc.<field>`, each element printed by its own
 # projection. An element that stays at its index keeps its IoMap across an edit.
 _reconcile_element_iomaps(doc, field::Symbol; recursion, context) =
-    make_reconciled_child_iomaps_cell(() -> getproperty(doc, field), (i, x) ->
-        print_child(recursion, x, make_child_context(context,
-            FieldReferenceStep(String(field)), ElementReferenceStep(i))))
+    make_reconciled_child_iomaps_cell(() -> getproperty(doc, field), (index, x) ->
+        print_child(recursion, x, _make_template_element_context(context, doc,
+            FieldReferenceStep(String(field)), index)))
 
 # A node-shaped output: recurse over `doc.<input>` (School A), reconstruct the
 # node with the projected children and deferred path cells, and store the
@@ -516,10 +542,10 @@ function _node_print(p, doc, out; recursion, context, children_field, collection
         _reconcile_element_iomaps(doc, input_field; recursion, context)
     else
         # templated: build a fixed-children node per element via the element builder
-        make_reconciled_child_iomaps_cell(elements_fn, (i, x) ->
+        make_reconciled_child_iomaps_cell(elements_fn, (index, x) ->
             _fixed_print(p, x, collection.element(x); recursion,
-                context = make_child_context(context,
-                    FieldReferenceStep(String(input_field)), ElementReferenceStep(i))))
+                context = _make_template_element_context(context, doc,
+                    FieldReferenceStep(String(input_field)), index)))
     end
     iomap_cell = Cell(nothing)
     children = make_children_container(() -> [im.output for im in child_iomaps[]])
@@ -1385,32 +1411,109 @@ function _focused_child(w::SectionsWiring, iomap, sel)
 end
 
 """
+    find_template_output_child(iomap::TemplateIoMap, reference) -> (child, rest, steps) | Nothing
+
+The element that holds the position `reference` of the output of `iomap`: its IO map
+`child`, the part `rest` of `reference` inside the output of the element, and the
+input `steps` from the input of `iomap` to the input of the element. `nothing` when
+`reference` names a part that the node prints itself: a delimiter, a key, a token
+of an inline node, or the whole node.
+
+A reader gives an edit inside an element to the element, so that the element
+transforms its own edit, and puts `steps` in front of the answer.
+"""
+find_template_output_child(iomap::TemplateIoMap, reference) =
+    _find_output_child(iomap.wiring, iomap, reference)
+
+_find_output_child(::Any, iomap, reference) = nothing
+
+# The child index and the rest of an output reference `.children_field[k].rest`.
+function _split_output_child(reference, children_field::Symbol)
+    (reference isa ConcreteReference && reference.head isa FieldReferenceStep &&
+     reference.head.name == String(children_field)) || return nothing
+    after = reference.tail
+    (after isa ConcreteReference && after.head isa RangeReferenceStep) || return nothing
+    (after.head.start + 1, after.tail)
+end
+
+function _find_output_child(w::NodeWiring, iomap, reference)
+    split = _split_output_child(reference, w.children_field)
+    split === nothing && return nothing
+    i, rest = split
+    ims = iomap.child_iomaps
+    1 <= i <= length(ims) || return nothing
+    (ims[i], rest, (FieldReferenceStep(String(w.coll_input_field)), ElementReferenceStep(i)))
+end
+
+function _find_slots_output_child(slots, reference; project_child, children_field)
+    split = _split_output_child(reference, children_field)
+    split === nothing && return nothing
+    k, rest = split
+    1 <= k <= length(slots) || return nothing
+    slot = slots[k]
+    slot isa ProjectSlot &&
+        return (project_child(slot.in_field), rest, (FieldReferenceStep(String(slot.in_field)),))
+    # A sub-node shares the input of this node, so its edit needs no step.
+    slot isa SubNodeSlot && !(rest isa EmptyReference) && return (slot.iomap, rest, ())
+    nothing
+end
+
+_find_output_child(w::FixedNodeWiring, iomap, reference) =
+    _find_slots_output_child(w.slots, reference;
+                             project_child = fn -> iomap.child_iomaps[fn][], w.children_field)
+
+function _find_output_child(w::ConditionalNodeWiring, iomap, reference)
+    slots, store = iomap.child_iomaps
+    _find_slots_output_child(slots, reference; project_child = fn -> store[fn][],
+                             w.children_field)
+end
+
+function _find_output_child(w::MixedNodeWiring, iomap, reference)
+    split = _split_output_child(reference, w.children_field)
+    split === nothing && return nothing
+    k, rest = split
+    n_prefix = length(w.prefix_slots)
+    if k <= n_prefix
+        slot = w.prefix_slots[k]
+        slot isa ProjectSlot || return nothing
+        return (iomap.child_iomaps.prefix[slot.in_field][], rest,
+                (FieldReferenceStep(String(slot.in_field)),))
+    end
+    i = k - n_prefix
+    ims = iomap.child_iomaps.coll[]
+    1 <= i <= length(ims) || return nothing
+    (ims[i], rest, (FieldReferenceStep(String(w.coll_field)), ElementReferenceStep(i)))
+end
+
+function _find_output_child(w::SectionsWiring, iomap, reference)
+    split = _split_output_child(reference, w.children_field)
+    split === nothing && return nothing
+    sec_i, rest = split
+    secs = iomap.child_iomaps
+    1 <= sec_i <= length(secs) || return nothing
+    sec = secs[sec_i]
+    inner = _split_output_child(rest, w.children_field)
+    inner === nothing && return nothing
+    entry_i, entry_rest = inner
+    1 <= entry_i <= length(sec.entries) || return nothing
+    (sec.entries[entry_i], entry_rest,
+     (FieldReferenceStep(String(sec.field)), ElementReferenceStep(entry_i)))
+end
+
+"""
     find_template_value_retype(iomap::TemplateIoMap, reference) -> Type | Nothing
 
-The operation type that the leaf rule under `reference` makes of a text edit of
-its bound value: the `retype` of its `bound`, or `nothing` when it has none.
-`reference` is in the input domain of `iomap`, with no type checkpoints. A leaf
-answers for an edit of its own bound field. A node descends into the child that
-`reference` enters, so a leaf in a container retypes an edit as it does when it
-is the document.
+The operation type that a leaf makes of a text edit of its bound value: the
+`retype` of its `bound`, or `nothing` when it has none. `reference` is in the input
+domain of `iomap`, with no type checkpoints. A node answers `nothing`: it gives an
+edit inside an element to the element ([`find_template_output_child`](@ref)), so
+the leaf retypes the edit itself, wherever the leaf is.
 """
 function find_template_value_retype(iomap::TemplateIoMap, reference)
     w = iomap.wiring
-    if w isa AtomicWiring
-        return reference isa ConcreteReference && reference.head isa FieldReferenceStep &&
-               Symbol(reference.head.name) === w.bound_field ? w.retype : nothing
-    end
-    focused = _focused_child(w, iomap, reference)
-    focused === nothing && return nothing
-    child, steps = focused
-    child = get_content_iomap(child)
-    child isa TemplateIoMap || return nothing
-    rest = reference
-    for _ in steps
-        rest isa ConcreteReference || return nothing
-        rest = rest.tail
-    end
-    find_template_value_retype(child, rest)
+    w isa AtomicWiring || return nothing
+    reference isa ConcreteReference && reference.head isa FieldReferenceStep &&
+        Symbol(reference.head.name) === w.bound_field ? w.retype : nothing
 end
 
 # Innermost-first, bubbling to the nearest enclosing structural node: delegate to the
@@ -1500,7 +1603,7 @@ function _read_part_override_click(iomap, evt, claimed, path)
         node = try
             evaluate_reference_step(rest.head, node)
         catch exception
-            is_passthrough_exception(exception) && rethrow()
+            is_fault_exception(exception) || rethrow()
             break
         end
         push!(taken, rest.head)

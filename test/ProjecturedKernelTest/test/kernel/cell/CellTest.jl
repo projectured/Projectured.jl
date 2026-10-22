@@ -25,6 +25,13 @@ end
     (_count_live_dependents(source), WeakRef(cells[1]))
 end
 
+# Fifty computed cells that read `source`, each forced once, and then dropped, in
+# a frame of their own, as `_make_discarded_readers` does.
+@noinline function _read_and_drop(source)
+    foreach(_ -> (cell = Cell(@computation source[] + 1); cell[]), 1:50)
+    nothing
+end
+
 function test_cell()
 @testset "Cell" begin
 
@@ -32,45 +39,45 @@ a = Cell(1)
 b = Cell(2)
 @test a[] == 1
 @test b[] == 2
-@test is_cell_up_to_date(a)
-@test is_cell_up_to_date(b)
+@test is_cell_valid(a)
+@test is_cell_valid(b)
 
 # computed cell
 c = Cell(@computation a[] + b[])
-@test !is_cell_up_to_date(c)
+@test !is_cell_valid(c)
 @test c[] == 3
-@test is_cell_up_to_date(c)
+@test is_cell_valid(c)
 
 # mutation invalidates dependents
 a[] = 10
-@test is_cell_up_to_date(a)
-@test !is_cell_up_to_date(c)
+@test is_cell_valid(a)
+@test !is_cell_valid(c)
 @test c[] == 12
 
 # deep chain
 d = Cell(@computation c[] * 2)
 @test d[] == 24
 b[] = 3
-@test !is_cell_up_to_date(c)
-@test !is_cell_up_to_date(d)
+@test !is_cell_valid(c)
+@test !is_cell_valid(d)
 @test d[] == 26  # (10+3)*2
 
 # switch computation → value
 c[] = 99
 @test c[] == 99
-@test is_cell_up_to_date(c)
+@test is_cell_valid(c)
 a[] = 50
-@test is_cell_up_to_date(c)  # no longer depends on a
+@test is_cell_valid(c)  # no longer depends on a
 @test c[] == 99
 
 # switch value → computation
 set_cell_computation!(c, () -> a[] * b[])
-@test !is_cell_up_to_date(c)
+@test !is_cell_valid(c)
 @test c[] == 150  # 50*3
 
 # re-tracking after set_cell_computation!
 a[] = 2
-@test !is_cell_up_to_date(c)
+@test !is_cell_valid(c)
 @test c[] == 6   # 2*3
 
 # conditional dependency
@@ -82,7 +89,7 @@ cond = Cell(@computation flag[] ? x[] : y[])
 flag[] = false
 @test cond[] == 20
 x[] = 999          # x is no longer a dep after last eval
-@test is_cell_up_to_date(cond)  # cond should still be valid
+@test is_cell_valid(cond)  # cond should still be valid
 
 # ── the dependency edge must not own the reader ─────────────────────────
 
@@ -111,11 +118,11 @@ x[] = 999          # x is no longer a dep after last eval
     @test discarded.value === nothing             # ...so the reader really was collected
     @test live(source) <= 1                       # nothing live remains behind it
 
-    # The emptied slots are pruned by the next scan, which registration is doing anyway,
-    # so dead `WeakRef`s never accumulate: no slot is left without a live reader in it.
+    # The emptied slots go at the next sweep, when the list has grown to twice its
+    # length after the last one, so dead `WeakRef`s never pile up past that.
     keep = Cell(@computation source[] + 1)
     keep[]
-    @test length(getfield(source, :dependents)) == live(source)
+    @test length(getfield(source, :dependents)) <= 2 * 100 + 8 + 1
 
     # And the weak edge still propagates invalidation to a reader that IS alive.
     source[] = 41
@@ -133,10 +140,10 @@ end
     @test t[] === 2
     @test_throws InexactError t[] = 2.5
     tc = ReactiveCell{Int}(@computation t[] + 1) # computed: value starts undefined
-    @test !is_cell_up_to_date(tc)
+    @test !is_cell_valid(tc)
     @test (@inferred tc[]) == 3
     t[] = 10
-    @test !is_cell_up_to_date(tc)
+    @test !is_cell_valid(tc)
     @test tc[] == 11
     set_cell_computation!(tc, () -> t[] * 2)   # typed: keeps the stale value slot
     @test tc[] == 20
@@ -149,7 +156,7 @@ end
     @test_throws InexactError tc[] = 2.5
     @test is_computed_cell(tc)
     t[] = 5
-    @test !is_cell_up_to_date(tc)          # the cell still reads `t`
+    @test !is_cell_valid(tc)          # the cell still reads `t`
     @test tc[] == 6
 
     # A cell that nothing read keeps its computation too.
@@ -185,14 +192,14 @@ end
     @test (@inferred m[]) == 1
     m[] = 2
     @test m[] == 2
-    @test is_cell_up_to_date(m)                   # trivially: nothing to recompute
+    @test is_cell_valid(m)                   # trivially: nothing to recompute
     @test peek(m) == 2
     # no reactive bookkeeping: a computation reading a MutableCell registers nothing,
     # so a later write does NOT invalidate the computed cell (by design)
     obs = Cell(@computation m[] * 10)
     @test obs[] == 20
     m[] = 5
-    @test is_cell_up_to_date(obs)                 # unaware of the write
+    @test is_cell_valid(obs)                 # unaware of the write
     @test obs[] == 20                        # stale until *reactive* invalidation
     w = MutableCell{Union{Nothing,Int}}(nothing)
     w[] = 3                                  # explicit wide type admits both
@@ -203,13 +210,299 @@ end
     i = ImmutableCell("abc")
     @test i isa AbstractCell{String}
     @test (@inferred i[]) == "abc"
-    @test is_cell_up_to_date(i)
+    @test is_cell_valid(i)
     @test peek(i) == "abc"
     @test_throws MethodError i[] = "xyz"  # read-only is the contract
-    @test isbitstype(typeof(ImmutableCell(1)).types[1]) # zero-cost wrapper: field inlines
+    @test isbitstype(ImmutableCell{Int})  # zero-cost wrapper: the field inlines
+end
+
+@testset "get_cell_computation answers the computation, and a caller can wrap it" begin
+    f = () -> 1
+    @test get_cell_computation(Cell(Computation(f))) === f
+    @test get_cell_computation(Cell(1)) === nothing
+    @test get_cell_computation(MutableCell(1)) === nothing
+    @test get_cell_computation(UntrackedCell{Int}(@computation 1)) === nothing
+    @test get_cell_computation(ImmutableCell(1)) === nothing
+    c = Cell(@computation 2)
+    inner = get_cell_computation(c)
+    set_cell_computation!(c, () -> inner() + 1)
+    @test c[] == 3
+end
+
+@testset "a new computation makes a reader that is valid invalid" begin
+    s = Cell(1)
+    r = Cell(@computation s[] + 1)
+    @test r[] == 2
+    @test set_cell_computation!(s, () -> 10) === s
+    @test getfield(s, :value) === nothing
+    @test !is_cell_valid(r)
+    @test r[] == 11
+    s[] = @computation 20
+    @test !is_cell_valid(r)
+    @test r[] == 21
+end
+
+@testset "a Computation shows its function, and the stored kinds refuse it" begin
+    @test repr(Computation(identity)) == "Computation(identity)"
+    @test_throws ArgumentError MutableCell{Int}(Computation(identity))
+    @test_throws ArgumentError ImmutableCell{Int}(Computation(identity))
+end
+
+@testset "run_without_cell_tracking inside a computation records no reader" begin
+    a = Cell(1)
+    r = Cell(@computation run_without_cell_tracking(() -> a[]) + 1)
+    @test r[] == 2
+    @test !has_dependent_cells(a)
+end
+
+@testset "a write of the same plain data makes no reader invalid" begin
+    x = Cell(1)
+    y = Cell(@computation x[] + 1)
+    @test y[] == 2
+    x[] = 1
+    @test is_cell_valid(y)
+    for (old, same) in (("text", String(['t', 'e', 'x', 't'])), (:name, :name),
+                        (nothing, nothing), ((1, 2.5), (1, 2.5)))
+        source = Cell(old)
+        reader = Cell(@computation source[])
+        reader[]
+        source[] = same
+        @test is_cell_valid(reader)
+    end
+    # The check sees the value after the conversion to the value type.
+    typed = ReactiveCell{Float64}(1.0)
+    typed_reader = Cell(@computation typed[] + 1)
+    typed_reader[]
+    typed[] = 1
+    @test is_cell_valid(typed_reader)
+    # A value that is equal and not identical is a change.
+    z = Cell(1)
+    w = Cell(@computation z[] * 2)
+    w[]
+    z[] = 1.0
+    @test !is_cell_valid(w)
+    @test w[] == 2.0
+end
+
+@testset "a write of the same mutable value makes the readers invalid" begin
+    rows = Cell([1, 2])
+    total = Cell(@computation sum(rows[]))
+    @test total[] == 3
+    push!(peek(rows), 3)
+    rows[] = peek(rows)
+    @test !is_cell_valid(total)
+    @test total[] == 6
+end
+
+@testset "a write of a value into a computed cell makes the readers invalid" begin
+    x = Cell(@computation 1)
+    y = Cell(@computation x[] + 1)
+    @test y[] == 2
+    x[] = 1                       # the same value, but the computation ends
+    @test !is_computed_cell(x)
+    @test !is_cell_valid(y)
+end
+
+@testset "invalidate_cell! makes the readers compute again" begin
+    rows = Cell([1, 2])
+    total = Cell(@computation sum(rows[]))
+    doubled = Cell(@computation 2 * total[])
+    @test doubled[] == 6
+    push!(peek(rows), 3)
+    @test invalidate_cell!(rows) === nothing
+    @test is_cell_valid(rows)                 # a value cell keeps its value
+    @test !is_cell_valid(total)
+    @test !is_cell_valid(doubled)
+    @test doubled[] == 12
+    # A computed cell becomes invalid too, and computes again at its next read.
+    runs = Ref(0)
+    counted = Cell(@computation (runs[] += 1; length(peek(rows))))
+    reader = Cell(@computation counted[] + 1)
+    @test reader[] == 4
+    invalidate_cell!(counted)
+    @test !is_cell_valid(counted)
+    @test !is_cell_valid(reader)
+    @test reader[] == 4
+    @test runs[] == 2
+    # The kinds that record no reader do nothing.
+    @test invalidate_cell!(MutableCell(1)) === nothing
+    @test invalidate_cell!(ImmutableCell(1)) === nothing
+    @test invalidate_cell!(UntrackedCell{Int}(@computation 1)) === nothing
+end
+
+@testset "a computation that gives the plain data that it had leaves its readers" begin
+    runs = Ref(0)
+    number = Cell(1)
+    is_odd = Cell(@computation isodd(number[]))
+    reader = Cell(@computation (runs[] += 1; is_odd[] ? "odd" : "even"))
+    @test reader[] == "odd" && runs[] == 1
+    number[] = 3
+    @test !is_cell_valid(reader)              # maybe invalid until a read checks it
+    @test reader[] == "odd" && runs[] == 1
+    @test is_cell_valid(reader)
+    number[] = 4
+    @test reader[] == "even" && runs[] == 2
+end
+
+@testset "a value that is not plain data is new at each computation" begin
+    runs = Ref(0)
+    source = Cell(1)
+    flags = Cell(@computation [source[] > 0])
+    reader = Cell(@computation (runs[] += 1; flags[][1]))
+    @test reader[] && runs[] == 1
+    source[] = 2
+    @test reader[] && runs[] == 2
+end
+
+@testset "a check does not compute a dependency that the new run does not read" begin
+    flag = Cell(true)
+    source = Cell(1)
+    computed = Ref(0)
+    gate = Cell(@computation flag[])
+    doubled = Cell(@computation (computed[] += 1; source[] * 2))
+    other = Cell(0)
+    reader = Cell(@computation gate[] ? doubled[] : other[])
+    @test reader[] == 2 && computed[] == 1
+    flag[] = false
+    source[] = 5
+    @test reader[] == 0
+    @test computed[] == 1
+end
+
+@testset "an exception in a check reaches the computation of the reader" begin
+    source = Cell(1)
+    risky = Cell(@computation source[] > 1 ? error("too big") : source[])
+    reader = Cell(@computation try risky[] catch; -1 end)
+    @test reader[] == 1
+    source[] = 2
+    @test reader[] == -1
+    # The value of `risky` is the one that it had before it failed, and it is new
+    # to the reader, which caught the exception.
+    source[] = 1
+    @test reader[] == 1
+end
+
+@testset "a cycle through a check throws CellCycleException" begin
+    start = Cell(1)
+    middle = Cell(@computation start[] + 1)
+    tail = Cell(@computation middle[] + 1)
+    @test tail[] == 3
+    start[] = @computation tail[] + 1
+    @test_throws CellCycleException tail[]
+end
+
+@testset "a write of the same value into a computed cell reaches the readers" begin
+    runs = Ref(0)
+    source = Cell(1)
+    doubled = Cell(@computation source[] * 2)
+    reader = Cell(@computation (runs[] += 1; doubled[] + 1))
+    @test reader[] == 3 && runs[] == 1
+    doubled[] = 2
+    @test reader[] == 3 && runs[] == 2
+end
+
+@testset "invalidate_cell! makes the cells below compute when a value changes" begin
+    values = Cell([1])
+    total = Cell(@computation sum(values[]))
+    runs = Ref(0)
+    reader = Cell(@computation (runs[] += 1; total[] * 10))
+    @test reader[] == 10 && runs[] == 1
+    push!(values[], 2)
+    invalidate_cell!(values)
+    @test reader[] == 30 && runs[] == 2
+    # A change inside that keeps the sum leaves the cell below the readers.
+    values[][1] = 0
+    push!(values[], 1)
+    invalidate_cell!(values)
+    @test !is_cell_valid(reader)
+    @test reader[] == 30 && runs[] == 2
+end
+
+@testset "an exception below a chain of checks computes each cell of the chain once" begin
+    source = Cell(1)
+    runs = Ref(0)
+    failing = Cell(@computation (runs[] += 1; source[] > 1 ? error("too big") : source[]))
+    chain_runs = Ref(0)
+    below = failing
+    for _ in 1:8
+        previous = below
+        below = Cell(@computation (chain_runs[] += 1; previous[] + 1))
+    end
+    top_cell = below
+    reader = Cell(@computation try top_cell[] catch; -1 end)
+    @test reader[] == 9
+    runs[] = 0
+    chain_runs[] = 0
+    source[] = 2
+    @test reader[] == -1
+    # Once in the check, and once in the computations that meet the exception.
+    @test runs[] == 2
+    @test chain_runs[] == 8
+end
+
+@testset "an exception that is no fault goes up through a check, and leaves no cell checking" begin
+    source = Cell(1)
+    runs = Ref(0)
+    stopping = Cell(@computation (runs[] += 1; source[] == 2 ? throw(OutOfMemoryError()) : source[]))
+    middle = Cell(@computation stopping[] + 1)
+    reader = Cell(@computation middle[] + 1)
+    @test reader[] == 3
+    runs[] = 0
+    source[] = 2
+    @test_throws OutOfMemoryError reader[]
+    @test runs[] == 1                         # no reader runs it again
+    @test !is_cell_valid(middle) && !is_cell_valid(reader)
+    source[] = 3
+    @test reader[] == 5
+end
+
+@testset "a list of readers stays within twice its live readers" begin
+    # A record puts a reader at the end with no scan, and the readers that were
+    # collected go when the list grows to twice its length after the last sweep.
+    # Ten readers stay; a thousand come and go, fifty at a time, so at most sixty
+    # are alive at a sweep, and the list stays within 2 * 60 + 8.
+    source = Cell(0)
+    held = [Cell(@computation source[] + k) for k in 1:10]
+    foreach(getindex, held)
+    for _ in 1:20
+        _read_and_drop(source)
+        GC.gc(true)
+    end
+    @test 10 <= length(getfield(source, :dependents)) <= 2 * 60 + 8
+    @test _count_live_dependents(source) >= 10
+    # The readers that stay still follow a write.
+    source[] = 1
+    @test [cell[] for cell in held] == collect(2:11)
+end
+
+@testset "a run keeps one edge for each cell it read, in the order of the first read" begin
+    a, b, c = Cell(1), Cell(2), Cell(3)
+    short = Cell(@computation a[] + b[] + a[] + c[] + b[])
+    @test short[] == 9
+    @test getfield(short, :dependencies) == [a, b, c]
+    # A cell that the run read again keeps the reader once.
+    @test all(cell -> length(getfield(cell, :dependents)) == 1, (a, b, c))
+    sources = [Cell(k) for k in 1:40]
+    long = Cell(@computation sum(sources[k][] + sources[1][] for k in 1:40))
+    @test long[] == sum(1:40) + 40
+    @test getfield(long, :dependencies) == sources
+    sources[40][] = 41
+    @test long[] == sum(1:40) + 41
+end
+
+@testset "a read on another task records no reader" begin
+    t = Cell(1)
+    s = Cell(@computation fetch(Threads.@spawn t[]))
+    @test s[] == 1
+    @test !has_dependent_cells(t)
 end
 
 @testset "get_cell_value_type" begin
+    # The answer reads no value, so no computation depends on the cell.
+    typed = ReactiveCell{Int}(1)
+    asker = Cell(@computation get_cell_value_type(typed))
+    @test asker[] === Int
+    @test !has_dependent_cells(typed)
     @test get_cell_value_type(ImmutableCell{Int}(1)) === Int
     @test get_cell_value_type(MutableCell{String}("a")) === String
     @test get_cell_value_type(ReactiveCell{Float64}(1.0)) === Float64
@@ -217,7 +510,7 @@ end
     # The answer comes from the type, so a computed cell does not compute.
     computed = Cell(@computation error("computed"))
     @test get_cell_value_type(computed) === Any
-    @test !is_cell_up_to_date(computed)
+    @test !is_cell_valid(computed)
 end
 
 @testset "a function is a value" begin
@@ -225,11 +518,11 @@ end
     c = Cell(f)
     @test c[] === f                      # stored, not called
     @test c[]() == 42                    # still callable through the cell
-    @test is_cell_up_to_date(c)          # a value cell, not an invalid computed one
+    @test is_cell_valid(c)          # a value cell, not an invalid computed one
 
     cc = Cell(Computation(f))              # the marker is what makes a cell compute
     @test cc[] == 42
-    @test !is_cell_up_to_date(Cell(Computation(f)))
+    @test !is_cell_valid(Cell(Computation(f)))
 
     @test ReactiveCell{Function}(f)[] === f
     @test ReactiveCell{Int}(Computation(f))[] == 42
@@ -324,7 +617,7 @@ end
     reader = Cell(@computation unwrap_cell(source) + 1)
     @test reader[] == 4
     source[] = 10
-    @test !is_cell_up_to_date(reader)
+    @test !is_cell_valid(reader)
     @test reader[] == 11
 end
 
@@ -335,10 +628,10 @@ end
     @test reader[] == 11
     set_cell_value!(width, 80)
     @test !is_computed_cell(width)
-    @test !is_cell_up_to_date(reader)              # the write invalidates the reader
+    @test !is_cell_valid(reader)              # the write invalidates the reader
     @test reader[] == 81
     margin[] = 6                                   # the value does not follow `margin`
-    @test is_cell_up_to_date(width)
+    @test is_cell_valid(width)
     @test width[] == 80
 end
 
@@ -374,7 +667,7 @@ end
     @test drawn[] == "1a"
     @test !has_dependent_cells(frames)
     frames[] = 2
-    @test is_cell_up_to_date(drawn)                # not a reader of `frames`
+    @test is_cell_valid(drawn)                # not a reader of `frames`
     @test drawn[] == "1a"
     title[] = "b"
     @test drawn[] == "2b"
@@ -384,7 +677,7 @@ end
     inner = Cell(@computation frames[] + 100)
     outer = Cell(@computation peek(inner) + 1)
     @test outer[] == 103
-    @test is_cell_up_to_date(inner)
+    @test is_cell_valid(inner)
     @test !has_dependent_cells(inner)
     @test has_dependent_cells(frames)              # `inner` reads `frames`
 end
@@ -395,28 +688,102 @@ end
     c = Cell(@computation try b[] catch; -1 end)
     @test c[] == -1
     a[] = 2
-    # A failed computation leaves its cell invalid, so the walk of the write stops
-    # there.
-    # @broken: a failed computation stops the walk of a later write (L03-1)
-    @test_broken c[] == 5
+    # The failed cell passes the walk of the write on to the reader that caught it.
+    @test !is_cell_valid(c)
+    @test c[] == 5
 end
 
-@testset "a write while a reader computes reaches the reader" begin
-    t = Cell(1)
-    q = Cell(@computation t[] + 1)
-    written = Ref(false)
-    p = Cell(@computation begin
-        value = q[]
-        # A write to an input of `q` while `p` computes.
-        written[] || (written[] = true; t[] = 10)
-        value
+@testset "a computation that writes a cell that it made computes once" begin
+    made = Ref{Any}(nothing)
+    runs = Ref(0)
+    c = Cell(@computation begin
+        runs[] += 1
+        items = Cell(Int[])
+        items[] = vcat(items[], 1)       # reads the new cell, then writes it
+        made[] = items
+        length(items[])
     end)
-    @test p[] == 2
-    t[] = 20
-    # The walk of the first write stopped at `p`, which computed, and `q` stays
-    # invalid.
-    # @broken: a write while a reader computes leaves the reader stale (L03-2)
-    @test_broken p[] == 21
+    @test c[] == 1
+    @test is_cell_valid(c)
+    @test c[] == 1
+    @test runs[] == 1
+end
+
+@testset "a cell that reads itself throws a CellCycleException" begin
+    c = Cell(0)
+    c[] = @computation c[] + 1
+    @test_throws CellCycleException c[]
+    @test !is_cell_valid(c)
+    a = Cell(0)
+    b = Cell(@computation a[] + 1)
+    a[] = @computation b[] + 1
+    exception = try a[] catch caught; caught end
+    @test exception isa CellCycleException
+    @test exception.cell === a
+    @test sprint(showerror, exception) == "a Cell read itself while it computed"
+    # A write that breaks the cycle reaches the readers of the cycle.
+    a[] = 5
+    @test b[] == 6
+end
+
+@testset "a cycle through run_without_cell_tracking or an UntrackedCell throws" begin
+    a = Cell(0)
+    b = Cell(@computation a[] + 1)
+    a[] = @computation run_without_cell_tracking(() -> b[]) + 1
+    @test_throws CellCycleException a[]
+    p = Cell(0)
+    u = UntrackedCell{Int}(@computation p[] + 1)
+    p[] = @computation u[] + 1
+    @test_throws CellCycleException p[]
+    typed = ReactiveCell{Int}(0)
+    typed[] = @computation typed[] + 1
+    exception = try typed[] catch caught; caught end
+    @test sprint(showerror, exception) == "a ReactiveCell{$(Int)} read itself while it computed"
+end
+
+@testset "a read of a computing cell from a task that its computation waits for is a cycle" begin
+    c = Cell(0)
+    runs = Ref(0)
+    c[] = @computation (runs[] += 1; fetch(Threads.@spawn c[]) + 1)
+    exception = try c[] catch caught; caught end
+    @test exception isa TaskFailedException
+    @test exception.task.result isa CellCycleException
+    @test exception.task.result.cell === c
+    @test runs[] == 1                     # the read on the other task ran no computation
+    @test !is_cell_valid(c)
+end
+
+@testset "a typed cell keeps its value until the first read of a new computation" begin
+    typed = ReactiveCell{Int}(5)
+    set_cell_computation!(typed, () -> 6)
+    @test getfield(typed, :value) == 5
+    @test typed[] == 6
+    optional = ReactiveCell{Union{Nothing,Int}}(5)
+    set_cell_computation!(optional, () -> 6)
+    @test getfield(optional, :value) === nothing   # a type that admits nothing clears it
+    @test optional[] == 6
+end
+
+@testset "a write or a new computation during the computation of a cell stands" begin
+    c = Cell(0)
+    c[] = @computation (c[] = 5; 1)
+    @test c[] == 5
+    @test !is_computed_cell(c)
+    d = Cell(0)
+    d[] = @computation (set_cell_computation!(d, () -> 2); 1)
+    d[]
+    @test d[] == 2
+end
+
+@testset "a new computation of a failed cell runs at the next read" begin
+    f = Cell(@computation error("x"))
+    @test_throws ErrorException f[]
+    set_cell_computation!(f, () -> 4)
+    @test f[] == 4
+end
+
+@testset "the reactive cell has its docstring" begin
+    @test Base.Docs.hasdoc(CellModule, :ReactiveCell)
 end
 
 @testset "a MethodError in a chain of ten computed cells" begin
@@ -441,6 +808,136 @@ end
     # value through the retry.
     newer = Cell(@computation _get_cell_test_newer_value())
     @test Base.invoke_in_world(world, getindex, newer) == 42
+end
+
+@testset "a computation that reads a provisional cell is provisional, up the chain" begin
+    answer = Cell(nothing)
+    record = Cell(@computation begin
+        value = answer[]
+        value === nothing ? (mark_computation_provisional!(); "unknown") : value
+    end)
+    label = Cell(@computation "configuration: " * record[])
+    shown = Cell(@computation uppercase(label[]))
+    @test shown[] == "CONFIGURATION: UNKNOWN"
+    @test is_cell_provisional(record) && is_cell_provisional(label) && is_cell_provisional(shown)
+    # The final value makes each reader final when it computes again.
+    answer[] = "Fifo"
+    @test shown[] == "CONFIGURATION: FIFO"
+    @test !is_cell_provisional(record) && !is_cell_provisional(label) && !is_cell_provisional(shown)
+end
+
+@testset "a computation reads every value that it needs in one pass, also a provisional one" begin
+    answers = [Cell(nothing) for _ in 1:5]
+    parts = [Cell(@computation (value = answers[i][];
+                                value === nothing ? (mark_computation_provisional!(); 0) : value))
+             for i in 1:5]
+    total = Cell(@computation sum(part[] for part in parts))
+    @test total[] == 0 && is_cell_provisional(total)
+    # The computation read each part, not only the first that was provisional.
+    @test all(has_dependent_cells, parts)
+    foreach(i -> (answers[i][] = i), 1:4)
+    @test total[] == 10 && is_cell_provisional(total)
+    answers[5][] = 5
+    @test total[] == 15 && !is_cell_provisional(total)
+end
+
+@testset "a value that stays the same but becomes final reaches the readers" begin
+    answer = Cell(nothing)
+    tally = Cell(@computation (value = answer[];
+                               value === nothing ? (mark_computation_provisional!(); 0) : value))
+    # The drawing reads whether the tally is provisional, and is not provisional by
+    # that read.
+    drawn = Cell(@computation is_cell_provisional(tally) ? "…" : string(tally[]))
+    plain = Cell(@computation string(tally[]))
+    @test drawn[] == "…" && !is_cell_provisional(drawn)
+    @test plain[] == "0" && is_cell_provisional(plain)
+    # The final value is the default: the same plain value, and no longer provisional.
+    answer[] = 0
+    @test drawn[] == "0"
+    @test plain[] == "0" && !is_cell_provisional(plain)
+end
+
+@testset "a value that stays the same but becomes provisional reaches the readers" begin
+    answer = Cell(1)
+    value = Cell(@computation (given = answer[];
+                               given === nothing ? (mark_computation_provisional!(); 1) : given))
+    runs = Ref(0)
+    reader = Cell(@computation (runs[] += 1; value[] * 10))
+    @test reader[] == 10 && !is_cell_provisional(reader) && runs[] == 1
+    answer[] = nothing
+    @test reader[] == 10 && is_cell_provisional(reader) && runs[] == 2
+end
+
+@testset "a computation that gives the same value with the same flag stops" begin
+    other = Cell(0)
+    source = Cell(@computation (other[]; mark_computation_provisional!(); 1))
+    runs = Ref(0)
+    reader = Cell(@computation (runs[] += 1; source[] + 1))
+    @test reader[] == 2 && is_cell_provisional(reader) && runs[] == 1
+    # The source computes again, with the same value and still provisional, so its
+    # reader stays as it was.
+    other[] = 1
+    @test reader[] == 2 && runs[] == 1 && is_cell_provisional(reader)
+end
+
+@testset "a write is final, and a read that records no reader takes no part" begin
+    written = Cell(@computation (mark_computation_provisional!(); 1))
+    @test written[] == 1 && is_cell_provisional(written)
+    written[] = 2
+    @test !is_cell_provisional(written)
+    source = Cell(@computation (mark_computation_provisional!(); 1))
+    peeked = Cell(@computation peek(source) + 1)
+    untracked = Cell(@computation run_without_cell_tracking(() -> source[]) + 1)
+    @test peeked[] == 2 && untracked[] == 2
+    @test is_cell_provisional(source) && !is_cell_provisional(peeked) && !is_cell_provisional(untracked)
+    @test !is_cell_provisional(MutableCell(1)) && !is_cell_provisional(ImmutableCell(1))
+end
+
+@testset "a failure that a provisional value caused is provisional, also for the reader that catches it" begin
+    answer = Cell(nothing)
+    record = Cell(@computation (value = answer[];
+                                value === nothing ? (mark_computation_provisional!(); "") : value))
+    number = Cell(@computation parse(Int, record[]))
+    shown = Cell(@computation try string(number[]) catch; "bad" end)
+    @test shown[] == "bad" && is_cell_provisional(shown)
+    answer[] = "7"
+    @test shown[] == "7" && !is_cell_provisional(shown)
+    # A failure of final values is final.
+    answer[] = "x"
+    @test shown[] == "bad" && !is_cell_provisional(shown)
+end
+
+@testset "a write of its own cell inside a run makes the cell final" begin
+    own = Cell(nothing)
+    set_cell_computation!(own, () -> (own[] = 5; mark_computation_provisional!(); 1))
+    @test own[] == 5 && !is_cell_provisional(own)
+end
+
+@testset "a provisional cell computes again at each read by a computation" begin
+    runs = Ref(0)
+    waiting = Cell(@computation (runs[] += 1; mark_computation_provisional!(); 1))
+    @test waiting[] == 1 && runs[] == 1
+    # A read outside a computation takes the value as it is.
+    @test waiting[] == 1 && runs[] == 1
+    first_reader = Cell(@computation waiting[] + 1)
+    second_reader = Cell(@computation waiting[] + 2)
+    @test first_reader[] == 2 && second_reader[] == 3
+    @test runs[] == 3
+    # A final cell computes once.
+    final_runs = Ref(0)
+    done = Cell(@computation (final_runs[] += 1; 1))
+    readers = [Cell(@computation done[] + k) for k in 1:3]
+    @test [reader[] for reader in readers] == [2, 3, 4] && final_runs[] == 1
+    # Whether a computation runs, which a wait checks before it waits.
+    @test !is_computation_running()
+    @test Cell(@computation is_computation_running())[]
+    @test !Cell(@computation run_without_cell_tracking(is_computation_running))[]
+end
+
+@testset "mark_computation_provisional! needs a computation that records its reads" begin
+    @test_throws ArgumentError mark_computation_provisional!()
+    untracked = Cell(@computation run_without_cell_tracking(() -> mark_computation_provisional!()))
+    @test_throws ArgumentError untracked[]
 end
 
 end # @testset "Cell"

@@ -1,6 +1,6 @@
 name = "ProjecturedDataFrames"
 uuid = "56a0c30a-96eb-4614-b42e-73838bfa8222"
-version = "0.1.1"
+version = "0.1.2"
 authors = []
 
 [deps]
@@ -12,8 +12,8 @@ ProjecturedPlatform = "b21cb890-5227-4e91-ae0e-8ab4d844f9f7"
 [compat]
 DataFrames = "1"
 PrecompileTools = "1.3.4"
-ProjecturedKernel = "0.1.1"
-ProjecturedPlatform = "0.2.0"
+ProjecturedKernel = "0.2.0"
+ProjecturedPlatform = "0.3.0"
 julia = "1.12"
 
 [auto-integration]

@@ -16,6 +16,7 @@ make_julia_binary_op_document_example()  = JuliaBinaryOperation(:+, JuliaIdentif
 make_julia_call_document_example()       = JuliaCall(JuliaIdentifier("f"), [JuliaIdentifier("x")])
 make_julia_assignment_document_example() = JuliaAssignment(JuliaIdentifier("x"), JuliaInteger(1))
 make_julia_block_document_example()      = JuliaBlock([JuliaInteger(1)])
+make_julia_toplevel_document_example()   = JuliaToplevel([JuliaAssignment(JuliaIdentifier("x"), JuliaInteger(1)), JuliaIdentifier("x")])
 make_julia_function_document_example()   = JuliaFunction(JuliaIdentifier("f"), [JuliaIdentifier("x")], JuliaBlock([JuliaIdentifier("x")]))
 make_julia_array_document_example()      = JuliaArray([JuliaInteger(1)])
 make_julia_begin_document_example()      = JuliaBegin(JuliaBlock([JuliaInteger(1)]))
@@ -42,6 +43,9 @@ make_julia_const_document_example()      = JuliaConst(JuliaAssignment(JuliaIdent
 make_julia_curly_document_example()      = JuliaCurly(JuliaIdentifier("Vector"), [JuliaIdentifier("Int")])
 make_julia_do_document_example()         = JuliaDo(JuliaCall(JuliaIdentifier("map"), [JuliaIdentifier("xs")]), [JuliaIdentifier("x")], JuliaBlock([JuliaIdentifier("x")]))
 make_julia_docstring_document_example()  = JuliaDocstring("A value.", JuliaAssignment(JuliaIdentifier("x"), JuliaInteger(1)))
+make_julia_comment_document_example()    = JuliaComment(" A note.")
+make_julia_multiline_comment_document_example() = JuliaMultilineComment(" A note\non two lines. ")
+make_julia_end_of_line_comment_document_example() = JuliaEndOfLineComment(JuliaAssignment(JuliaIdentifier("x"), JuliaInteger(1)), " meters")
 make_julia_empty_document_example()      = JuliaEmpty()
 make_julia_function_declaration_document_example() = JuliaFunctionDeclaration(JuliaIdentifier("f"))
 make_julia_interpolation_document_example() = JuliaInterpolation(JuliaIdentifier("x"))
@@ -77,3 +81,39 @@ function make_julia_document_example()
                         JuliaCall(JuliaIdentifier("factorial"), [
                             JuliaBinaryOperation(:-, JuliaIdentifier("n"), JuliaInteger(1))]))]))]))
 end
+
+# A short Julia program read from its source, in a scroll pane smaller than the
+# code: a struct, two functions and a loop, so each definition, the branch and the
+# loop fold as a region of lines, and the gutter numbers every line. A comment on
+# a line of its own, an end-of-line comment and a docstring show the comments.
+const _JULIA_CODE_EXAMPLE_SOURCE = """
+# Points in the plane.
+struct Point
+    x::Float64  # meters
+    y::Float64
+end
+
+\"\"\"
+The distance between two points.
+\"\"\"
+function distance(a::Point, b::Point)
+    dx = a.x - b.x
+    dy = a.y - b.y
+    return sqrt(dx^2 + dy^2)
+end
+
+function factorial(n)
+    if n <= 1
+        return 1
+    else
+        return n * factorial(n - 1)
+    end
+end
+
+for n in 1:5
+    println(n, "! = ", factorial(n))
+end
+"""
+
+make_julia_code_document_example() =
+    WidgetScrollPane(parse_julia(_JULIA_CODE_EXAMPLE_SOURCE); size = Point2D(560, 300))

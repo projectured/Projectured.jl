@@ -30,7 +30,7 @@ function start_agent_connection! end
 
 """
     open_agent_session!(connection; directory, mcp_servers = [], instructions = "", session_id = "",
-                        on_event = nothing) -> String
+                        on_event = nothing, events = nothing) -> String
 
 Open a session of the agent, and answer its id. The agent works in
 `directory`. It connects to each of `mcp_servers`, a named tuple
@@ -48,13 +48,17 @@ the history of the old session.
 
 `on_event`, when given, gets the events of the open: an `AgentOptionsUpdate`
 with the options of the session. The connection keeps no reference to it after
-the call, so a caller can capture what it must not store. An update that the
-agent sends later reaches the `on_event` of the prompt that runs. An update of
-the session that comes between two prompts — its options, its usage, its
-title, its commands — waits, and the next prompt gets the latest of each kind
-first.
+the call, so a caller can capture what it must not store.
 
-Throws when the agent needs a sign-in, with a message that says how to sign in.
+An event that the agent sends later goes to one of two places. An event during
+a prompt goes to the `on_event` of that prompt. An event between two prompts
+goes to `events`, an [`AgentEventQueue`](@ref), in the order that the agent
+sent it: the options, the usage, the title and the commands of the session,
+and the work of a subagent or of a background task that goes on after a
+prompt. The caller takes them with [`take_agent_events!`](@ref). Without
+`events`, an event between two prompts is dropped.
+
+Throws an [`AgentSignInException`](@ref) when the agent needs a sign-in.
 """
 function open_agent_session! end
 
@@ -80,7 +84,8 @@ its commands.
 It is called on a task that is not the editor's.
 
 Answers why the turn ended: `:end_turn`, `:max_tokens`, `:max_turn_requests`,
-`:refusal` or `:cancelled`.
+`:refusal` or `:cancelled`. Throws an [`AgentSignInException`](@ref) when the
+agent needs a sign-in, as after [`sign_out_agent!`](@ref).
 """
 function send_agent_prompt! end
 
@@ -92,6 +97,27 @@ waits for a person is answered as cancelled, and `send_agent_prompt!` then
 answers `:cancelled`.
 """
 function cancel_agent_prompt! end
+
+"""
+    cancel_agent_subagent!(connection, session_id, subagent_id)
+
+Ask the agent to stop the work of its subagent `subagent_id` in the session,
+the `id` of an `AgentSubagentUpdate`. The subagent stays, and a later
+`AgentSubagentUpdate` reports its new state. A connection that can not cancel
+the work of a subagent does nothing.
+"""
+function cancel_agent_subagent! end
+
+"""
+    stop_agent_background_task!(connection, session_id, task_id) -> Bool
+
+Ask the agent to stop its background task `task_id` in the session, the `id` of
+an `AgentBackgroundTaskUpdate`, and answer whether the agent stopped it. A task
+that does not run, a stop that the agent refuses, and a connection that can not
+stop a background task answer `false`. A later `AgentBackgroundTaskUpdate`
+reports the end of the task.
+"""
+function stop_agent_background_task! end
 
 """
     close_agent_session!(connection, session_id)
@@ -106,3 +132,40 @@ function close_agent_session! end
 Stop the agent of `connection`, with every session in it.
 """
 function stop_agent_connection! end
+
+"""
+    has_agent_steering(connection) -> Bool
+
+Whether the agent of `connection` takes a prompt into a turn that runs, as a
+person who writes while the agent works. A connection that has not started
+answers `false`.
+"""
+function has_agent_steering end
+
+"""
+    steer_agent_prompt!(connection, session_id, prompt) -> Bool
+
+Send `prompt`, a vector of `LlmContent`, into the turn of the session that runs.
+The agent reads it at its next step, or in a turn of its own just after the one
+that runs, and the events of its answer reach the `on_event` of the prompt that
+runs. Answers whether the agent took it: `false` when it can not, when no turn
+runs, or when it refused, and the caller then sends the prompt after the turn.
+"""
+function steer_agent_prompt! end
+
+"""
+    has_agent_sign_out(connection) -> Bool
+
+Whether the agent of `connection` signs out when asked. A connection that has
+not started answers `false`.
+"""
+function has_agent_sign_out end
+
+"""
+    sign_out_agent!(connection) -> Bool
+
+Sign the agent of `connection` out. It forgets the sign-in of the person, and
+its next session or prompt throws an [`AgentSignInException`](@ref). Answers
+`false`, and does nothing, when the agent can not sign out.
+"""
+function sign_out_agent! end

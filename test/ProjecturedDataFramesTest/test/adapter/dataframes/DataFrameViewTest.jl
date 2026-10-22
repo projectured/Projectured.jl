@@ -198,8 +198,11 @@ function test_data_frame_view()
             view = DataFrameView(DataFrame(id = _CountingColumn(10_000_000, reads); copycols = false))
             io = print_document(projection, nothing, view, context())
             y_of(text; limit = 50) = only(t[2] for t in _data_frame_texts_in_body(io; limit) if t[3] == text)
+            # Each turn comes a second after the last, so no two make a fast run.
+            wheel_time = Ref(0.0)
             wheel(dy) = read_intent(projection, nothing,
-                                    Intent(MouseScroll(0, dy, 100, 150; time = 0.0), nothing), io).operation
+                                    Intent(MouseScroll(0, dy, 100, 150; time = (wheel_time[] += 1.0)),
+                                           nothing), io).operation
             step = y_of("2") - y_of("1")
             # A turn near the anchor moves the rows by one step of the wheel.
             near = y_of("2")
@@ -208,8 +211,9 @@ function test_data_frame_view()
             @test turn > 0
             @test view.anchor == 1
             # Three hundred rows down, a turn moves the anchor to the row at the
-            # top, and every row moves by one turn as before.
-            getfield(view, :scroll_position)[] = Point2D(0, 300 * step)
+            # top, and every row moves by one turn as before. The turn ends one
+            # line, 16 pixels, past three hundred rows.
+            getfield(view, :scroll_position)[] = Point2D(0, 300 * step + 16 - turn)
             before = y_of("305"; limit = 400)       # 304 rows from the anchor
             evaluate_operation(nothing, wheel(-1))
             @test view.anchor == 301

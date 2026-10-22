@@ -51,6 +51,10 @@ tests:    ProjecturedKernelTest ← ProjecturedPlatformTest ← the 18 domain te
   translation of the updates of an agent, the connection against a fake agent
   in the test process, the transport with a small child agent, and the start of
   the built-in agent) needs no network, no Node.js, no `claude` and no sign-in.
+  [package/languageserver/test](../../package/ProjecturedLanguageServerTest)
+  (`test_languageserver()` — the connection and the semantic tokens against a
+  language server in the test process, a source file in a headless editor, and
+  three tests with `clangd`, which skip themselves when it is not installed).
 - [package/projectured/test](../../package/ProjecturedTest/src/ProjecturedTest.jl) — the umbrella:
   the genuinely **cross-package** suites. Two kinds live here: the sweeps over
   the interleaved `examples` / `catalog` aggregate (`ExampleSweeps`,
@@ -133,6 +137,8 @@ gives what each of them costs.
 | `test_documents()` | The umbrella-only document suites (`test_constraint_solver()` — Tulip, `test_serialization()` — example fixtures). |
 | `test_projections()` | The umbrella-only projection suites (example/editor/SDL-coupled: tooltip, hover, dragging, write_image, …). |
 | `test_printers()` | Runs `test_printer` over every entry in `examples`. |
+| `test_text_runs_hold_no_break()` | Walks the document, the stage outputs and the IO maps of every entry in `examples`, and rejects a `TextString` that holds a `'\n'`: a break is the start of a line. |
+| `test_text_blocks_hold_only_lines()` | Walks the same, and rejects an element of a `TextBlock` that is no `TextLine`: a text is a block of lines. |
 | `test_readers()` | Runs `test_reader` over every example. |
 | `test_position_navigations()` | Runs `test_position_navigation` (position/caret BFS, no-error sweep) over every example. |
 | `test_position_navigations_complete()` | Over a curated subset, additionally asserts navigation reaches every position enumerated from the document (`collect_position_selections`). |
@@ -270,6 +276,16 @@ keyed on its signature so a *different* failure still surfaces as an unmarked `F
 regression). The open bugs are `grep "@catalog-broken"` in
 [CatalogTest.jl](../../test/projectured/projection/CatalogTest.jl). See
 `plan/**/catalog-{deferred,compound,all}-*.md` for how the atoms were added.
+
+**A new printer brings its atom.** A change that adds a `print_document` method for a
+document type with no atom also adds the atom: a function that makes one instance that a
+test can use, and its `AtomicDocument` row. The catalog is a test instrument, not a thing
+that a person sees, so a part of a page and a document of a process get an atom too; the
+atom of a task comes from a step that has not run, so a test starts no process. A printer
+of a cell layout of a document counts for that document. `test_catalog_coverage` finds a
+printer with no atom and fails for the change that adds it. Only a type that no test can
+make goes on its list `_NO_ATOM`, with the reason. A projection that a test defines for
+its own fixture is no stage of the catalog.
 
 ## A test that checks the root of a built editor
 
